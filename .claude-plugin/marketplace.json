@@ -11,6 +11,11 @@
       "name": "economy-of-words",
       "source": "./plugins/economy-of-words",
       "description": "Plain-language reply discipline, re-injected every turn"
+    },
+    {
+      "name": "do-next",
+      "source": "./plugins/do-next",
+      "description": "A confirmed, archived prompt queue in NEXT.md"
     }
   ]
 }

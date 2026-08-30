@@ -40,6 +40,25 @@ across a real 870-reply Claude Code session: 1407 em-dashes, 1163 bold spans,
 330 "Now the…" transitions, 102 "actually", 78 "Let me check…" narrations, and
 66 trailing "which is exactly why…" clauses.
 
+## do-next
+
+Works through a queue of prompts kept in `./NEXT.md`, one at a time, confirming
+before it starts and archiving each finished prompt to `./DONE.md` with a
+timestamp read from the system clock.
+
+```
+/do-next        one prompt
+/do-next 3      the top three, in order
+```
+
+Prompts are separated by a line containing exactly `--`. A batch buys one
+confirmation instead of several; it does not buy parallelism, and trouble in any
+prompt stops the batch with the queue left honest about what remains.
+
+```
+/plugin install do-next@hanoixan-claude-plugins
+```
+
 ## License
 
 MIT
