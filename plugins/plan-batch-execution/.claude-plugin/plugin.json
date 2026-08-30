@@ -1,7 +1,7 @@
 {
   "name": "plan-batch-execution",
   "description": "Schedules a written plan into the fewest subagent dispatches that its dependency graph allows, and states the three rules again at the moment a dispatch is made",
-  "version": "2.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Sean Dunn",
     "email": "sean.edward.dunn@gmail.com"
