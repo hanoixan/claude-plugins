@@ -1,6 +1,10 @@
-# economy-of-words
+# hanoixan-claude-plugins
 
-A Claude Code plugin that strips filler, framing and self-appraisal from replies.
+A Claude Code plugin marketplace.
+
+## economy-of-words
+
+Strips filler, framing and self-appraisal from replies.
 
 It ships two things that work together:
 
@@ -17,7 +21,7 @@ the context window on every single turn, so they never decay.
 ## Install
 
 ```
-/plugin marketplace add hanoixan/claude-economy-of-words
+/plugin marketplace add hanoixan/claude-plugins
 /plugin install economy-of-words@hanoixan-claude-plugins
 ```
 
@@ -26,7 +30,7 @@ Requires `jq` on `PATH`. Without it the hook exits quietly and only the skill wo
 ## Editing the rules
 
 The hook reads `${CLAUDE_PLUGIN_DATA}/rules.txt` when that file exists, and the
-bundled `hooks/rules.txt` otherwise. Copy the bundled file to the plugin's data
+bundled `plugins/economy-of-words/hooks/rules.txt` otherwise. Copy the bundled file to the plugin's data
 directory and edit it there; plugin updates will not overwrite it.
 
 ## Where the rules came from

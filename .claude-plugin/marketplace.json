@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "economy-of-words",
-      "source": "./",
+      "source": "./plugins/economy-of-words",
       "description": "Plain-language reply discipline, re-injected every turn"
     }
   ]
