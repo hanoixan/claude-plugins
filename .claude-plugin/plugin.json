@@ -1,0 +1,8 @@
+{
+  "name": "economy-of-words",
+  "description": "Strips filler, framing and self-appraisal from Claude's replies and re-injects the rules on every turn so they don't decay as context grows",
+  "version": "1.0.0",
+  "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "license": "MIT",
+  "keywords": ["style", "concision", "writing", "hooks", "prompt-discipline"]
+}

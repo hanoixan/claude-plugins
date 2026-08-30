@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "economy-of-words",
+  "description": "Single-plugin marketplace for the economy-of-words style plugin",
+  "owner": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "plugins": [
+    {
+      "name": "economy-of-words",
+      "source": "./",
+      "description": "Plain-language reply discipline, re-injected every turn"
+    }
+  ]
+}
