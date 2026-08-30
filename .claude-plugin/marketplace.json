@@ -21,6 +21,11 @@
       "name": "plan-batch-execution",
       "source": "./plugins/plan-batch-execution",
       "description": "Chain-not-task dispatch scheduling, restated at dispatch time"
+    },
+    {
+      "name": "ask-questions",
+      "source": "./plugins/ask-questions",
+      "description": "Ask rather than assume, restated every turn"
     }
   ]
 }

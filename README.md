@@ -84,6 +84,22 @@ approval, which makes the expensive default visible rather than silent.
 Add `.claude/.plan-batch-approved` to your `.gitignore`; it is per-machine approval
 state, not part of the plan.
 
+## ask-questions
+
+One line, injected on every turn:
+
+```
+Ask questions to resolve all ambiguities, concerns, and knowledge gaps.
+```
+
+No skill body and no qualifiers. A clause narrowing when the question is worth asking
+would become the loophole for skipping it, so the instruction stays unconditional and
+the judgement stays where it belongs.
+
+```
+/plugin install ask-questions@hanoixan-claude-plugins
+```
+
 ## License
 
 MIT

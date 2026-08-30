@@ -1,0 +1,8 @@
+{
+  "name": "ask-questions",
+  "description": "Injects a standing instruction on every turn to resolve ambiguities, concerns and knowledge gaps by asking rather than assuming",
+  "version": "1.0.0",
+  "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "license": "MIT",
+  "keywords": ["clarification", "ambiguity", "requirements", "hooks", "prompt-discipline"]
+}
