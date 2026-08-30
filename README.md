@@ -41,7 +41,7 @@ degrades to its skill rather than erroring.
 | --- | --- | --- | --- | --- |
 | [economy-of-words](#economy-of-words) | How replies are written | `UserPromptSubmit` | yes | 170 words |
 | [do-next](#do-next) | Working a prompt queue | none | yes | none |
-| [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 11 words |
+| [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
 
 ---
@@ -134,7 +134,7 @@ after every task.
 
 | Hook | Fires | Does |
 | --- | --- | --- |
-| `UserPromptSubmit` | every turn | One line pointing at the skill, so it is in reach before the dispatch count is chosen. |
+| `UserPromptSubmit` | every turn | Names the skill and the schedule file it must produce, before the dispatch count is chosen. |
 | `PreToolUse` on `Agent` | each dispatch | Reads `.claude/plan-batch-schedule.md` and shows it as the approval prompt. |
 | `PostToolUse` on `Agent` | after a dispatch runs | Records the approval. |
 

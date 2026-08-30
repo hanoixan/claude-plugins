@@ -1,1 +1,2 @@
-Before dispatching subagents for a written plan, read the plan-batch-execution skill.
+Before the first Agent dispatch for a written plan, read the plan-batch-execution
+skill and write its schedule to .claude/plan-batch-schedule.md.
