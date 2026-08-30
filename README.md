@@ -66,16 +66,23 @@ The unit of dispatch is a chain, not a task: a dependency line is one agent, k
 same-shape edits are one agent, and a leaf never gets its own. Gates go at chain
 hand-off points rather than after every task.
 
-A `PreToolUse` hook on the `Agent` tool restates the three rules at the moment a
-dispatch is made, so the guidance is present at the decision rather than a skill
-body that scrolled out of reach fifty turns ago.
+Two hooks carry it. A one-line `UserPromptSubmit` pointer keeps the skill in reach
+before the dispatch count is chosen. A `PreToolUse` gate on the `Agent` tool then shows
+you the computed schedule and asks whether to run it, so approving the schedule is one
+decision instead of a per-dispatch prompt.
+
+The skill writes its schedule to `.claude/plan-batch-schedule.md`; the gate reads that
+file. Approval is recorded by a `PostToolUse` hook, so a dispatch you decline never
+counts as approved. Edit the schedule and you are asked again. When no schedule exists,
+the gate says the skill was skipped and offers the default one-agent-per-task shape for
+approval, which makes the expensive default visible rather than silent.
 
 ```
 /plugin install plan-batch-execution@hanoixan-claude-plugins
 ```
 
-The hook fires on every subagent dispatch, including one-off ones where batching does
-not apply. It is kept to ~130 words for that reason.
+Add `.claude/.plan-batch-approved` to your `.gitignore`; it is per-machine approval
+state, not part of the plan.
 
 ## License
 

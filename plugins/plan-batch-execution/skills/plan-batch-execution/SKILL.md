@@ -147,6 +147,17 @@ Tasks: N | Chains: C | Slots: D | Hand-off points: H | Gates: H+1
 - <task> folded into <slot>: <reason — same file / leaf / off critical path>
 ```
 
+**Write it to `.claude/plan-batch-schedule.md` in the project root before the first
+dispatch.** This plugin's `PreToolUse` hook reads that file and shows it to the user as
+the approval prompt for the whole batch: they approve the schedule once, and the
+remaining dispatches in it run without further prompting. Edit the schedule and they are
+asked again, because the plan they approved has changed.
+
+If the file is absent when a dispatch happens, the hook says so and presents the default
+one-agent-per-task shape for approval instead. A missing schedule is therefore visible
+rather than silent — which is the point. A one-off subagent that has nothing to do with a
+plan can simply be approved.
+
 Then execute it. Use superpowers:subagent-driven-development for the dispatch mechanics —
 briefs, report files, review packages, the ledger — substituting **chain** wherever it says
 **task**: one brief per chain listing its tasks in order, one report file per chain.
