@@ -59,6 +59,24 @@ prompt stops the batch with the queue left honest about what remains.
 /plugin install do-next@hanoixan-claude-plugins
 ```
 
+## plan-batch-execution
+
+Turns a written plan into the fewest subagent dispatches its dependency graph allows.
+The unit of dispatch is a chain, not a task: a dependency line is one agent, k
+same-shape edits are one agent, and a leaf never gets its own. Gates go at chain
+hand-off points rather than after every task.
+
+A `PreToolUse` hook on the `Agent` tool restates the three rules at the moment a
+dispatch is made, so the guidance is present at the decision rather than a skill
+body that scrolled out of reach fifty turns ago.
+
+```
+/plugin install plan-batch-execution@hanoixan-claude-plugins
+```
+
+The hook fires on every subagent dispatch, including one-off ones where batching does
+not apply. It is kept to ~130 words for that reason.
+
 ## License
 
 MIT
