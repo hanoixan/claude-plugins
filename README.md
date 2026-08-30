@@ -18,7 +18,7 @@ the context window on every single turn, so they never decay.
 
 ```
 /plugin marketplace add hanoixan/claude-economy-of-words
-/plugin install economy-of-words@economy-of-words
+/plugin install economy-of-words@hanoixan-claude-plugins
 ```
 
 Requires `jq` on `PATH`. Without it the hook exits quietly and only the skill works.
