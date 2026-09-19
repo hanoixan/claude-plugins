@@ -1,7 +1,7 @@
 {
   "name": "do-next",
-  "description": "Work through a queue of prompts kept in NEXT.md, confirming before each batch and archiving finished prompts to DONE.md with a real timestamp",
-  "version": "1.0.0",
+  "description": "Work through a queue of prompts kept in NEXT.md: confirm the set, front-load every question and plan, then run and archive them one at a time",
+  "version": "1.1.0",
   "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
   "license": "MIT",
   "keywords": ["queue", "workflow", "prompts", "batch", "task-management"]
