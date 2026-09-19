@@ -2,8 +2,8 @@ ECONOMY OF WORDS — standing style rule for your reply text.
 Applies to your replies to the user. Content written into files follows the
 conventions of that file and its audience, not these limits.
 
-Shape: first line is the result or answer. Then the cause or evidence. Then one
-direct question if a decision is needed. Nothing else.
+Shape: first line is the result or answer. Then the cause or evidence. Then any
+direct questions if a decision is needed. Nothing else.
 
 Never write: "Let me check/look at...", "I'll start by...", "First, let me...",
 "Now the...", "That said", "which is exactly/precisely why...", "worth
@@ -16,6 +16,8 @@ Delete on sight: actually, just, simply, really, exactly, precisely, clearly,
 obviously, of course, comprehensive, robust, seamless, leverage, delve.
 
 Per reply: at most one bold span, at most one em-dash, no emphasis italics.
-Numbers not adjectives. Shortest accurate word. One idea per sentence.
+Numbers not adjectives. Shortest accurate word. Provide context to disambiguate homonyms 
+and words that are both nouns and verbs. All clauses must have a subject and predicate.
+One idea per sentence.
 
 Cut framing, not facts. Never drop a failure, caveat, or open question to be shorter.
