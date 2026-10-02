@@ -9,8 +9,8 @@ During development, `skel/` is the implementation plan. Every stand-in becomes e
    - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask the user about these before implementing the affected file, every place that follows the decision, and anything that depends on them. Present each with its consequence and what it unlocks, so the user can answer efficiently.
    - **Local** unknowns affect only a function body, such as a tuning constant, and each carries a `Proposed:` value. For those already in the tree when you start, implement the proposal only after the user has accepted it; they may accept all proposals in one answer. Then record the choice in the stand-in and remove the unknown.
 3. If any stand-in is abstract (`.code`, `.data`, `.iac`), adapt it first; see `abstract-systems.md`.
-4. Run `skel_check.py order skel/` to see what must exist before what. Dependencies come first. Files in the same step that form a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user.
-5. Plan the batches. `order` is a dependency sort with one file per step, so in a compiled language it lists every interface before any implementation and puts the build manifest last. Build in batches that compile and test on their own: an interface, its implementation, and its tests go in the same batch. Create the build manifests (`CMakeLists.txt`, `package.json`, a `Makefile`) with the first batch, covering only what exists, and extend them with each later batch.
+4. Run `skel_check.py batches skel/` to get the build plan. Each batch lists units that can be built once the earlier batches exist. A unit is a stand-in plus the stand-ins that name it in `unit:`, such as a header and its source. Units flagged as a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user. `order` gives the same dependencies file by file when you need that view.
+5. Follow the batches. Build each one so that it compiles and its tests pass before you start the next. A test appears one batch after the unit it covers, so build it with that unit or straight after. The manifests listed above the batches (`CMakeLists.txt`, `package.json`, a `Makefile`) are created with the first batch, covering only what exists, and extended with each later batch.
 6. Commit `skel/` before you start, and again after each batch, so the plan and the code can be compared at any point.
 
 ## Realizing one stand-in
@@ -60,7 +60,7 @@ After each implementation batch, report in this shape:
 
 1. **Decisions needed:** blocking unknowns that remain or that this batch raised, and what each blocks.
 2. **Proposals to accept or change:** local unknowns, each with its proposal, saying which ones this batch was built to.
-3. **What was built:** which files were realized, the test results, and any cycles that `order` found.
+3. **What was built:** which batches and files were realized, the test results, and any cycles that `batches` flagged.
 4. **Changes to the plan:** every stand-in you changed and why, including contract changes that rippled to referrers.
 
 The report lists no choice that is not in the tree. If you made a choice the stand-ins did not dictate, it is in the tree as an unknown with a `Proposed:` before it appears in the report.

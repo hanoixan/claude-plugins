@@ -30,6 +30,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 ## Core rules (summary)
 
 - **Naming:** use `skel/<mirrored path>/<file>.<ext>.skel.md`. The extension sets the kind: code, data, iac, or resource. Abstract systems use the placeholders `.code`, `.data`, and `.iac`.
+- **Front matter:** every stand-in starts with `role: product | test | manifest`. `unit:` names the stand-in this one is built with, as a source file names its header. `untested: <reason>` records why a product unit has no test.
 - **Five basic questions in every file:** `Referred by:` (what depends on this), `Depends on:` (what this depends on), `Required:`, `Failure modes:`, and unknowns (`*UNKNOWN*:` entries or `Unknowns: none`). Write `none` explicitly rather than omitting a field.
 - **Code hierarchy and fields:** a module needs Owns and Access. A class needs Inputs, State changes, Owns, and Access. A function needs Inputs, Returns, State changes, and Access. Prose of any kind is welcome at every level.
 - **Links:** `Depends on: [Symbol](./rel/path.ext.skel.md#class-symbol)` must be matched by `Referred by: [Symbol](./back/path.ext.skel.md)` in the target, and vice versa.
@@ -42,7 +43,13 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 
 1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions. Don't resolve open questions yourself; they become unknowns. A choice you make to keep the design moving is an unknown too, with your choice as its `Proposed:`.
 2. **Write `skel/SYSTEM.md`** from `assets/templates/SYSTEM.md`. Include scope, glossary, global decisions, and entry points.
-3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix.
+3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix. Then give every stand-in its role, and pair each source file with its header:
+
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles skel --write
+   ```
+
+   It never writes a role it is unsure of. Set those by hand in the front matter, and ask the user about any you cannot settle.
 4. **Fill each stand-in top-down** from the templates in `assets/templates/`. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
 5. **Generate the backlinks** and review them:
 
@@ -56,10 +63,10 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
-7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py order skel`, and report in this shape:
+7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py batches skel`, and report in this shape:
    1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence and what it unlocks.
    2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
-   3. **Dependency order:** what must exist before what.
+   3. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
 
    The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
 
@@ -82,6 +89,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]  
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / pending / abstract / code with no stand-in
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
 ```
 

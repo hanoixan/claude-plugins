@@ -5,7 +5,7 @@ Skel can describe a subsystem before any host project, language, or platform is 
 ## Authoring
 
 1. **Write SYSTEM.md first.** Include scope (especially what is *out* of scope), a glossary, and the global decisions. In an abstract system, most global decisions are unknowns: language, runtime, concurrency model, persistence medium, and any host capability you are assuming.
-2. **Use placeholder extensions.** Name stand-ins `.code`, `.data`, or `.iac`, and lay them out by concern (`skel/undo/`, `skel/integration/`, `skel/infra/`), not by any framework's conventions.
+2. **Use placeholder extensions.** Name stand-ins `.code`, `.data`, or `.iac`, and lay them out by concern (`skel/undo/`, `skel/integration/`, `skel/infra/`), not by any framework's conventions. Every stand-in still declares its `role:`. The checker does not ask abstract units for tests; that begins once they are adapted.
 3. **Draw the host boundary explicitly.** Give the system a small interface stand-in that the host implements (in the example, `document_target`) and an integration stand-in that describes the glue the host writes (`host_binding`). Everything host-specific sits behind those two. Their unknowns are the adaptation questions.
 4. **Describe signatures by meaning.** Write "`limit`: max steps or bytes retained", not `limit: int`. When the type matters to the design, record it as an unknown instead of picking one.
 5. **Put persistence behind an `.iac` stand-in.** Even "maybe store it in a file" becomes a `# infrastructure:` with `## resource:` data requirements, so adapters see retention, size, and privacy requirements.

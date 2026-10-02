@@ -19,6 +19,11 @@ Out of scope: ...
 - Error-handling policy: ...
 - Logging/observability: ...
 
+## Test strategy
+
+- Levels in this plan: <unit | integration | end-to-end>, and what each covers.
+- Left out on purpose: <level or kind of test, and why>.
+
 ## Entry points
 
 - [<Main symbol>](<./path.ext.skel.md#class-name>): <role>

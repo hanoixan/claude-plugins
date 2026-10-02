@@ -41,6 +41,7 @@ You can override the inference with YAML front matter as the very first lines of
 
 ```yaml
 ---
+role: product
 kind: iac
 ---
 ```
@@ -48,6 +49,35 @@ kind: iac
 Use the override for files whose extension is ambiguous, for example `docker-compose.yml` or `k8s/deployment.yaml` (which would otherwise be data), or a `.sql` file that is seed data rather than schema.
 
 Each file has exactly one level-1 heading, and it must match the kind. **(checked)**
+
+### Front matter
+
+Every stand-in begins with front matter. **(checked)**
+
+```yaml
+---
+role: test
+unit: ./file_map.hpp.skel.md
+---
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `role` | yes | `product`, `test` or `manifest` |
+| `unit` | no | relative path to the stand-in this one is built together with |
+| `untested` | no | why a product unit has no test, on `role: product` only |
+| `kind` | no | overrides the kind inferred from the extension, as above |
+
+- **product** is anything delivered: code, data, infrastructure, resources, documents.
+- **test** is test code and whatever only tests use: fixtures, test data, helper programs.
+- **manifest** is a build or project file that lists or configures other files (`CMakeLists.txt`, `package.json`, a `Makefile`). Manifests are created with the first batch and extended with each later one.
+- **unit** joins stand-ins that are built together, as a source file is with its header. The stand-in it names is the unit's primary. It must exist in the tree, have the same role, and have no `unit:` of its own. **(checked)**
+
+Roles are stated, never guessed by the checker. `skel_check.py infer-roles skel/ --write` proposes them from file names and folders and writes the ones it is sure of. It lists the rest as unsure and leaves them for you to set; ask the user about any you cannot settle.
+
+The checker warns when no `role: test` stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count. Either link a test to the unit or record the gap with `untested: <reason>`. Abstract units are exempt until they are adapted.
+
+A test stand-in may demand only what the units it depends on expose. If a test needs a seam, such as a clock it can set or a write it can make fail, declare the seam on the unit.
 
 ## 3. Common traits: the five basic questions
 
@@ -279,6 +309,7 @@ Images, fonts, stylesheets, templates, and similar assets use `# resource: <name
 - glossary
 - global decisions (language, platform, frameworks), each either stated or recorded as an unknown
 - cross-cutting concerns (logging, error policy, concurrency model)
+- a test strategy: which levels of test the plan contains, what each covers, and any level left out on purpose with the reason
 - an entry-point index linking to the main stand-ins
 
 Use the same `*UNKNOWN*:` convention in it. The checker holds its unknowns to the rules in section 5 and checks that its links resolve **(checked)**; it does not apply the rest of the stand-in grammar to it. `skel_mv.py` keeps its links up to date.
