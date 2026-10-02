@@ -6,7 +6,7 @@
 - **Failure modes:** <unavailability, quota, data loss, misconfigured access>
 - **Depends on:** none | [<provider or other stack>](<path or URL>)
 
-*UNKNOWN*: <e.g. cloud provider or IaC tool>. Consequence: <...>. Unlocks: <...>.
+*UNKNOWN*: [<short-name>] <e.g. cloud provider or IaC tool>. Kind: blocking. Consequence: <...>. Unlocks: <...>.
 
 ## resource: <resource_name>
 

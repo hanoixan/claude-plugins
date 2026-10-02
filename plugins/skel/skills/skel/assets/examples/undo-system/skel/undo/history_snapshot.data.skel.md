@@ -9,7 +9,7 @@ The persisted form of an `UndoHistory`, so undo survives closing and reopening a
 - **Referred by:** [UndoHistory.serialize](./history.code.skel.md#function-serialize)
 - **Referred by:** [history_store](../infra/history_store.iac.skel.md#resource-history_store)
 
-*UNKNOWN*: Whether cross-session undo is required. Consequence: if not, this stand-in, `serialize`, and the store resource are deleted. Unlocks: removing or committing to persistence.
+*UNKNOWN*: [cross-session-undo] Whether cross-session undo is required. Kind: blocking. Consequence: if not, this stand-in, `serialize`, and the store resource are deleted. Unlocks: removing or committing to persistence.
 
 ## Schema
 

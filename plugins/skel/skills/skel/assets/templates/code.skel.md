@@ -9,7 +9,7 @@
 - **Depends on:** [<Symbol>](<./relative/path.ext.skel.md#class-symbol>)
 - **Referred by:** [<Symbol>](<./relative/path.ext.skel.md#function-name>)
 
-*UNKNOWN*: <what is unknown>. Consequence: <what is blocked or at risk>. Unlocks: <what becomes specifiable>.
+*UNKNOWN*: [<short-name>] <what is unknown>. Kind: blocking | local. Proposed: <your default; required when local>. Consequence: <what is blocked or at risk>. Unlocks: <what becomes specifiable>.
 
 ## class: <ClassName>
 

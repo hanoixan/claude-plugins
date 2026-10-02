@@ -168,8 +168,8 @@ class SystemFile(TreeCase):
     def test_check_and_unknowns_report_the_same_count(self):
         _, checked = self.check()
         _, listed = self.run_script(CHECK, "unknowns", "skel")
-        self.assertIn("8 unknowns", listed)
-        self.assertIn("8 unknowns", checked)
+        self.assertIn("9 unknowns", listed)
+        self.assertIn("9 unknowns", checked)
 
     def test_link_to_missing_file_in_system_file(self):
         self.append(SYSTEM, "\nSee [gone](./undo/gone.code.skel.md).\n")
@@ -301,6 +301,89 @@ class UnknownsCommand(TreeCase):
         self.assertEqual(out.strip(), "No unknowns.")
 
 
+class UnknownRules(TreeCase):
+    KIND = " Kind: blocking."
+
+    def test_example_groups_its_decisions(self):
+        _, out = self.run_script(CHECK, "unknowns", "skel")
+        self.assertIn("Blocking (8):", out)
+        self.assertIn("Local (1):", out)
+        self.assertIn("    followed at infra/history_store.iac.skel.md:", out)
+        self.assertIn("9 unknowns", out)
+
+    def test_system_file_decision_is_labelled_without_doubled_brackets(self):
+        _, out = self.run_script(CHECK, "unknowns", "skel")
+        self.assertIn("- [language] SYSTEM.md:21 (system): Implementation language and runtime.", out)
+
+    def test_declaration_without_kind_is_an_error(self):
+        self.replace(STORE, self.KIND, "")
+        self.assertCheckFails("*UNKNOWN* is missing `Kind:` (blocking or local)")
+
+    def test_declaration_without_kind_is_a_warning_when_lenient(self):
+        self.replace(STORE, self.KIND, "")
+        code, out = self.check("--lenient")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* is missing `Kind:`", out)
+
+    def test_kind_must_be_blocking_or_local(self):
+        self.replace(STORE, self.KIND, " Kind: maybe.")
+        self.assertCheckFails("*UNKNOWN* has `Kind: maybe`; it must be blocking or local")
+
+    def test_local_unknown_needs_a_proposal(self):
+        self.replace(HISTORY, " Proposed: 1000 steps.", "")
+        self.assertCheckFails("*UNKNOWN* with `Kind: local` needs `Proposed:`")
+
+    def test_follower_of_an_undeclared_name_is_an_error(self):
+        self.replace(STORE, "Follows [cross-session-undo]", "Follows [nosuch]")
+        self.assertCheckFails("`Follows [nosuch]` matches no declared unknown")
+
+    def test_duplicate_name_is_an_error(self):
+        self.replace(SYSTEM, "[language]", "[cross-session-undo]")
+        self.assertCheckFails("unknown name [cross-session-undo] is already declared at")
+
+    def test_system_file_unknown_without_kind_is_an_error(self):
+        self.replace(SYSTEM, "[language] Implementation language and runtime. Kind: blocking.",
+                     "[language] Implementation language and runtime.")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("SYSTEM.md", out)
+        self.assertIn("*UNKNOWN* is missing `Kind:`", out)
+
+    def test_follower_stands_in_for_unknowns_none(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: Follows [cross-session-undo]. Consequence: grouping is unaffected.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_follower_without_consequence_warns(self):
+        self.replace(STORE, " Consequence: this resource is deleted if cross-session undo is not required.", "")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* that follows another should state `Consequence:`", out)
+
+    def test_unknown_as_a_field_value_is_validated(self):
+        self.replace(TRANSACTION, "- **Returns:** success or failure.\n",
+                     "- **Returns:** *UNKNOWN*: whether partial success is reported. Consequence: c. Unlocks: u.\n")
+        self.assertCheckFails("*UNKNOWN* is missing `Kind:`")
+
+    def test_fenced_unknown_is_ignored(self):
+        self.replace(COMMAND, "```text", "```text\n*UNKNOWN*: Follows [nosuch].")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_system_file_may_follow_a_stand_in_decision(self):
+        self.append(SYSTEM, "\n*UNKNOWN*: Follows [cross-session-undo]. Consequence: scope shrinks.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_stand_in_may_follow_a_system_file_decision(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: Follows [language]. Consequence: signatures stay untyped.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+
 class FixBacklinks(TreeCase):
     def test_write_restores_a_deleted_backlink(self):
         self.replace(COMMAND, BACKLINK, "")
@@ -384,7 +467,7 @@ class Status(TreeCase):
     def test_abstract_stand_ins_are_listed_apart_from_pending(self):
         head, body = self.section("Abstract")
         self.assertEqual(head, "Abstract, adapt before implementing (5):")
-        self.assertIn("infra/history_store.iac  [1 UNKNOWN]", body)
+        self.assertIn("infra/history_store.iac  [2 UNKNOWN]", body)
 
     def test_code_with_no_stand_in_is_reported(self):
         head, body = self.section("Code/IaC files with no stand-in")

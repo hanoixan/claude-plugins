@@ -258,9 +258,6 @@ def parse(path, skel_root):
         um = UNKNOWN_RE.search(line)
         if um:
             sf.unknowns.append(Unknown(ln, um.group(1).strip(), cur))
-            body = um.group(1).lower()
-            if "consequence" not in body or "unlock" not in body:
-                sf.warn(ln, "*UNKNOWN* should state `Consequence:` and `Unlocks:`")
         elif INFORMAL_RE.search(line):
             sf.warn(ln, f"informal marker '{INFORMAL_RE.search(line).group(1)}'; use *UNKNOWN*: ...")
     if pending and (not cur.links or cur.links[-1].line < pending[1]):
@@ -526,6 +523,42 @@ def check_system(skel_root, files, links, slugs):
     return diags
 
 
+def unknown_problems(u, lenient):
+    """(severity, message) pairs for one unknown, judged on its own text."""
+    missing = "warning" if lenient else "error"
+    if u.follows:
+        if "consequence" not in u.clauses:
+            return [("warning", "*UNKNOWN* that follows another should state `Consequence:`")]
+        return []
+    out = []
+    if not u.kind:
+        out.append((missing, "*UNKNOWN* is missing `Kind:` (blocking or local)"))
+    elif u.kind not in KINDS:
+        out.append((missing, f"*UNKNOWN* has `Kind: {u.kind}`; it must be blocking or local"))
+    elif u.kind == "local" and "proposed" not in u.clauses:
+        out.append((missing, "*UNKNOWN* with `Kind: local` needs `Proposed:`"))
+    if "consequence" not in u.clauses or "unlocks" not in u.clauses:
+        out.append(("warning", "*UNKNOWN* should state `Consequence:` and `Unlocks:`"))
+    return out
+
+
+def name_problems(pairs):
+    """(file, line, severity, message) for names declared twice and followers that match nothing."""
+    out, first = [], {}
+    for rel, u in pairs:
+        if not u.name:
+            continue
+        if u.name in first:
+            frel, fu = first[u.name]
+            out.append((rel, u.line, "error", f"unknown name [{u.name}] is already declared at {frel}:{fu.line}"))
+        else:
+            first[u.name] = (rel, u)
+    for rel, u in pairs:
+        if u.follows and u.follows not in first:
+            out.append((rel, u.line, "error", f"`Follows [{u.follows}]` matches no declared unknown"))
+    return out
+
+
 def cmd_check(args):
     skel_root, files = load_tree(args.skel_dir)
     for sf in files.values():
@@ -533,15 +566,20 @@ def cmd_check(args):
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
     sys_unknowns, sys_links, sys_slugs = read_system(skel_root)
-    reports = [(sf.rel, sf.diags) for sf in sorted(files.values(), key=lambda f: f.rel)]
-    reports.append((SYSTEM_FILE, check_system(skel_root, files, sys_links, sys_slugs)))
+    diags = {sf.rel: sf.diags for sf in files.values()}
+    diags[SYSTEM_FILE] = check_system(skel_root, files, sys_links, sys_slugs)
+    pairs = tree_unknowns(files, sys_unknowns)
+    for rel, u in pairs:
+        diags[rel].extend((sev, u.line, msg) for sev, msg in unknown_problems(u, args.lenient))
+    for rel, line, sev, msg in name_problems(pairs):
+        diags[rel].append((sev, line, msg))
     ne = nw = 0
-    for rel, diags in reports:
-        for sev, ln, msg in sorted(diags, key=lambda d: d[1]):
+    for rel in sorted(r for r in diags if r != SYSTEM_FILE) + [SYSTEM_FILE]:
+        for sev, ln, msg in sorted(diags[rel], key=lambda d: d[1]):
             print(f"{os.path.join(args.skel_dir, rel)}:{ln}: {sev}: {msg}")
             ne += sev == "error"
             nw += sev == "warning"
-    n_unk = sum(len(f.unknowns) for f in files.values()) + len(sys_unknowns)
+    n_unk = len(decisions(pairs)[0])
     n_abs = sum(f.abstract for f in files.values())
     print(f"\n{len(files)} stand-ins, {len(deps)} dependency edges, {n_unk} unknowns, "
           f"{n_abs} abstract (placeholder extension); {ne} errors, {nw} warnings")
@@ -609,14 +647,15 @@ def cmd_unknowns(args):
         print(f"{title} ({len(group)}):")
         for rel, u, followers in group:
             label = f"[{u.name}] " if u.name else ""
-            print(f"- {label}{rel}:{u.line} ({u.where}): {UNKNOWN_NAME_RE.sub('', u.text)}")
+            print(f"- {label}{rel}:{u.line} ({u.where.strip('()')}): {UNKNOWN_NAME_RE.sub('', u.text)}")
             for frel, f in followers:
-                print(f"    followed at {frel}:{f.line} ({f.where}): {f.clauses.get('consequence', f.text)}")
+                print(f"    followed at {frel}:{f.line} ({f.where.strip('()')}): "
+                      f"{f.clauses.get('consequence', f.text)}")
         print()
     if orphans:
         print(f"Following an undeclared name ({len(orphans)}):")
         for rel, u in orphans:
-            print(f"- {rel}:{u.line} ({u.where}): {u.text}")
+            print(f"- {rel}:{u.line} ({u.where.strip('()')}): {u.text}")
         print()
     print(f"{len(declared)} unknowns")
     return 0

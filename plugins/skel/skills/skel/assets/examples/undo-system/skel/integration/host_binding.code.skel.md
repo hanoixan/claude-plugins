@@ -10,7 +10,7 @@ Glue the host writes once to connect the undo system to its document lifecycle a
 - **Depends on:** [DocumentTarget](../undo/document_target.code.skel.md#class-documenttarget)
 - **Referred by:** none known
 
-*UNKNOWN*: The host's shortcut/menu system. Consequence: `bind_undo` can't name concrete APIs. Unlocks: a concrete binding and UI tests.
+*UNKNOWN*: The host's shortcut/menu system. Kind: blocking. Consequence: `bind_undo` can't name concrete APIs. Unlocks: a concrete binding and UI tests.
 
 ## function: bind_undo
 

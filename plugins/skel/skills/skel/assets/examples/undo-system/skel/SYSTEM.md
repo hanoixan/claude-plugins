@@ -18,9 +18,9 @@ Out of scope: branching (tree) history, collaborative/multi-user undo (needs OT/
 
 ## Global decisions
 
-*UNKNOWN*: Implementation language and runtime. Consequence: all stand-ins stay abstract (`.code`); signatures are given in meaning, not types. Unlocks: renaming stand-ins to real extensions with `skel_mv.py --map` and stating concrete types.
+*UNKNOWN*: [language] Implementation language and runtime. Kind: blocking. Consequence: all stand-ins stay abstract (`.code`); signatures are given in meaning, not types. Unlocks: renaming stand-ins to real extensions with `skel_mv.py --map` and stating concrete types.
 
-*UNKNOWN*: Whether the host is collaborative (multiple writers to one document). Consequence: if yes, linear history is wrong and commands must be transformable; this spec would need a redesign of `Command`. Unlocks: confirming this single-writer design.
+*UNKNOWN*: Whether the host is collaborative (multiple writers to one document). Kind: blocking. Consequence: if yes, linear history is wrong and commands must be transformable; this spec would need a redesign of `Command`. Unlocks: confirming this single-writer design.
 
 - Concurrency: all history operations happen on the host's single edit thread / event loop. Commands are never applied concurrently.
 - Errors: a command that fails to apply or revert must leave the document unchanged and report failure; history then discards that step (see failure modes in [history](./undo/history.code.skel.md)).

@@ -10,7 +10,7 @@ The narrow interface the host application exposes so commands can mutate the doc
 - **Referred by:** [Command](./command.code.skel.md#class-command)
 - **Referred by:** [host binding](../integration/host_binding.code.skel.md#function-bind_undo)
 
-*UNKNOWN*: Shape of the host's document model (tree, flat records, text buffer). Consequence: `DocumentTarget` can only be described as an opaque handle plus change notification. Unlocks: typed accessor methods and more precise command payloads.
+*UNKNOWN*: Shape of the host's document model (tree, flat records, text buffer). Kind: blocking. Consequence: `DocumentTarget` can only be described as an opaque handle plus change notification. Unlocks: typed accessor methods and more precise command payloads.
 
 ## class: DocumentTarget
 

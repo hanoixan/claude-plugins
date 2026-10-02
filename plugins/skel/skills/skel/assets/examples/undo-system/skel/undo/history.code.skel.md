@@ -17,7 +17,9 @@ The undo/redo stacks and the only public entry point the host interacts with at 
 - **Owns:** all commands pushed to it.
 - **Access:** host document controller holds it; UI calls `undo`/`redo`/`can_undo`/`can_redo`/`peek_labels`.
 
-*UNKNOWN*: Whether `limit` is counted in steps or approximate bytes. Consequence: commands may need a `size_estimate` method. Unlocks: final `Command` interface and memory tests.
+*UNKNOWN*: Whether `limit` is counted in steps or approximate bytes. Kind: blocking. Consequence: commands may need a `size_estimate` method. Unlocks: final `Command` interface and memory tests.
+
+*UNKNOWN*: [default-limit] Default value of `limit` when the host passes none. Kind: local. Proposed: 1000 steps. Consequence: memory use under default settings is unspecified. Unlocks: a constant and its test.
 
 ### function: push
 
@@ -73,4 +75,4 @@ Writes history to the persisted snapshot format, if persistence is enabled.
 - **Depends on:** [history snapshot](./history_snapshot.data.skel.md)
 - **Depends on:** [history_store](../infra/history_store.iac.skel.md#resource-history_store)
 
-*UNKNOWN*: Whether commands can be serialized at all (some may hold host object references). Consequence: persistence may only be partial; non-serializable commands truncate the saved history at that point. Unlocks: deciding the snapshot schema's `payload` contract.
+*UNKNOWN*: Whether commands can be serialized at all (some may hold host object references). Kind: blocking. Consequence: persistence may only be partial; non-serializable commands truncate the saved history at that point. Unlocks: deciding the snapshot schema's `payload` contract.
