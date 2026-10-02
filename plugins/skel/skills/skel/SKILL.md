@@ -56,7 +56,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
-7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py order skel`. Give the user the unknowns grouped by what they block and the proposed build order. Unknowns that change interfaces should be answered before implementation starts.
+7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py order skel`. Give the user the unknowns grouped by what they block and the dependency order. Unknowns that change interfaces should be answered before implementation starts.
 
 ## Writing good stand-ins
 
@@ -72,14 +72,14 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 All scripts use only the Python standard library.
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # unknowns inventory (including SYSTEM.md)
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency-first build order, cycles grouped
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / pending / code with no stand-in
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / pending / abstract / code with no stand-in
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
 ```
 
 The reference files and templates name the scripts by filename alone (`skel_check.py check skel/`). Run them by the full paths shown here.
 
-`check` exits non-zero on errors, so it can run in CI or pre-commit to keep skel and code in step.
+`check` exits non-zero on errors, so it can run in CI or pre-commit to keep skel and code in step. `--lenient` reports missing fields as warnings, so a draft can be checked for structure and links before every field is filled in. Broken links and bad names still fail.

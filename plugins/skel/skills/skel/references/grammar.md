@@ -24,7 +24,7 @@ This is the full grammar for `.skel.md` files. `skel_check.py check` enforces ev
 - `skel/` mirrors the project root. `skel/src/net/client.py.skel.md` stands in for `src/net/client.py`, and that file is generated in that place during development.
 - The extension is part of the stand-in name, because the extension decides the file kind and tells the implementer what to produce. **(checked)** Conventional extensionless files such as `Dockerfile`, `Makefile`, or `Procfile` are allowed as `skel/Dockerfile.skel.md`.
 - Language-neutral specifications use the placeholder extensions `.code`, `.data`, and `.iac` until a language and platform are chosen; see `abstract-systems.md`. The checker reports these as abstract.
-- Plain `.md` files in `skel/` that are not `.skel.md` (normally just `SYSTEM.md`) are context, not stand-ins. They are not checked.
+- Plain `.md` files in `skel/` that are not `.skel.md` (normally just `SYSTEM.md`) are context, not stand-ins. Apart from the unknowns and links in `SYSTEM.md`, they are not checked.
 
 ## 2. File kinds
 
@@ -123,8 +123,8 @@ Referred by: [<symbol or item that refers to this>](<relative path to referring 
 ```
 
 - Paths are relative to the file containing the link. **(checked: target exists)**
-- To point at a specific symbol, append a heading fragment. Fragments are GitHub-style slugs of the heading text: lowercase, with punctuation other than `-` and `_` removed, and spaces turned into `-`. So `### function: save_all` becomes `#function-save_all`. **(checked, warning)**
-- Name the symbol in the link text using dotted qualification where it helps, for example `[UndoHistory.push](./history.code.skel.md#function-push)`.
+- To point at a specific symbol, append a heading fragment. Fragments are GitHub-style slugs of the heading text: lowercase, with punctuation other than `-` and `_` removed, and spaces turned into `-`. So `### function: save_all` becomes `#function-save_all`. **(checked: a fragment must match a heading in the target)**
+- Name the symbol in the link text using dotted qualification where it helps, for example `[UndoHistory.push](./history.code.skel.md#function-push)`. A dotted name must agree with the heading the fragment points at: `UndoHistory.push` has to land on a `function: push` under `class: UndoHistory`, not on a free function of the same name. A module-qualified name (`history.push` for a free function in `module: history`) is also accepted. **(checked, warning)**
 - Use one link per line. A block form is also accepted:
 
   ```markdown
@@ -260,4 +260,4 @@ Images, fonts, stylesheets, templates, and similar assets use `# resource: <name
 - cross-cutting concerns (logging, error policy, concurrency model)
 - an entry-point index linking to the main stand-ins
 
-Use the same `*UNKNOWN*:` convention in it. The checker does not validate SYSTEM.md, but `skel_mv.py` keeps its links up to date.
+Use the same `*UNKNOWN*:` convention in it. The checker counts its unknowns and checks that its links resolve **(checked)**; it does not apply the stand-in grammar to it. `skel_mv.py` keeps its links up to date.

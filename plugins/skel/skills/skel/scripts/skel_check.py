@@ -2,10 +2,10 @@
 """skel_check.py: validate and analyze a Skel specification tree.
 
 Subcommands
-  check SKEL_DIR [--lenient]          validate grammar, traits and bidirectional links
+  check SKEL_DIR [--lenient]          validate grammar, traits and bidirectional links (and SYSTEM.md links)
   unknowns SKEL_DIR [--json]          list every *UNKNOWN* with its location
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
-  status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, or missing
+  status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
 
 Standard library only. Exit code 1 if `check` finds errors.
@@ -46,6 +46,8 @@ INFORMAL_RE = re.compile(r"(\bTBD\b|\bTODO\b|\bFIXME\b|\?\?\?|(?<![*\w])UNKNOWN(
 NONE_RE = re.compile(r"^\s*(none|n/?a)\b", re.I)
 BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+DOTTED_RE = re.compile(r"^`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)`?$")
+SYSTEM_FILE = "SYSTEM.md"
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -125,9 +127,6 @@ class SkelFile:
         for s in self.sections:
             out.extend(s.links)
         return out
-
-    def slugs(self):
-        return {slugify(s.title) for s in self.sections}
 
 
 def infer_kind(sf):
@@ -384,6 +383,22 @@ def resolve(sf, target):
     return os.path.normpath(os.path.join(os.path.dirname(sf.path), path)), frag
 
 
+def fragment_problems(text, frag, target, where):
+    """(severity, message) pairs for a link's #fragment against the headings of the file it targets."""
+    secs = [s for s in target.sections if slugify(s.title) == frag]
+    if not secs:
+        return [("error", f"fragment '#{frag}' does not match any heading in {where}")]
+    dotted = DOTTED_RE.match(text.strip())
+    symbols = [s for s in secs if s.level > 1 and s.kind in ("class", "function", "symbol")]
+    if dotted and symbols:
+        module = next((s.name for s in target.sections if s.level == 1), "")
+        names = {s.qualified() for s in symbols}
+        if dotted.group(1) not in names | {f"{module}.{n}" for n in names}:
+            return [("warning", f"link text '{dotted.group(1)}' does not match the heading it points at "
+                                f"({', '.join(sorted(names))})")]
+    return []
+
+
 def build_edges(skel_root, files, report=True):
     deps = defaultdict(list)   # (A,B) -> [Link]   A depends on B
     refs = defaultdict(list)   # (B,A) -> [Link]   B says it is referred by A
@@ -395,8 +410,9 @@ def build_edges(skel_root, files, report=True):
                 continue
             tgt, frag = resolve(sf, lk.target)
             if tgt == sf.path:
-                if frag and frag not in sf.slugs() and report:
-                    sf.warn(lk.line, f"fragment '#{frag}' does not match any heading in this file")
+                if frag and report:
+                    for sev, msg in fragment_problems(lk.text, frag, sf, "this file"):
+                        sf.diags.append((sev, lk.line, msg))
                 continue
             if not os.path.exists(tgt):
                 if report:
@@ -410,8 +426,9 @@ def build_edges(skel_root, files, report=True):
                     elif inside:
                         sf.warn(lk.line, "dependency inside skel/ should target a .skel.md stand-in")
                 continue
-            if frag and frag not in files[tgt].slugs() and report:
-                sf.warn(lk.line, f"fragment '#{frag}' does not match any heading in {lk.target.split('#')[0]}")
+            if frag and report:
+                for sev, msg in fragment_problems(lk.text, frag, files[tgt], lk.target.split("#")[0]):
+                    sf.diags.append((sev, lk.line, msg))
             if lk.label == "Depends on":
                 deps[(sf.path, tgt)].append(lk)
             else:
@@ -431,19 +448,65 @@ def check_bidirectional(files, deps, refs):
                                       f"`Depends on:` link to {files[b].rel}")
 
 
+def read_system(skel_root):
+    """Unknowns, links and heading slugs of SYSTEM.md, which is context rather than a stand-in."""
+    unknowns, links, slugs = [], [], set()
+    path = os.path.join(skel_root, SYSTEM_FILE)
+    if not os.path.exists(path):
+        return unknowns, links, slugs
+    with open(path, encoding="utf-8") as fh:
+        fence = False
+        for ln, line in enumerate(fh, 1):
+            if FENCE_RE.match(line):
+                fence = not fence
+                continue
+            if fence:
+                continue
+            hm = HEADING_RE.match(line.rstrip("\n"))
+            if hm:
+                slugs.add(slugify(hm.group(2)))
+                continue
+            um = UNKNOWN_RE.search(line)
+            if um:
+                unknowns.append((ln, um.group(1).strip()))
+            links.extend((ln, text, target) for text, target in LINK_RE.findall(line))
+    return unknowns, links, slugs
+
+
+def check_system(skel_root, files, links, slugs):
+    diags = []
+    for ln, text, target in links:
+        if EXTERNAL_RE.match(target):
+            continue
+        path, _, frag = target.partition("#")
+        if path == "":
+            if frag and frag not in slugs:
+                diags.append(("error", ln, f"fragment '#{frag}' does not match any heading in this file"))
+            continue
+        tgt = os.path.normpath(os.path.join(skel_root, path))
+        if not os.path.exists(tgt):
+            diags.append(("error", ln, f"link target does not exist: {target}"))
+        elif frag and tgt in files:
+            diags.extend((sev, ln, msg) for sev, msg in fragment_problems(text, frag, files[tgt], path))
+    return diags
+
+
 def cmd_check(args):
     skel_root, files = load_tree(args.skel_dir)
     for sf in files.values():
         validate_file(sf, args.lenient)
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
+    sys_unknowns, sys_links, sys_slugs = read_system(skel_root)
+    reports = [(sf.rel, sf.diags) for sf in sorted(files.values(), key=lambda f: f.rel)]
+    reports.append((SYSTEM_FILE, check_system(skel_root, files, sys_links, sys_slugs)))
     ne = nw = 0
-    for sf in sorted(files.values(), key=lambda f: f.rel):
-        for sev, ln, msg in sorted(sf.diags, key=lambda d: d[1]):
-            print(f"{os.path.join(args.skel_dir, sf.rel)}:{ln}: {sev}: {msg}")
+    for rel, diags in reports:
+        for sev, ln, msg in sorted(diags, key=lambda d: d[1]):
+            print(f"{os.path.join(args.skel_dir, rel)}:{ln}: {sev}: {msg}")
             ne += sev == "error"
             nw += sev == "warning"
-    n_unk = sum(len(f.unknowns) for f in files.values())
+    n_unk = sum(len(f.unknowns) for f in files.values()) + len(sys_unknowns)
     n_abs = sum(f.abstract for f in files.values())
     print(f"\n{len(files)} stand-ins, {len(deps)} dependency edges, {n_unk} unknowns, "
           f"{n_abs} abstract (placeholder extension); {ne} errors, {nw} warnings")
@@ -464,17 +527,8 @@ def cmd_unknowns(args):
     for sf in sorted(files.values(), key=lambda f: f.rel):
         for ln, text, sec in sf.unknowns:
             items.append({"file": sf.rel, "line": ln, "where": heading_path(sec), "text": text})
-    sysmd = os.path.join(skel_root, "SYSTEM.md")
-    if os.path.exists(sysmd):
-        with open(sysmd, encoding="utf-8") as fh:
-            fence = False
-            for i, line in enumerate(fh, 1):
-                if FENCE_RE.match(line):
-                    fence = not fence
-                    continue
-                m = None if fence else UNKNOWN_RE.search(line)
-                if m:
-                    items.append({"file": "SYSTEM.md", "line": i, "where": "(system)", "text": m.group(1).strip()})
+    for ln, text in read_system(skel_root)[0]:
+        items.append({"file": SYSTEM_FILE, "line": ln, "where": "(system)", "text": text})
     if args.json:
         print(json.dumps(items, indent=2))
         return 0
@@ -558,12 +612,12 @@ IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target
 def cmd_status(args):
     skel_root, files = load_tree(args.skel_dir)
     root = os.path.abspath(args.root)
-    implemented, pending = [], []
+    implemented, pending, abstract = [], [], []
     specified = set()
     for sf in sorted(files.values(), key=lambda f: f.rel):
         impl = os.path.join(root, sf.impl_rel)
         specified.add(os.path.normpath(impl))
-        (implemented if os.path.exists(impl) else pending).append(sf)
+        (implemented if os.path.exists(impl) else abstract if sf.abstract else pending).append(sf)
     unspecified = []
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in IGNORE_DIRS and not d.startswith(".")
@@ -577,11 +631,11 @@ def cmd_status(args):
     print(f"Implemented ({len(implemented)}):")
     for sf in implemented:
         print(f"  {sf.impl_rel}")
-    print(f"Pending ({len(pending)}):")
-    for sf in pending:
-        extra = "  [ABSTRACT: adapt first]" if sf.abstract else ""
-        unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
-        print(f"  {sf.impl_rel}{extra}{unk}")
+    for title, group in (("Pending", pending), ("Abstract, adapt before implementing", abstract)):
+        print(f"{title} ({len(group)}):")
+        for sf in group:
+            unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
+            print(f"  {sf.impl_rel}{unk}")
     print(f"Code/IaC files with no stand-in ({len(unspecified)}):")
     for p in sorted(unspecified):
         print(f"  {p}")
@@ -651,7 +705,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("check"); p.add_argument("skel_dir"); p.add_argument("--lenient", action="store_true",
-                                                                            help="missing per-level fields are warnings")
+                                                                            help="report missing fields as warnings; link and naming errors still fail")
     p = sub.add_parser("unknowns"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("order"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("status"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)

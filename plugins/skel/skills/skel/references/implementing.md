@@ -9,7 +9,9 @@ During development, `skel/` is the implementation plan. Every stand-in becomes e
    - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask the user about these before implementing the affected file and anything that depends on it. Present them grouped, with each one's consequence and what it unlocks, so the user can answer efficiently.
    - **Local** unknowns affect only a function body, such as a tuning constant. You may implement with a clearly marked, conservative default only if the user agrees. Record the choice in the skel and remove the unknown.
 3. If any stand-in is abstract (`.code`, `.data`, `.iac`), adapt it first; see `abstract-systems.md`.
-4. Run `skel_check.py order skel/` to get the build order. Dependencies come first. Files in the same step that form a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user.
+4. Run `skel_check.py order skel/` to see what must exist before what. Dependencies come first. Files in the same step that form a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user.
+5. Plan the batches. `order` is a dependency sort with one file per step, so in a compiled language it lists every interface before any implementation and puts the build manifest last. Build in batches that compile and test on their own: an interface, its implementation, and its tests go in the same batch. Create the build manifests (`CMakeLists.txt`, `package.json`, a `Makefile`) with the first batch, covering only what exists, and extend them with each later batch.
+6. Commit `skel/` before you start, and again after each batch, so the plan and the code can be compared at any point.
 
 ## Realizing one stand-in
 
@@ -22,7 +24,7 @@ For each file in order:
    - Make `Inputs` and `Returns` the signature. `State changes` say which side effects are allowed; perform no others. `Access` decides visibility (public or private, exported or not).
    - Handle each listed failure mode explicitly.
    - Treat prose guidance as implementation instructions.
-3. Add a one-line header comment pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent.
+3. Add a one-line header comment pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
 4. Write tests from the stand-in. Every failure mode and every `State changes` statement is a test case, and data `## Schema` blocks become validation fixtures.
 5. Run `skel_check.py status skel/ --root .` to track progress.
 
@@ -37,6 +39,16 @@ Don't let code and skel drift. The skel is updated first:
 - **A resolved unknown** means you replace it with the decided specification and delete the marker.
 
 Rerun `check` after every batch of skel edits.
+
+## When the plan changes under existing code
+
+A new feature or a late decision changes stand-ins whose files are already implemented. `status` still lists those files as implemented, because it only checks that they exist. The record of what now trails the plan is the diff of the tree:
+
+```bash
+git diff <last commit where code and skel agreed> -- skel
+```
+
+Treat that diff as the work order: every changed stand-in names a file to bring back in step.
 
 ## Existing code
 
