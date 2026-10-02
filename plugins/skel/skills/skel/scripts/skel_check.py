@@ -5,6 +5,7 @@ Subcommands
   check SKEL_DIR [--lenient]          validate grammar, traits and bidirectional links (and SYSTEM.md links)
   unknowns SKEL_DIR [--json]          list open decisions by kind, each once, with its followers
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
+  batches SKEL_DIR [--json]           buildable batches of units; manifests are set aside
   status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
   infer-roles SKEL_DIR [--write]      propose role: and unit: front matter (dry-run by default)
@@ -815,6 +816,59 @@ def cmd_order(args):
     return 0
 
 
+def cmd_batches(args):
+    skel_root, files = load_tree(args.skel_dir)
+    deps, _ = build_edges(skel_root, files, report=False)
+    primary = resolve_units(files, report=False)
+    members = unit_members(files, primary)
+    manifests = sorted(m.impl_rel for p, group in members.items() if files[p].role == "manifest" for m in group)
+    nodes = sorted(p for p in members if files[p].role != "manifest")
+    edges = defaultdict(set)
+    for (a, b) in deps:
+        ua, ub = primary[a], primary[b]
+        if ua != ub and files[ua].role != "manifest" and files[ub].role != "manifest":
+            edges[ua].add(ub)
+    comps = sccs(nodes, edges)  # dependencies come out first, so every level below is already known
+    comp_of = {p: i for i, comp in enumerate(comps) for p in comp}
+    level = {}
+    for i, comp in enumerate(comps):
+        below = {comp_of[d] for p in comp for d in edges.get(p, ()) if comp_of[d] != i}
+        level[i] = 1 + max((level[j] for j in below), default=0)
+    batches = defaultdict(list)
+    for i, comp in enumerate(comps):
+        for p in comp:
+            group = members[p]
+            batches[level[i]].append({
+                "unit": files[p].impl_rel, "files": [m.impl_rel for m in group],
+                "role": files[p].role or "product", "cycle": len(comp) > 1,
+                "abstract": any(m.abstract for m in group), "unknowns": sum(len(m.unknowns) for m in group),
+                "depends_on": sorted(files[d].impl_rel for d in edges.get(p, ()))})
+    result = {"manifests": manifests,
+              "batches": [{"batch": n, "units": sorted(batches[n], key=lambda u: u["unit"])} for n in sorted(batches)]}
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    if manifests:
+        print("Manifests (create with batch 1, extend with every batch):")
+        for path in manifests:
+            print(f"  {path}")
+        print()
+    for batch in result["batches"]:
+        print(f"Batch {batch['batch']}:")
+        for u in batch["units"]:
+            extra = f"  (+ {', '.join(u['files'][1:])})" if len(u["files"]) > 1 else ""
+            flags = [f"[{u['role']}]"] if u["role"] == "test" else []
+            if u["cycle"]:
+                flags.append("[cycle]")
+            if u["abstract"]:
+                flags.append("[ABSTRACT]")
+            if u["unknowns"]:
+                flags.append(f"[{u['unknowns']} UNKNOWN]")
+            print(f"  {u['unit']}{extra}{'  ' + ' '.join(flags) if flags else ''}")
+        print()
+    return 0
+
+
 IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target", "__pycache__",
                ".idea", ".vscode", "skel", ".next", "out", "vendor"}
 
@@ -1019,9 +1073,10 @@ def main():
     p = sub.add_parser("status"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)
     p = sub.add_parser("fix-backlinks"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
     p = sub.add_parser("infer-roles"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
+    p = sub.add_parser("batches"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
     args = ap.parse_args()
     fn = {"check": cmd_check, "unknowns": cmd_unknowns, "order": cmd_order, "status": cmd_status,
-          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles}[args.cmd]
+          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles, "batches": cmd_batches}[args.cmd]
     sys.exit(fn(args))
 
 

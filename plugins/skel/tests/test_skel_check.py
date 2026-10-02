@@ -757,6 +757,90 @@ class InferRolesOnTheExample(TreeCase):
         self.assertIn("0 errors, 0 warnings", out)
 
 
+class Batches(MiniTree):
+    P = ["role: product"]
+
+    def setUp(self):
+        super().setUp()
+        self.stand_in("src/err.hpp", front=self.P)
+        self.stand_in("src/fm.hpp", depends=["src/err.hpp"], front=self.P)
+        self.stand_in("src/fm_posix.cpp", depends=["src/fm.hpp", "src/err.hpp"],
+                      front=["role: product", "unit: ./fm.hpp.skel.md"])
+        self.stand_in("tests/fm_test.cpp", depends=["src/fm.hpp"], front=["role: test"])
+        self.stand_in("CMakeLists.txt", depends=["src/fm_posix.cpp", "tests/fm_test.cpp"], front=["role: manifest"])
+
+    def batches(self, *args):
+        return self.run_check("batches", "skel", *args)
+
+    def batch_of(self, out, path):
+        number = None
+        for line in out.splitlines():
+            if line.startswith("Batch "):
+                number = int(line.split()[1].rstrip(":"))
+            elif line.strip().startswith(path):
+                return number
+        self.fail(f"{path} not in:\n{out}")
+
+    def test_unit_members_share_one_line(self):
+        _, out = self.batches()
+        self.assertIn("  src/fm.hpp  (+ src/fm_posix.cpp)", out)
+        self.assertNotIn("cycle", out)
+
+    def test_manifests_are_listed_first_and_not_batched(self):
+        code, out = self.batches()
+        self.assertEqual(code, 0, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "Manifests (create with batch 1, extend with every batch):")
+        self.assertEqual(lines[1], "  CMakeLists.txt")
+        self.assertEqual(out.count("CMakeLists.txt"), 1)
+
+    def test_dependencies_come_in_earlier_batches(self):
+        _, out = self.batches()
+        self.assertEqual(self.batch_of(out, "src/err.hpp"), 1)
+        self.assertEqual(self.batch_of(out, "src/fm.hpp"), 2)
+        self.assertEqual(self.batch_of(out, "tests/fm_test.cpp"), 3)
+
+    def test_test_units_are_tagged(self):
+        _, out = self.batches()
+        self.assertIn("  tests/fm_test.cpp  [test]", out)
+
+    def test_cycle_shares_a_batch_and_is_flagged(self):
+        self.stand_in("src/a.hpp", depends=["src/b.hpp"], front=self.P)
+        self.stand_in("src/b.hpp", depends=["src/a.hpp"], front=self.P)
+        _, out = self.batches()
+        self.assertEqual(self.batch_of(out, "src/a.hpp"), self.batch_of(out, "src/b.hpp"))
+        self.assertIn("  src/a.hpp  [cycle]", out)
+        self.assertIn("  src/b.hpp  [cycle]", out)
+
+    def test_json_shape(self):
+        _, out = self.batches("--json")
+        data = json.loads(out)
+        self.assertEqual(data["manifests"], ["CMakeLists.txt"])
+        self.assertEqual([b["batch"] for b in data["batches"]], [1, 2, 3])
+        unit = data["batches"][1]["units"][0]
+        self.assertEqual(unit, {"unit": "src/fm.hpp", "files": ["src/fm.hpp", "src/fm_posix.cpp"],
+                                "role": "product", "cycle": False, "abstract": False, "unknowns": 0,
+                                "depends_on": ["src/err.hpp"]})
+
+    def test_tree_without_roles_is_batched_as_product(self):
+        for rel in ("src/err.hpp", "src/fm.hpp", "tests/fm_test.cpp"):
+            text = self.read(rel)
+            with open(self.file(rel), "w", encoding="utf-8") as fh:
+                fh.write(text.split("---\n", 2)[2])
+        code, out = self.batches()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.batch_of(out, "src/err.hpp"), 1)
+        self.assertIn("  tests/fm_test.cpp\n", out + "\n")
+
+
+class BatchesOnTheExample(TreeCase):
+    def test_example_is_batched_with_dependencies_first(self):
+        code, out = self.run_script(CHECK, "batches", "skel")
+        self.assertEqual(code, 0, out)
+        self.assertLess(out.index("undo/command.code"), out.index("undo/transaction.code"))
+        self.assertIn("[ABSTRACT]", out)
+
+
 class FixBacklinks(TreeCase):
     def test_write_restores_a_deleted_backlink(self):
         self.replace(COMMAND, BACKLINK, "")
