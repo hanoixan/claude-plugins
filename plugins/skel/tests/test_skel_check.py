@@ -552,6 +552,67 @@ class Roles(TreeCase):
         self.assertIn("history_snapshot.data.skel.md:3: error: front matter kind 'sideways'", out)
 
 
+class UntestedUnits(TreeCase):
+    """The example is abstract and so exempt; these tests make `command` a concrete Python unit."""
+
+    UNIT = "skel/src/command.py.skel.md"
+    WARNING = "no test stand-in depends on this unit"
+
+    def setUp(self):
+        super().setUp()
+        self.run_script(MV, "skel", COMMAND, self.UNIT)
+
+    def add_test_stand_in(self, target):
+        os.makedirs(self.path("skel/tests"), exist_ok=True)
+        with open(self.path("skel/tests/command_test.py.skel.md"), "w", encoding="utf-8") as fh:
+            fh.write("---\nrole: test\n---\n"
+                     "# module: command_test\n\n"
+                     "Round-trip tests for commands.\n\n"
+                     "- **Owns:** the command test cases.\n"
+                     "- **Access:** run by the test runner only.\n"
+                     "- **Required:** always.\n"
+                     "- **Failure modes:** none known.\n"
+                     f"- **Depends on:** [Command]({target})\n"
+                     "- **Referred by:** none known\n"
+                     "- **Unknowns:** none\n")
+        self.run_script(CHECK, "fix-backlinks", "skel", "--write")
+
+    def test_concrete_code_unit_without_a_test_warns(self):
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"skel/src/command.py.skel.md:1: warning: {self.WARNING}", out)
+
+    def test_abstract_units_do_not_warn(self):
+        _, out = self.check()
+        self.assertEqual(out.count(self.WARNING), 1, out)
+
+    def test_untested_reason_silences_the_warning(self):
+        self.front(self.UNIT, "role: product", "untested: covered by the host's integration tests")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn(self.WARNING, out)
+
+    def test_a_test_that_depends_on_the_unit_silences_the_warning(self):
+        self.add_test_stand_in("../src/command.py.skel.md#class-command")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn(self.WARNING, out)
+
+    def test_a_test_that_depends_on_another_member_counts(self):
+        member = "skel/src/command_impl.py.skel.md"
+        self.run_script(MV, "skel", TRANSACTION, member)
+        self.front(member, "role: product", "unit: ./command.py.skel.md")
+        self.add_test_stand_in("../src/command_impl.py.skel.md#class-transaction")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn(self.WARNING, out)
+
+    def test_a_product_stand_in_that_depends_on_the_unit_does_not_count(self):
+        # history.code depends on command already, and it is product, not test.
+        _, out = self.check()
+        self.assertIn(self.WARNING, out)
+
+
 class FixBacklinks(TreeCase):
     def test_write_restores_a_deleted_backlink(self):
         self.replace(COMMAND, BACKLINK, "")

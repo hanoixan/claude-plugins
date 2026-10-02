@@ -587,6 +587,20 @@ def unit_members(files, primary):
     return members
 
 
+def untested_units(files, deps, primary):
+    """Primaries of concrete product code units that no test stand-in depends on."""
+    tested = {primary[b] for (a, b) in deps if files[a].role == "test"}
+    out = []
+    for head, group in unit_members(files, primary).items():
+        if files[head].role != "product" or head in tested:
+            continue
+        if any("untested" in m.meta or m.abstract for m in group):
+            continue
+        if any(m.kind == "code" and any(s.kind in ("class", "function") for s in m.sections) for m in group):
+            out.append(files[head])
+    return out
+
+
 def unknown_problems(u, lenient):
     """(severity, message) pairs for one unknown, judged on its own text."""
     missing = "warning" if lenient else "error"
@@ -632,6 +646,8 @@ def cmd_check(args):
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
     primary = resolve_units(files)
+    for sf in untested_units(files, deps, primary):
+        sf.warn(1, "no test stand-in depends on this unit; link one or state `untested: <reason>` in front matter")
     sys_unknowns, sys_links, sys_slugs = read_system(skel_root)
     diags = {sf.rel: sf.diags for sf in files.values()}
     diags[SYSTEM_FILE] = check_system(skel_root, files, sys_links, sys_slugs)
