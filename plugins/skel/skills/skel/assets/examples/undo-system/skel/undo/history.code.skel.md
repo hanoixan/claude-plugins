@@ -19,6 +19,7 @@ The undo/redo stacks and the only public entry point the host interacts with at 
 - **State changes:** invariant: the redo stack is empty immediately after any `push`; at most one open transaction at a time (nested begin/end counts depth).
 - **Owns:** all commands pushed to it.
 - **Access:** host document controller holds it; UI calls `undo`/`redo`/`can_undo`/`can_redo`/`peek_labels`.
+- **Referred by:** [history_test](./history_test.code.skel.md)
 
 *UNKNOWN*: Whether `limit` is counted in steps or approximate bytes. Kind: blocking. Consequence: commands may need a `size_estimate` method. Unlocks: final `Command` interface and memory tests.
 

@@ -65,7 +65,7 @@ unit: ./file_map.hpp.skel.md
 |---|---|---|
 | `role` | yes | `product`, `test` or `manifest` |
 | `unit` | no | relative path to the stand-in this one is built together with |
-| `untested` | no | why a product unit has no test, on `role: product` only |
+| `untested` | no | why no test stand-in links to this unit; goes on the unit's primary, `role: product` only |
 | `kind` | no | overrides the kind inferred from the extension, as above |
 
 - **product** is anything delivered: code, data, infrastructure, resources, documents.
@@ -75,7 +75,7 @@ unit: ./file_map.hpp.skel.md
 
 Roles are stated, never guessed by the checker. `skel_check.py infer-roles skel/ --write` proposes them from file names and folders and writes the ones it is sure of. It lists the rest as unsure and leaves them for you to set; ask the user about any you cannot settle. It pairs a source with a header of the same name in its folder. A header whose name the source's only begins with, or a same-name header in another folder, is paired once the source has a `Depends on:` link to it.
 
-The checker warns when no `role: test` code stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count, and test data does not: a fixture that names its generator is not a test of it. Either link a test to the unit or record the gap with `untested: <reason>`. Abstract units are exempt until they are adapted.
+The checker warns when no `role: test` code stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count, and test data does not: a fixture that names its generator is not a test of it. Either link a test to the unit or record the gap with `untested: <reason>` on the unit's primary. **(checked)** The field says why no separate test stand-in links here, not that the code has no tests: where a language keeps tests in the same file as the code (Rust's `#[cfg(test)]` modules, Python doctests), write `untested: tests are inline in this file`. Abstract units are exempt until they are adapted.
 
 The checker also warns when a `role: product` stand-in depends on a `role: test` one, because one of the two roles is then probably wrong. **(checked, warning)**
 

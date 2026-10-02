@@ -723,6 +723,15 @@ class Roles(TreeCase):
         self.assertEqual(code, 1, out)
         self.assertIn("history_snapshot.data.skel.md:3: error: front matter kind 'sideways'", out)
 
+    def test_byte_order_mark_before_front_matter_is_ignored(self):
+        with open(self.path(TRANSACTION), encoding="utf-8") as fh:
+            text = fh.read()
+        with open(self.path(TRANSACTION), "w", encoding="utf-8") as fh:
+            fh.write("﻿" + text)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
 
 class UntestedUnits(TreeCase):
     """The example is abstract and so exempt; these tests make `command` a concrete Python unit."""
@@ -733,6 +742,8 @@ class UntestedUnits(TreeCase):
     def setUp(self):
         super().setUp()
         self.run_script(MV, "skel", COMMAND, self.UNIT)
+        # The example's own test stand-in depends on Command; make it product so these tests start uncovered.
+        self.replace("skel/undo/history_test.code.skel.md", "role: test", "role: product")
 
     def add_test_stand_in(self, target):
         os.makedirs(self.path("skel/tests"), exist_ok=True)
@@ -783,6 +794,12 @@ class UntestedUnits(TreeCase):
         # history.code depends on command already, and it is product, not test.
         _, out = self.check()
         self.assertIn(self.WARNING, out)
+
+    def test_untested_on_a_non_primary_member_is_an_error(self):
+        member = "skel/src/command_impl.py.skel.md"
+        self.run_script(MV, "skel", TRANSACTION, member)
+        self.front(member, "role: product", "unit: ./command.py.skel.md", "untested: covered elsewhere")
+        self.assertCheckFails("`untested:` belongs on the unit's primary stand-in, src/command.py.skel.md")
 
 
 class UntestedUnitRules(MiniTree):
@@ -1034,9 +1051,15 @@ class InferRolesOnTheExample(TreeCase):
         for dp, _, fns in os.walk(self.path("skel")):
             for fn in fns:
                 if fn.endswith(".skel.md"):
-                    self.front(os.path.relpath(os.path.join(dp, fn), self.dir))
+                    path = os.path.join(dp, fn)
+                    with open(path, encoding="utf-8") as fh:
+                        text = fh.read()
+                    self.assertTrue(text.startswith("---\n"), path)
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text.split("---\n", 2)[2])
         self.assertEqual(self.check()[0], 1)
-        self.run_script(CHECK, "infer-roles", "skel", "--write")
+        _, out = self.run_script(CHECK, "infer-roles", "skel", "--write")
+        self.assertIn("undo/history_test.code.skel.md:\n  + role: test", out)
         code, out = self.check()
         self.assertEqual(code, 0, out)
         self.assertIn("0 errors, 0 warnings", out)
@@ -1105,7 +1128,8 @@ class Batches(MiniTree):
         unit = data["batches"][1]["units"][0]
         self.assertEqual(unit, {"unit": "src/fm.hpp", "files": ["src/fm.hpp", "src/fm_posix.cpp"],
                                 "role": "product", "cycle": False, "abstract": False, "unknowns": 0,
-                                "depends_on": ["src/err.hpp"]})
+                                "depends_on": ["src/err.hpp"], "depends_on_manifests": []})
+        self.assertEqual(data["ignored_units"], [])
 
     def test_tree_without_roles_is_batched_as_product(self):
         for rel in ("src/err.hpp", "src/fm.hpp", "src/fm_posix.cpp", "tests/fm_test.cpp", "CMakeLists.txt"):
@@ -1134,6 +1158,26 @@ class Batches(MiniTree):
         self.assertEqual(self.batch_of(out, "src/gen.hpp"), 1)
         self.assertEqual(out.count("CMakeLists.txt"), 1)
 
+    def test_empty_tree_says_so(self):
+        os.makedirs(os.path.join(self.dir, "empty"))
+        code, out = self.run_check("batches", "empty")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip(), "No stand-ins.")
+
+    def test_invalid_unit_value_is_noted(self):
+        self.stand_in("src/q.cpp", front=["role: product", "unit: ./nope.hpp.skel.md"])
+        _, out = self.batches()
+        self.assertIn("note: 1 `unit:` value ignored because it is not valid; `check` explains why:\n"
+                      "  src/q.cpp.skel.md", out)
+        self.assertEqual(json.loads(self.batches("--json")[1])["ignored_units"], ["src/q.cpp.skel.md"])
+
+    def test_manifest_dependencies_are_listed_in_json(self):
+        self.stand_in("src/gen.hpp", depends=["CMakeLists.txt"], front=self.P)
+        data = json.loads(self.batches("--json")[1])
+        unit = next(u for b in data["batches"] for u in b["units"] if u["unit"] == "src/gen.hpp")
+        self.assertEqual(unit["depends_on_manifests"], ["CMakeLists.txt"])
+        self.assertEqual(unit["depends_on"], [])
+
 
 class BatchesOnTheExample(TreeCase):
     def test_example_is_batched_with_dependencies_first(self):
@@ -1141,6 +1185,10 @@ class BatchesOnTheExample(TreeCase):
         self.assertEqual(code, 0, out)
         self.assertLess(out.index("undo/command.code"), out.index("undo/transaction.code"))
         self.assertIn("[ABSTRACT]", out)
+
+    def test_example_shows_a_test_stand_in(self):
+        _, out = self.run_script(CHECK, "batches", "skel")
+        self.assertIn("  undo/history_test.code  [test] [ABSTRACT]", out)
 
 
 class FixBacklinks(TreeCase):
@@ -1370,7 +1418,7 @@ class Status(CodeCase):
 
     def test_abstract_stand_ins_are_listed_apart_from_pending(self):
         head, body = self.section("Abstract")
-        self.assertEqual(head, "Abstract, adapt before implementing (5):")
+        self.assertEqual(head, "Abstract, adapt before implementing (6):")
         self.assertIn("infra/history_store.iac  [2 UNKNOWN]", body)
 
     def test_code_with_no_stand_in_is_reported(self):

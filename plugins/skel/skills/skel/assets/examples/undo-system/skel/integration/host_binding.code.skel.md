@@ -1,5 +1,6 @@
 ---
 role: product
+untested: exercised by the host application's own interface tests
 ---
 # module: host_binding
 

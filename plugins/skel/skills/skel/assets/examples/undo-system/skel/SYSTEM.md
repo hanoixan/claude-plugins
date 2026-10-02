@@ -25,6 +25,12 @@ Out of scope: branching (tree) history, collaborative/multi-user undo (needs OT/
 - Concurrency: all history operations happen on the host's single edit thread / event loop. Commands are never applied concurrently.
 - Errors: a command that fails to apply or revert must leave the document unchanged and report failure; history then discards that step (see failure modes in [history](./undo/history.code.skel.md)).
 
+## Test strategy
+
+- Levels in this plan: behaviour tests of the undo core against a fake `DocumentTarget` ([history_test](./undo/history_test.code.skel.md)).
+- Left out on purpose: tests of the host binding. Shortcuts and menus are exercised by the host application's own interface tests.
+
+
 ## Entry points
 
 - [UndoHistory](./undo/history.code.skel.md#class-undohistory): the object the host owns.

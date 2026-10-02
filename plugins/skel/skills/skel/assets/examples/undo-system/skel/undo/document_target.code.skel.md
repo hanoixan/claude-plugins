@@ -23,6 +23,7 @@ An opaque handle to the editable document plus a change-notification hook. Comma
 - **State changes:** none of its own; mutations are the host model's.
 - **Owns:** nothing.
 - **Access:** passed into `Command.apply` / `Command.revert` by `UndoHistory`; never global.
+- **Referred by:** [history_test](./history_test.code.skel.md)
 
 ### function: notify_changed
 

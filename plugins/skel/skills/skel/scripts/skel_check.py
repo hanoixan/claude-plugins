@@ -243,7 +243,7 @@ def infer_kind(sf):
 
 def parse(path, skel_root):
     sf = SkelFile(path, skel_root)
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:    # a byte-order mark is not content
         sf.lines = fh.read().split("\n")
     lines = sf.lines
     start = 0
@@ -648,7 +648,7 @@ def untested_units(files, deps, primary):
     for head, group in unit_members(files, primary).items():
         if files[head].role != "product" or head in tested:
             continue
-        if any("untested" in m.meta or m.abstract for m in group):
+        if "untested" in files[head].meta or any(m.abstract for m in group):
             continue
         if any(m.kind == "code" and any(s.kind in ("class", "function") for s in m.sections) for m in group):
             out.append(files[head])
@@ -706,6 +706,10 @@ def cmd_check(args):
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
     primary = resolve_units(files)
+    for sf in files.values():
+        if "untested" in sf.meta and primary[sf.path] != sf.path:
+            sf.err(sf.meta["untested"][0], "`untested:` belongs on the unit's primary stand-in, "
+                                           f"{files[primary[sf.path]].rel}")
     for (a, b), links in deps.items():
         if files[a].role == "product" and files[b].role == "test":
             files[a].warn(links[0].line, f"a product stand-in depends on test stand-in {files[b].rel}; "
@@ -977,11 +981,13 @@ def cmd_batches(args):
     members = unit_members(files, primary)
     manifests = sorted(m.impl_rel for p, group in members.items() if files[p].role == "manifest" for m in group)
     nodes = sorted(p for p in members if files[p].role != "manifest")
-    edges = defaultdict(set)
+    ignored = sorted(sf.rel for sf in files.values() if "unit" in sf.meta and primary[sf.path] == sf.path)
+    edges, manifest_deps = defaultdict(set), defaultdict(set)
     for (a, b) in deps:
         ua, ub = primary[a], primary[b]
-        if ua != ub and files[ua].role != "manifest" and files[ub].role != "manifest":
-            edges[ua].add(ub)
+        if ua == ub or files[ua].role == "manifest":
+            continue
+        (manifest_deps if files[ub].role == "manifest" else edges)[ua].add(ub)
     comps = sccs(nodes, edges)  # dependencies come out first, so every level below is already known
     comp_of = {p: i for i, comp in enumerate(comps) for p in comp}
     level = {}
@@ -996,11 +1002,16 @@ def cmd_batches(args):
                 "unit": files[p].impl_rel, "files": [m.impl_rel for m in group],
                 "role": files[p].role or "product", "cycle": len(comp) > 1,
                 "abstract": any(m.abstract for m in group), "unknowns": sum(len(m.unknowns) for m in group),
-                "depends_on": sorted(files[d].impl_rel for d in edges.get(p, ()))})
+                "depends_on": sorted(files[d].impl_rel for d in edges.get(p, ())),
+                "depends_on_manifests": sorted(files[d].impl_rel for d in manifest_deps.get(p, ()))})
     result = {"manifests": manifests,
-              "batches": [{"batch": n, "units": sorted(batches[n], key=lambda u: u["unit"])} for n in sorted(batches)]}
+              "batches": [{"batch": n, "units": sorted(batches[n], key=lambda u: u["unit"])} for n in sorted(batches)],
+              "ignored_units": ignored}
     if args.json:
         print(json.dumps(result, indent=2))
+        return 0
+    if not files:
+        print("No stand-ins.")
         return 0
     if manifests:
         print("Manifests (create with batch 1, extend with every batch):")
@@ -1020,6 +1031,11 @@ def cmd_batches(args):
                 flags.append(f"[{u['unknowns']} UNKNOWN]")
             print(f"  {u['unit']}{extra}{'  ' + ' '.join(flags) if flags else ''}")
         print()
+    if ignored:
+        plural = "value" if len(ignored) == 1 else "values"
+        print(f"note: {len(ignored)} `unit:` {plural} ignored because it is not valid; `check` explains why:")
+        for rel in ignored:
+            print(f"  {rel}")
     return 0
 
 

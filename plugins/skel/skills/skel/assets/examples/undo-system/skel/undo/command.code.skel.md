@@ -22,6 +22,7 @@ An abstract base (or interface/trait) for reversible edits. Implementations capt
 - **State changes:** after a successful `apply`, holds whatever is needed for `revert`. Invariant: `apply` and `revert` alternate, starting with `apply`.
 - **Owns:** its captured before/after data.
 - **Access:** created by host code, then handed to `UndoHistory.push`; after that only history calls its methods.
+- **Referred by:** [history_test](./history_test.code.skel.md)
 
 ### function: apply
 
