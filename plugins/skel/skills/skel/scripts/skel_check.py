@@ -7,12 +7,14 @@ Subcommands
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
   batches SKEL_DIR [--json]           buildable batches of units; manifests are set aside
   status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
+  stamp SKEL_DIR --root PROJECT PATH... | --all   record in each file's Spec: header that it matches its stand-in
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
   infer-roles SKEL_DIR [--write]      propose role: and unit: front matter (dry-run by default)
 
 Standard library only. Exit code 1 if `check` finds errors.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -77,6 +79,8 @@ WEAK_TEST_NAME_RE = re.compile(r"^.+(Test|Tests|IT)\.[^.]+$")
 UNSURE_DIRS = {"tools", "scripts", "examples", "bench", "benches", "benchmarks"}
 SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
 HEADER_EXT = {"h", "hh", "hpp", "hxx"}
+SPEC_RE = re.compile(r"Spec:\s*(\S+?\.skel\.md)(?:\s*@\s*([0-9a-f]{8}))?")
+SPEC_LINES = 10
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -860,6 +864,87 @@ def cmd_order(args):
     return 0
 
 
+def stand_in_hash(sf):
+    """Eight hex digits over the stand-in's text, ignoring backlinks, blank lines and trailing space."""
+    kept, in_backlinks = [], False
+    for line in sf.lines:
+        fld = FIELD_RE.match(line)
+        if fld and CANON[fld.group(1).lower()] == "Referred by":
+            in_backlinks = fld.group(2).strip() == ""   # block form: its bulleted links follow
+            continue
+        if in_backlinks and BULLET_LINK_RE.match(line):
+            continue
+        in_backlinks = False
+        if line.strip():
+            kept.append(line.rstrip())
+    return hashlib.sha256("\n".join(kept).encode("utf-8")).hexdigest()[:8]
+
+
+def drift_checked(sf):
+    """Stamps and name checks apply to code stand-ins that a person or agent writes."""
+    generated = any("generat" in value.lower() for _, value in file_fields(sf).get("Source", []))
+    return sf.kind == "code" and not generated
+
+
+def spec_path(sf, root):
+    return os.path.relpath(sf.path, root).replace(os.sep, "/")
+
+
+def read_spec_header(path):
+    """(stand-in path, hash or None, line index) from the file's first lines, or None."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for idx, line in zip(range(SPEC_LINES), fh):
+                m = SPEC_RE.search(line)
+                if m:
+                    return m.group(1), m.group(2), idx
+    except OSError:
+        pass
+    return None
+
+
+def cmd_stamp(args):
+    skel_root, files = load_tree(args.skel_dir)
+    root = os.path.abspath(args.root)
+    if not args.paths and not args.all:
+        sys.exit("stamp needs the implemented files to stamp, or --all")
+    by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
+    targets = sorted(by_impl) if args.all else [os.path.normpath(os.path.abspath(p)) for p in args.paths]
+    stamped = current = failed = 0
+    for impl in targets:
+        shown = os.path.relpath(impl, root)
+        sf = by_impl.get(impl)
+        if sf is None:
+            print(f"{shown}: no stand-in in this tree")
+            failed += 1
+            continue
+        if not os.path.exists(impl) or not drift_checked(sf):
+            if not args.all:
+                reason = "not implemented yet" if not os.path.exists(impl) else \
+                    "only code stand-ins that are not generated carry a stamp"
+                print(f"{shown}: {reason}")
+                failed += 1
+            continue
+        want, header = spec_path(sf, root), read_spec_header(impl)
+        if header is None or header[0] != want:
+            print(f"{shown}: no `Spec: {want}` header in its first {SPEC_LINES} lines")
+            failed += not args.all
+            continue
+        digest = stand_in_hash(sf)
+        if header[1] == digest:
+            current += 1
+            continue
+        with open(impl, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        lines[header[2]] = SPEC_RE.sub(lambda m: f"Spec: {m.group(1)} @ {digest}", lines[header[2]], count=1)
+        with open(impl, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        print(f"stamped {shown} @ {digest}")
+        stamped += 1
+    print(f"\n{stamped} stamped, {current} already current")
+    return 1 if failed else 0
+
+
 def cmd_batches(args):
     skel_root, files = load_tree(args.skel_dir)
     deps, _ = build_edges(skel_root, files, report=False)
@@ -1143,9 +1228,18 @@ def main():
     p = sub.add_parser("fix-backlinks"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
     p = sub.add_parser("infer-roles"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
     p = sub.add_parser("batches"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
-    args = ap.parse_args()
+    p = sub.add_parser("stamp"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)
+    p.add_argument("paths", nargs="*"); p.add_argument("--all", action="store_true")
+    # argparse will not take positionals on both sides of an option, so `stamp DIR --root . PATH...`
+    # leaves its paths over; collect them here.
+    args, extra = ap.parse_known_args()
+    if extra and (args.cmd != "stamp" or any(e.startswith("-") for e in extra)):
+        ap.error("unrecognized arguments: " + " ".join(extra))
+    if args.cmd == "stamp":
+        args.paths += extra
     fn = {"check": cmd_check, "unknowns": cmd_unknowns, "order": cmd_order, "status": cmd_status,
-          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles, "batches": cmd_batches}[args.cmd]
+          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles, "batches": cmd_batches,
+          "stamp": cmd_stamp}[args.cmd]
     sys.exit(fn(args))
 
 

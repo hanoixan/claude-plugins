@@ -1235,6 +1235,106 @@ class MoveUnits(MiniTree):
         self.assertTrue(self.read("src/fm_posix.cpp").endswith("unit: ./fm.hpp.skel.md\n"))
 
 
+class CodeCase(TreeCase):
+    """`command` becomes a concrete Python stand-in with an implemented file beside the tree."""
+
+    UNIT = "skel/src/command.py.skel.md"
+    CODE = "src/command.py"
+    HEADER = "# Spec: skel/src/command.py.skel.md\n"
+    BODY = ("class Command:\n    def apply(self): ...\n    def revert(self): ...\n"
+            "    def merge_with(self, other): ...\n    def describe(self): ...\n")
+
+    def setUp(self):
+        super().setUp()
+        self.run_script(MV, "skel", COMMAND, self.UNIT)
+        os.makedirs(self.path("src"))
+        self.write_code(self.HEADER + self.BODY)
+
+    def write_code(self, text, rel=None):
+        with open(self.path(rel or self.CODE), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def read_code(self):
+        with open(self.path(self.CODE), encoding="utf-8") as fh:
+            return fh.read()
+
+    def stamp(self, *args):
+        return self.run_script(CHECK, "stamp", "skel", "--root", ".", *args)
+
+
+class Stamp(CodeCase):
+    STAMPED = r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\n"
+
+    def test_stamp_adds_a_hash_to_the_header(self):
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(self.read_code(), self.STAMPED)
+        self.assertTrue(self.read_code().endswith(self.BODY))
+
+    def test_stamp_needs_paths_or_all(self):
+        code, out = self.stamp()
+        self.assertNotEqual(code, 0)
+        self.assertIn("stamp needs the implemented files to stamp, or --all", out)
+
+    def test_stamp_keeps_the_rest_of_the_header_line(self):
+        self.write_code("/* Spec: skel/src/command.py.skel.md */\n" + self.BODY)
+        self.stamp(self.CODE)
+        self.assertRegex(self.read_code(), r"^/\* Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8} \*/\n")
+
+    def test_stamp_replaces_an_old_hash_and_then_reports_it_current(self):
+        self.write_code("# Spec: skel/src/command.py.skel.md @ 00000000\n" + self.BODY)
+        _, first = self.stamp(self.CODE)
+        self.assertIn("stamped src/command.py @ ", first)
+        self.assertNotIn("@ 00000000", self.read_code())
+        _, second = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", second)
+
+    def test_named_file_without_a_header_fails(self):
+        self.write_code(self.BODY)
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: no `Spec: skel/src/command.py.skel.md` header in its first 10 lines", out)
+        self.assertEqual(self.read_code(), self.BODY)
+
+    def test_header_past_the_tenth_line_is_not_found(self):
+        self.write_code("\n" * 10 + self.HEADER + self.BODY)
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("no `Spec: skel/src/command.py.skel.md` header", out)
+
+    def test_all_reports_a_file_without_a_header_and_still_succeeds(self):
+        self.write_code(self.BODY)
+        code, out = self.stamp("--all")
+        self.assertEqual(code, 0, out)
+        self.assertIn("src/command.py: no `Spec: skel/src/command.py.skel.md` header", out)
+
+    def test_path_with_no_stand_in_fails(self):
+        self.write_code("# anything\n", rel="src/orphan.py")
+        code, out = self.stamp("src/orphan.py")
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/orphan.py: no stand-in in this tree", out)
+
+    def test_new_backlink_does_not_change_the_hash(self):
+        self.stamp(self.CODE)
+        self.append(self.UNIT, "- **Referred by:** none known\n")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+
+    def test_blank_lines_and_trailing_spaces_do_not_change_the_hash(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "## class: Command\n", "## class: Command   \n\n\n")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+
+    def test_changed_contract_changes_the_hash(self):
+        self.stamp(self.CODE)
+        before = self.read_code()
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("1 stamped, 0 already current", out)
+        self.assertNotEqual(self.read_code(), before)
+
+
 class Status(TreeCase):
     def setUp(self):
         super().setUp()
