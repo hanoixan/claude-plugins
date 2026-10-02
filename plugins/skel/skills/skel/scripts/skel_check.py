@@ -49,8 +49,11 @@ EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 DOTTED_RE = re.compile(r"^`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)`?$")
 SYSTEM_FILE = "SYSTEM.md"
 UNKNOWN_NAME_RE = re.compile(r"^\[([a-z0-9][a-z0-9-]*)\](?!\()\s*")
-FOLLOWS_RE = re.compile(r"^follows\s+\[([a-z0-9][a-z0-9-]*)\]\s*\.?\s*", re.I)
-CLAUSE_RE = re.compile(r"\b(Kind|Proposed|Consequence|Unlocks)\s*:\s*", re.I)
+BRACKET_RE = re.compile(r"^\[([^\]]*)\](?!\()\s*")      # a leading [..] that is not a markdown link
+FOLLOWS_RE = re.compile(r"^(?i:follows)\s+\[([^\]]*)\]\s*\.?\s*")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A clause label opens the text or follows the end of a sentence, so "kind:" inside prose is not one.
+CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unlocks)\**:\**\s*")
 KINDS = ("blocking", "local")
 
 LEVEL_FIELDS = {
@@ -105,17 +108,19 @@ class Unknown:
 
     def __init__(self, line, text, section=None):
         self.line, self.text, self.section = line, text, section
-        self.name = self.follows = None
+        self.name = self.follows = self.bad_name = None
         body = text
         m = FOLLOWS_RE.match(body)
         if m:
             self.follows = m.group(1)
         else:
-            m = UNKNOWN_NAME_RE.match(body)
+            m = BRACKET_RE.match(body)
             if m:
                 self.name = m.group(1)
         if m:
             body = body[m.end():]
+            if not NAME_RE.match(m.group(1)):
+                self.bad_name, self.name = m.group(1), None
         parts = CLAUSE_RE.split(body)
         self.what = parts[0].strip()
         self.clauses = {}
@@ -124,11 +129,16 @@ class Unknown:
 
     @property
     def kind(self):
-        return re.split(r"[^a-z]", self.clauses.get("kind", "").lower(), maxsplit=1)[0]
+        return self.clauses.get("kind", "").strip(" .`*_").lower()
 
     @property
     def where(self):
         return heading_path(self.section) if self.section is not None else "(system)"
+
+    @property
+    def label(self):
+        """`where` as printed inside brackets in text output."""
+        return heading_path(self.section) if self.section is not None else "system"
 
 
 class SkelFile:
@@ -526,11 +536,13 @@ def check_system(skel_root, files, links, slugs):
 def unknown_problems(u, lenient):
     """(severity, message) pairs for one unknown, judged on its own text."""
     missing = "warning" if lenient else "error"
+    out = []
+    if u.bad_name is not None:
+        out.append(("error", f"unknown name [{u.bad_name}] must be lower-case letters, digits and hyphens"))
     if u.follows:
         if "consequence" not in u.clauses:
-            return [("warning", "*UNKNOWN* that follows another should state `Consequence:`")]
-        return []
-    out = []
+            out.append(("warning", "*UNKNOWN* that follows another should state `Consequence:`"))
+        return out
     if not u.kind:
         out.append((missing, "*UNKNOWN* is missing `Kind:` (blocking or local)"))
     elif u.kind not in KINDS:
@@ -554,7 +566,7 @@ def name_problems(pairs):
         else:
             first[u.name] = (rel, u)
     for rel, u in pairs:
-        if u.follows and u.follows not in first:
+        if u.follows and u.bad_name is None and u.follows not in first:
             out.append((rel, u.line, "error", f"`Follows [{u.follows}]` matches no declared unknown"))
     return out
 
@@ -647,15 +659,15 @@ def cmd_unknowns(args):
         print(f"{title} ({len(group)}):")
         for rel, u, followers in group:
             label = f"[{u.name}] " if u.name else ""
-            print(f"- {label}{rel}:{u.line} ({u.where.strip('()')}): {UNKNOWN_NAME_RE.sub('', u.text)}")
+            print(f"- {label}{rel}:{u.line} ({u.label}): {UNKNOWN_NAME_RE.sub('', u.text)}")
             for frel, f in followers:
-                print(f"    followed at {frel}:{f.line} ({f.where.strip('()')}): "
+                print(f"    followed at {frel}:{f.line} ({f.label}): "
                       f"{f.clauses.get('consequence', f.text)}")
         print()
     if orphans:
         print(f"Following an undeclared name ({len(orphans)}):")
         for rel, u in orphans:
-            print(f"- {rel}:{u.line} ({u.where.strip('()')}): {u.text}")
+            print(f"- {rel}:{u.line} ({u.label}): {u.text}")
         print()
     print(f"{len(declared)} unknowns")
     return 0

@@ -117,11 +117,12 @@ A **follower** marks another place that the same decision affects:
 - `[short-name]` is optional: lower-case letters, digits and hyphens, directly after the marker. A decision needs a name once a follower refers to it. Names are unique across the tree, `SYSTEM.md` included. **(checked)**
 - `Kind:` is required. **(checked)** `blocking` means the answer changes an interface, a schema, or whether a file exists. `local` means it affects only a function body, a constant, or a default.
 - `Proposed:` is required when the kind is `local`. **(checked)** On a blocking unknown it is optional and reads as a recommendation.
+- Clause labels are capitalised and begin a sentence, as in `... with Windows. Kind: blocking. Consequence: ...`. The same words inside a sentence are read as prose, so a description may mention `kind: Deployment` safely.
 - Declare a decision once. Where it affects other stand-ins, write a follower there instead of repeating it. A follower must name a declared unknown. **(checked)**
 - The checker warns when a declaration has no `Consequence:` or `Unlocks:` clause, or a follower has no `Consequence:`, because an unknown without consequences can't be prioritized.
 - The checker warns about informal markers (`TBD`, `TODO`, `FIXME`, `???`, or a bare `UNKNOWN`) outside code fences. Convert them to formal unknowns.
 - Place an unknown at the level it affects. A wire-format unknown belongs on the function that encodes it, not on the module.
-- Never add detail that contradicts an open unknown. If the database engine is unknown, don't write PostgreSQL-specific SQL in a sample; write the unknown instead.
+- Never add detail that contradicts an open unknown or goes beyond its `Proposed:`. If the database engine is unknown and nothing is proposed, don't write PostgreSQL-specific SQL in a sample; write the unknown instead.
 
 ### Your own choices are unknowns too
 

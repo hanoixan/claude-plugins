@@ -7,7 +7,7 @@ During development, `skel/` is the implementation plan. Every stand-in becomes e
 1. Run `skel_check.py check skel/`. Fix the tree, not the code, until there are no errors. A broken link or a missing backlink means the plan itself is inconsistent.
 2. Run `skel_check.py unknowns skel/`. It lists the open decisions in two groups:
    - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask the user about these before implementing the affected file, every place that follows the decision, and anything that depends on them. Present each with its consequence and what it unlocks, so the user can answer efficiently.
-   - **Local** unknowns affect only a function body, such as a tuning constant, and each carries a `Proposed:` value. Implement the proposal only after the user has accepted it; they may accept all proposals in one answer. Then record the choice in the stand-in and remove the unknown.
+   - **Local** unknowns affect only a function body, such as a tuning constant, and each carries a `Proposed:` value. For those already in the tree when you start, implement the proposal only after the user has accepted it; they may accept all proposals in one answer. Then record the choice in the stand-in and remove the unknown.
 3. If any stand-in is abstract (`.code`, `.data`, `.iac`), adapt it first; see `abstract-systems.md`.
 4. Run `skel_check.py order skel/` to see what must exist before what. Dependencies come first. Files in the same step that form a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user.
 5. Plan the batches. `order` is a dependency sort with one file per step, so in a compiled language it lists every interface before any implementation and puts the build manifest last. Build in batches that compile and test on their own: an interface, its implementation, and its tests go in the same batch. Create the build manifests (`CMakeLists.txt`, `package.json`, a `Makefile`) with the first batch, covering only what exists, and extend them with each later batch.
@@ -35,7 +35,7 @@ Don't let code and skel drift. The skel is updated first:
 - **A new dependency** means you add `Depends on:` to the stand-in, then run `fix-backlinks --write`.
 - **A new file** means you write its stand-in before writing it.
 - **A changed contract** means you update the stand-in, then follow its `Referred by:` links and check each referrer's assumptions. This check is the main payoff of bidirectional links, so don't skip it.
-- **A new unknown** means you add a formal `*UNKNOWN*:` with its `Kind:`, and stop to ask if it is blocking. This includes anything you would otherwise just decide: write it as a local unknown with your choice as its `Proposed:`.
+- **A new unknown** means you add a formal `*UNKNOWN*:` with its `Kind:`. If it is blocking, stop and ask. If it is local, which includes anything you would otherwise just decide, write your choice as its `Proposed:`, build to that proposal, and leave the marker in place. The user accepts or changes it from your report; a rejected proposal means that code is redone.
 - **A resolved unknown** means you replace it with the decided specification and delete the declaration and every follower of it.
 
 Rerun `check` after every batch of skel edits.
@@ -59,7 +59,7 @@ Treat that diff as the work order: every changed stand-in names a file to bring 
 After each implementation batch, report in this shape:
 
 1. **Decisions needed:** blocking unknowns that remain or that this batch raised, and what each blocks.
-2. **Proposals to accept or change:** local unknowns, each with its proposal.
+2. **Proposals to accept or change:** local unknowns, each with its proposal, saying which ones this batch was built to.
 3. **What was built:** which files were realized, the test results, and any cycles that `order` found.
 4. **Changes to the plan:** every stand-in you changed and why, including contract changes that rippled to referrers.
 

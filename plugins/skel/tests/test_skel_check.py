@@ -288,6 +288,33 @@ class UnknownsCommand(TreeCase):
         self.assertEqual(follower["consequence"], "unspecified here.")
         self.assertIsInstance(follower["line"], int)
 
+    def test_label_word_inside_a_clause_value_does_not_start_a_clause(self):
+        self.declare(TRANSACTION, "[workload] Which workload. Kind: local. Proposed: a Deployment; the consequence: "
+                                  "no stable identity. Consequence: manifests say so. Unlocks: u.")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if i.get("name") == "workload")
+        self.assertEqual(item["proposed"], "a Deployment; the consequence: no stable identity.")
+        self.assertEqual(item["consequence"], "manifests say so.")
+
+    def test_label_word_inside_a_follower_consequence_is_kept(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        self.declare(COMMAND, "Follows [retry]. Consequence: the manifest keeps `kind: Deployment` here.")
+        _, out = self.unknowns()
+        self.assertIn("(module: command): the manifest keeps `kind: Deployment` here.", out)
+
+    def test_bold_clause_labels_are_read(self):
+        self.declare(TRANSACTION, "[retry] How many retries. **Kind:** local. **Proposed:** three. "
+                                  "**Consequence:** c. **Unlocks:** u.")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if i.get("name") == "retry")
+        self.assertEqual((item["kind"], item["proposed"], item["unlocks"]), ("local", "three.", "u."))
+
+    def test_heading_with_brackets_is_printed_whole(self):
+        self.replace(TRANSACTION, "# module: transaction", "# module: transaction (grouping)")
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns()
+        self.assertIn("(module: transaction (grouping)): How many retries.", out)
+
     def test_json_keeps_the_original_keys_on_every_item(self):
         _, out = self.unknowns("--json")
         for item in json.loads(out):
@@ -372,16 +399,79 @@ class UnknownRules(TreeCase):
         self.assertEqual(code, 0, out)
         self.assertIn("0 errors, 0 warnings", out)
 
+    def decision_block(self, name):
+        """The lines `unknowns` prints for one named decision: its own line and its followers."""
+        lines = self.run_script(CHECK, "unknowns", "skel")[1].splitlines()
+        start = next(i for i, l in enumerate(lines) if l.startswith(f"- [{name}] "))
+        block = [lines[start]]
+        for line in lines[start + 1:]:
+            if not line.startswith("    followed at "):
+                break
+            block.append(line)
+        return block
+
     def test_system_file_may_follow_a_stand_in_decision(self):
         self.append(SYSTEM, "\n*UNKNOWN*: Follows [cross-session-undo]. Consequence: scope shrinks.\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
+        block = self.decision_block("cross-session-undo")
+        self.assertTrue(any(l.startswith("    followed at SYSTEM.md:") and l.endswith("(system): scope shrinks.")
+                            for l in block), block)
 
     def test_stand_in_may_follow_a_system_file_decision(self):
         self.replace(TRANSACTION, NO_UNKNOWNS,
                      "*UNKNOWN*: Follows [language]. Consequence: signatures stay untyped.\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
+        block = self.decision_block("language")
+        self.assertTrue(any(l.startswith("    followed at undo/transaction.code.skel.md:") and
+                            l.endswith("signatures stay untyped.") for l in block), block)
+
+    def test_system_file_follower_of_an_undeclared_name_is_an_error(self):
+        self.append(SYSTEM, "\n*UNKNOWN*: Follows [nosuch]. Consequence: scope shrinks.\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("SYSTEM.md", out)
+        self.assertIn("`Follows [nosuch]` matches no declared unknown", out)
+
+    def test_label_words_inside_a_description_do_not_start_clauses(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: [workload] Whether the store runs as `kind: StatefulSet` or `kind: Deployment`. "
+                     "Kind: blocking. Consequence: manifests differ. Unlocks: the manifest.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_upper_case_name_is_an_error(self):
+        self.replace(SNAPSHOT, "[cross-session-undo] Whether", "[Cross-Session-Undo] Whether")
+        self.assertCheckFails("unknown name [Cross-Session-Undo] must be lower-case letters, digits and hyphens")
+
+    def test_name_with_an_underscore_is_an_error(self):
+        self.replace(SYSTEM, "[language]", "[my_language]")
+        self.assertCheckFails("unknown name [my_language] must be lower-case letters, digits and hyphens")
+
+    def test_follower_with_an_upper_case_name_is_told_about_the_name(self):
+        self.replace(STORE, "Follows [cross-session-undo]", "Follows [Cross-Session-Undo]")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("unknown name [Cross-Session-Undo] must be lower-case letters, digits and hyphens", out)
+        self.assertNotIn("matches no declared unknown", out)
+
+    def test_follows_keyword_may_be_lower_case(self):
+        self.replace(STORE, "Follows [cross-session-undo]", "follows [cross-session-undo]")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_kind_copied_from_the_template_unchosen_is_an_error(self):
+        self.replace(STORE, self.KIND, " Kind: blocking | local.")
+        self.assertCheckFails("*UNKNOWN* has `Kind: blocking | local`; it must be blocking or local")
+
+    def test_kind_value_may_carry_markup(self):
+        self.replace(STORE, self.KIND, " Kind: **blocking**.")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
 
 
 class FixBacklinks(TreeCase):
