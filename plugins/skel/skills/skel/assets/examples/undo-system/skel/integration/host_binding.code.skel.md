@@ -1,3 +1,6 @@
+---
+role: product
+---
 # module: host_binding
 
 Glue the host writes once to connect the undo system to its document lifecycle and UI. Described here so the integration contract is explicit, even though the code lives in the host project.

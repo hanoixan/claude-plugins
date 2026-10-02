@@ -1,3 +1,6 @@
+---
+role: product
+---
 # infrastructure: history_store
 
 Where persisted undo snapshots live. Framed as infrastructure even if it ends up as a local file, so the decision and its requirements are explicit.

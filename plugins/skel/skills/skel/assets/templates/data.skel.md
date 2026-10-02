@@ -1,3 +1,6 @@
+---
+role: product | test | manifest
+---
 # data: <name>
 
 <What this data is, who reads it, and why it has this shape.>

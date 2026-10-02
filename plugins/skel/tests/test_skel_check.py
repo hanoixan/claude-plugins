@@ -28,6 +28,7 @@ STORE = "skel/infra/history_store.iac.skel.md"
 SYSTEM = "skel/SYSTEM.md"
 SNAPSHOT = "skel/undo/history_snapshot.data.skel.md"
 NO_UNKNOWNS = "- **Unknowns:** none\n"
+FRONT = "---\nrole: product\n---\n"
 
 BACKLINK = "- **Referred by:** [Transaction](./transaction.code.skel.md#class-transaction)\n"
 COMMAND_LINK = "./command.code.skel.md#class-command"
@@ -52,6 +53,10 @@ class TreeCase(unittest.TestCase):
     def append(self, rel, text):
         with open(self.path(rel), "a", encoding="utf-8") as fh:
             fh.write(text)
+
+    def front(self, rel, *lines):
+        """Replace a stand-in's `role: product` front matter with these lines; no lines removes it."""
+        self.replace(rel, FRONT, "---\n" + "\n".join(lines) + "\n---\n" if lines else "")
 
     def run_script(self, script, *args):
         proc = subprocess.run([sys.executable, script, *args], cwd=self.dir,
@@ -472,6 +477,79 @@ class UnknownRules(TreeCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
         self.assertIn("0 errors, 0 warnings", out)
+
+
+class Roles(TreeCase):
+    def test_missing_role_is_an_error(self):
+        self.front(TRANSACTION)
+        self.assertCheckFails("missing `role:` in front matter")
+
+    def test_missing_role_is_a_warning_when_lenient(self):
+        self.front(TRANSACTION)
+        code, out = self.check("--lenient")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: missing `role:` in front matter", out)
+
+    def test_role_must_be_one_of_the_three(self):
+        self.front(TRANSACTION, "role: helper")
+        self.assertCheckFails("front matter role 'helper' must be one of")
+
+    def test_role_is_case_and_space_insensitive(self):
+        self.front(TRANSACTION, "role: Product  ")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_unclosed_front_matter_reports_a_missing_role(self):
+        self.replace(TRANSACTION, FRONT, "---\nrole: product\n")
+        self.assertCheckFails("missing `role:` in front matter")
+
+    def test_untested_is_only_for_product(self):
+        self.front(TRANSACTION, "role: test", "untested: not needed")
+        self.assertCheckFails("`untested:` is only for `role: product` stand-ins")
+
+    def test_untested_needs_a_reason(self):
+        self.front(TRANSACTION, "role: product", "untested:")
+        self.assertCheckFails("`untested:` needs a reason")
+
+    def test_unit_target_must_be_a_stand_in_in_the_tree(self):
+        self.front(TRANSACTION, "role: product", "unit: ./nope.code.skel.md")
+        self.assertCheckFails("`unit:` target is not a stand-in in this tree: ./nope.code.skel.md")
+
+    def test_unit_target_cannot_be_the_system_file(self):
+        self.front(TRANSACTION, "role: product", "unit: ../SYSTEM.md")
+        self.assertCheckFails("`unit:` target is not a stand-in in this tree: ../SYSTEM.md")
+
+    def test_unit_target_must_share_the_role(self):
+        self.front(COMMAND, "role: test")
+        self.front(TRANSACTION, "role: product", "unit: ./command.code.skel.md")
+        self.assertCheckFails("`unit:` target ./command.code.skel.md has role 'test', not 'product'")
+
+    def test_unit_cannot_chain(self):
+        self.front(COMMAND, "role: product", "unit: ./document_target.code.skel.md")
+        self.front(TRANSACTION, "role: product", "unit: ./command.code.skel.md")
+        self.assertCheckFails("`unit:` target ./command.code.skel.md has a `unit:` of its own")
+
+    def test_unit_cannot_name_itself(self):
+        self.front(TRANSACTION, "role: product", "unit: ./transaction.code.skel.md")
+        self.assertCheckFails("`unit:` names this stand-in itself")
+
+    def test_valid_unit_passes(self):
+        self.front(TRANSACTION, "role: product", "unit: ./command.code.skel.md")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_kind_override_still_works_beside_role(self):
+        self.front(SNAPSHOT, "role: product", "kind: data")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_invalid_kind_is_reported_on_its_own_line(self):
+        self.front(SNAPSHOT, "role: product", "kind: sideways")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("history_snapshot.data.skel.md:3: error: front matter kind 'sideways'", out)
 
 
 class FixBacklinks(TreeCase):

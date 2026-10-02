@@ -1,3 +1,6 @@
+---
+role: product
+---
 # module: history
 
 The undo/redo stacks and the only public entry point the host interacts with at runtime.

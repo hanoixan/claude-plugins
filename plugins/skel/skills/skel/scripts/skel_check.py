@@ -55,6 +55,8 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A clause label opens the text or follows the end of a sentence, so "kind:" inside prose is not one.
 CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unlocks)\**:\**\s*")
 KINDS = ("blocking", "local")
+ROLES = ("product", "test", "manifest")
+META_RE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*)$")
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -151,6 +153,7 @@ class SkelFile:
         self.base = base
         self.kind = None
         self.kind_override = None
+        self.meta = {}          # front matter: key -> (line, value)
         self.root = Section(0, None, "", "", 0)
         self.sections = []
         self.unknowns = []      # [Unknown]
@@ -160,6 +163,10 @@ class SkelFile:
     @property
     def abstract(self):
         return self.ext in PLACEHOLDER_EXT
+
+    @property
+    def role(self):
+        return self.meta["role"][1].lower() if "role" in self.meta else None
 
     def err(self, line, msg):
         self.diags.append(("error", line, msg))
@@ -198,16 +205,19 @@ def parse(path, skel_root):
     if lines and lines[0].strip() == "---":
         for j in range(1, len(lines)):
             if lines[j].strip() == "---":
-                for l in lines[1:j]:
-                    m = re.match(r"\s*kind\s*:\s*(\w+)", l)
+                for i, l in enumerate(lines[1:j], 2):
+                    m = META_RE.match(l)
                     if m:
-                        k = m.group(1).lower()
-                        if k in LEVEL1:
-                            sf.kind_override = k
-                        else:
-                            sf.err(j, f"front matter kind '{k}' must be one of {sorted(LEVEL1)}")
+                        sf.meta[m.group(1).lower()] = (i, m.group(2).strip())
                 start = j + 1
                 break
+    if "kind" in sf.meta:
+        ln, value = sf.meta["kind"]
+        k = value.split()[0].lower() if value else ""
+        if k in LEVEL1:
+            sf.kind_override = k
+        else:
+            sf.err(ln, f"front matter kind '{k}' must be one of {sorted(LEVEL1)}")
     sf.kind = infer_kind(sf)
 
     stack = [sf.root]
@@ -312,6 +322,17 @@ def find_untyped(sf, title):
 
 def validate_file(sf, lenient):
     miss = sf.warn if lenient else sf.err
+    # front matter
+    if sf.role is None:
+        miss(1, "missing `role:` in front matter (product, test or manifest); `infer-roles` can propose one")
+    elif sf.role not in ROLES:
+        sf.err(sf.meta["role"][0], f"front matter role '{sf.role}' must be one of {list(ROLES)}")
+    if "untested" in sf.meta:
+        ln, reason = sf.meta["untested"]
+        if sf.role != "product":
+            sf.err(ln, "`untested:` is only for `role: product` stand-ins")
+        elif not reason:
+            sf.err(ln, "`untested:` needs a reason")
     # naming
     if not sf.ext and sf.base not in EXTLESS:
         sf.err(1, f"stand-in name must be <file>.<ext>{SKEL_SUFFIX} (got '{sf.base}{SKEL_SUFFIX}')")
@@ -533,6 +554,39 @@ def check_system(skel_root, files, links, slugs):
     return diags
 
 
+def resolve_units(files, report=True):
+    """Map each stand-in path to its unit's primary path; a bad `unit:` is reported and ignored."""
+    primary = {}
+    for sf in files.values():
+        primary[sf.path] = sf.path
+        if "unit" not in sf.meta:
+            continue
+        ln, value = sf.meta["unit"]
+        tgt = os.path.normpath(os.path.join(os.path.dirname(sf.path), value))
+        if tgt == sf.path:
+            problem = "`unit:` names this stand-in itself"
+        elif tgt not in files:
+            problem = f"`unit:` target is not a stand-in in this tree: {value}"
+        elif "unit" in files[tgt].meta:
+            problem = f"`unit:` target {value} has a `unit:` of its own; name the primary stand-in"
+        elif files[tgt].role != sf.role:
+            problem = f"`unit:` target {value} has role '{files[tgt].role}', not '{sf.role}'"
+        else:
+            primary[sf.path] = tgt
+            continue
+        if report:
+            sf.err(ln, problem)
+    return primary
+
+
+def unit_members(files, primary):
+    """Primary path -> its member stand-ins, the primary first and the rest in path order."""
+    members = defaultdict(list)
+    for sf in sorted(files.values(), key=lambda f: (f.path != primary[f.path], f.rel)):
+        members[primary[sf.path]].append(sf)
+    return members
+
+
 def unknown_problems(u, lenient):
     """(severity, message) pairs for one unknown, judged on its own text."""
     missing = "warning" if lenient else "error"
@@ -577,6 +631,7 @@ def cmd_check(args):
         validate_file(sf, args.lenient)
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
+    primary = resolve_units(files)
     sys_unknowns, sys_links, sys_slugs = read_system(skel_root)
     diags = {sf.rel: sf.diags for sf in files.values()}
     diags[SYSTEM_FILE] = check_system(skel_root, files, sys_links, sys_slugs)

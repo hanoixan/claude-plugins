@@ -1,3 +1,6 @@
+---
+role: product
+---
 # module: document_target
 
 The narrow interface the host application exposes so commands can mutate the document without depending on the host's concrete model. Keeping this boundary small is what makes the undo system portable: everything host-specific lives behind it.

@@ -1,3 +1,6 @@
+---
+role: product
+---
 # data: history_snapshot
 
 The persisted form of an `UndoHistory`, so undo survives closing and reopening a document.

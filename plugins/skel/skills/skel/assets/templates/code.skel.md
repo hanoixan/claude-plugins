@@ -1,3 +1,6 @@
+---
+role: product | test | manifest
+---
 # module: <module_name>
 
 <What this module is for and why it exists as a separate unit. Include design intent and any guidance for the implementing agent.>

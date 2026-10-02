@@ -1,3 +1,6 @@
+---
+role: product
+---
 # module: command
 
 Defines the reversible edit abstraction. Every user-visible edit in the host is expressed as a `Command`; anything not expressed this way is invisible to undo, which is the most common source of undo bugs, so the host binding must route all edits through commands.

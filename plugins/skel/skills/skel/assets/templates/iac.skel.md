@@ -1,3 +1,6 @@
+---
+role: product | test | manifest
+---
 # infrastructure: <stack_or_store_name>
 
 <What this provisions and why. If the IaC tool is undecided, use a .iac placeholder and an unknown.>

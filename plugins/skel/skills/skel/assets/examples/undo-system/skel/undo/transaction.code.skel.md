@@ -1,3 +1,6 @@
+---
+role: product
+---
 # module: transaction
 
 Groups several commands into one undoable step, e.g. "paste" = delete selection + insert. A transaction is itself a command (composite pattern), so history doesn't special-case it.
