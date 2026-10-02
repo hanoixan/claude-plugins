@@ -119,6 +119,11 @@ class CheckAcceptsTheExample(TreeCase):
         self.assertEqual(code, 0, out)
         self.assertIn("0 errors, 0 warnings", out)
 
+    def test_left_over_arguments_are_rejected(self):
+        code, out = self.run_script(CHECK, "check", "skel", "extra")
+        self.assertEqual(code, 2, out)
+        self.assertIn("unrecognized arguments: extra", out)
+
 
 class CheckRejectsBrokenTrees(TreeCase):
     def test_deleted_backlink(self):
@@ -603,6 +608,31 @@ class UnknownRules(TreeCase):
         self.assertEqual(code, 0, out)
         self.assertIn("warning: *UNKNOWN* with `Kind: local` needs `Proposed:`", out)
 
+    def test_every_extra_clause_on_a_follower_is_named(self):
+        self.replace(STORE, "Follows [cross-session-undo]. Consequence:",
+                     "Follows [cross-session-undo]. Kind: local. Unlocks: nothing. Consequence:")
+        _, out = self.check()
+        self.assertIn("move `Kind:`, `Unlocks:` to the declaration", out)
+
+    def test_two_markers_warn_on_a_declaration_too(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: [a] First. Kind: blocking. Consequence: c. Unlocks: u. "
+                     "*UNKNOWN*: [b] Second. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        _, out = self.check()
+        self.assertIn("warning: more than one *UNKNOWN* on this line", out)
+
+    def test_marker_quoted_in_backticks_is_not_a_second_unknown(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: [a] Whether the `*UNKNOWN*:` marker is shown in the UI. Kind: blocking. "
+                     "Consequence: c. Unlocks: u.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_single_star_with_the_colon_inside_is_not_a_marker(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS, "*UNKNOWN:* something. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        self.assertCheckFails("no *UNKNOWN* entries and no `Unknowns: none`")
+
 
 class Roles(TreeCase):
     def test_missing_role_is_an_error(self):
@@ -828,6 +858,11 @@ class UntestedUnitRules(MiniTree):
         self.stand_in("tools/gen.py", front=self.P, body=self.CLASS)
         self.stand_in("tests/cases.json", depends=["tools/gen.py"], front=self.T_)
         self.assertEqual(self.untested(), ["tools/gen.py.skel.md"])
+
+    def test_untested_on_a_non_primary_member_does_not_silence_the_unit(self):
+        self.stand_in("src/a.hpp", front=self.P, body=self.CLASS)
+        self.stand_in("src/a.cpp", front=["role: product", "unit: ./a.hpp.skel.md", "untested: later"])
+        self.assertEqual(self.untested(), ["src/a.hpp.skel.md"])
 
 
 class InferRoles(MiniTree):
@@ -1388,6 +1423,110 @@ class Stamp(CodeCase):
         self.assertIn("1 stamped, 0 already current", out)
         self.assertNotEqual(self.read_code(), before)
 
+    BLOCK = ("- **Referred by:**\n"
+             "  - [Transaction](./undo/transaction.code.skel.md#class-transaction)\n"
+             "  - [UndoHistory](./undo/history.code.skel.md#class-undohistory)\n")
+
+    def test_block_form_backlinks_do_not_change_the_hash(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "- **Unknowns:** none\n", self.BLOCK + "- **Unknowns:** none\n")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+
+    def test_field_after_block_form_backlinks_still_counts(self):
+        self.replace(self.UNIT, "- **Depends on:** [DocumentTarget]",
+                     self.BLOCK + "- **Depends on:** [DocumentTarget]")
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "- **Depends on:** [DocumentTarget]", "- **Depends on:** [Target]")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("1 stamped, 0 already current", out)
+
+    def test_rewrapped_sentence_does_not_change_the_hash(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "- **Required:** always.", "- **Required:**\n    always.")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+
+    def test_backlink_looking_line_inside_a_fence_counts(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "```text", "```text\n- **Referred by:** an example, not a backlink")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("1 stamped, 0 already current", out)
+
+    def raw(self, data=None):
+        if data is None:
+            with open(self.path(self.CODE), "rb") as fh:
+                return fh.read()
+        with open(self.path(self.CODE), "wb") as fh:
+            fh.write(data)
+
+    def test_stamp_keeps_carriage_returns(self):
+        self.raw(b"# Spec: skel/src/command.py.skel.md\r\nclass Command:\r\n    pass\r\n")
+        self.stamp(self.CODE)
+        data = self.raw()
+        self.assertRegex(data, rb"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\r\nclass Command:\r\n    pass\r\n$")
+
+    def test_stamp_keeps_a_missing_final_newline_and_other_bytes(self):
+        self.raw(b"# Spec: skel/src/command.py.skel.md\n# \xa9 someone\nclass Command: ...")
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(self.raw().endswith(b"\n# \xa9 someone\nclass Command: ..."))
+
+    def test_header_on_the_tenth_line_is_found_and_rewritten_there(self):
+        self.write_code("#\n" * 9 + self.HEADER + self.BODY)
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 0, out)
+        lines = self.read_code().splitlines()
+        self.assertEqual(lines[0], "#")
+        self.assertRegex(lines[9], r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}$")
+
+    def test_only_the_first_spec_on_the_line_is_stamped(self):
+        self.write_code("# Spec: skel/src/command.py.skel.md (not Spec: skel/other.skel.md)\n" + self.BODY)
+        self.stamp(self.CODE)
+        self.assertRegex(self.read_code(),
+                         r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8} \(not Spec: skel/other\.skel\.md\)\n")
+
+    def test_header_naming_another_stand_in_is_not_stamped(self):
+        text = "# Spec: skel/src/other.py.skel.md\n" + self.BODY
+        self.write_code(text)
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: its Spec: header names skel/src/other.py.skel.md, "
+                      "not skel/src/command.py.skel.md", out)
+        self.assertEqual(self.read_code(), text)
+
+    def test_over_long_or_upper_case_hash_is_replaced_whole(self):
+        self.write_code("# Spec: skel/src/command.py.skel.md @ ABCDEF123\n" + self.BODY)
+        self.stamp(self.CODE)
+        self.assertRegex(self.read_code(), r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\n")
+
+    def test_read_only_file_is_reported_not_a_crash(self):
+        os.chmod(self.path(self.CODE), 0o444)
+        self.addCleanup(os.chmod, self.path(self.CODE), 0o644)
+        if os.access(self.path(self.CODE), os.W_OK):
+            self.skipTest("running as a user who can write read-only files")
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: cannot be rewritten", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_paths_and_all_together_are_refused(self):
+        code, out = self.stamp("--all", self.CODE)
+        self.assertNotEqual(code, 0)
+        self.assertIn("give the files to stamp or --all, not both", out)
+
+    def test_non_code_file_is_never_stamped(self):
+        self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
+        os.makedirs(self.path("infra"))
+        text = "# Spec: skel/infra/main.tf.skel.md\n"
+        self.write_code(text, rel="infra/main.tf")
+        code, out = self.stamp("infra/main.tf")
+        self.assertEqual(code, 1, out)
+        self.assertIn("infra/main.tf: only code stand-ins that are not generated carry a stamp", out)
+        self.stamp("--all")
+        with open(self.path("infra/main.tf"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), text)
+
 
 class Status(CodeCase):
     """`command` is implemented and stamped; `transaction` is concrete but not implemented."""
@@ -1471,7 +1610,7 @@ class Status(CodeCase):
         self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
                      "- **Owns:** the `Command` contract.\n- **Source:** generated by a tool\n")
         self.write_code("X = 1\n")
-        self.assertEqual(self.section("Implemented")[1], ["src/command.py"])
+        self.assertEqual(self.section("Implemented")[1], ["src/command.py  (generated)"])
         self.assertEqual(self.section("Names not found in code")[1], [])
 
     def test_data_file_is_implemented_without_a_stamp(self):
@@ -1480,7 +1619,75 @@ class Status(CodeCase):
         self.write_code("{}\n", rel="data/history.json")
         self.assertIn("data/history.json", self.section("Implemented")[1])
 
+    def test_header_on_line_ten_counts_and_on_line_eleven_does_not(self):
+        self.write_code("#\n" * 9 + self.HEADER + self.BODY)
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no hash; run stamp)"])
+        self.write_code("#\n" * 10 + self.HEADER + self.BODY)
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
 
+    def test_rewrapped_stand_in_does_not_make_code_stale(self):
+        self.replace(self.UNIT, "- **Required:** always.", "- **Required:**\n    always.")
+        self.assertEqual(self.section("Stale")[1], [])
+
+    def test_infrastructure_file_is_implemented_without_a_stamp(self):
+        self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
+        os.makedirs(self.path("infra"))
+        self.write_code("resource {}\n", rel="infra/main.tf")
+        self.assertIn("infra/main.tf", self.section("Implemented")[1])
+
+    def test_source_field_that_only_mentions_generation_is_not_an_exemption(self):
+        self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
+                     "- **Owns:** the `Command` contract.\n- **Source:** hand-written, never generated\n")
+        self.write_code("X = 1\n")
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
+
+    def test_source_generated_below_file_level_is_not_an_exemption(self):
+        self.replace(self.UNIT, "### function: describe\n", "### function: describe\n\n- **Source:** generated ids\n")
+        self.write_code("X = 1\n")
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
+
+    def test_stale_primary_lists_the_rest_of_its_unit(self):
+        member = "skel/src/command_impl.py.skel.md"
+        self.run_script(MV, "skel", "skel/src/transaction.py.skel.md", member)
+        self.front(member, "role: product", "unit: ./command.py.skel.md")
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        self.assertEqual(self.section("Stale")[1], ["src/command.py  (unit: also src/command_impl.py)"])
+
+    def test_unreadable_file_is_listed_and_status_still_succeeds(self):
+        os.chmod(self.path(self.CODE), 0o000)
+        self.addCleanup(os.chmod, self.path(self.CODE), 0o644)
+        if os.access(self.path(self.CODE), os.R_OK):
+            self.skipTest("running as a user who can read unreadable files")
+        code, out = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.assertEqual(code, 0, out)
+        self.assertIn("  src/command.py  (cannot be read)", out)
+
+    def test_directory_at_the_implemented_path_is_listed(self):
+        os.remove(self.path(self.CODE))
+        os.makedirs(self.path(self.CODE))
+        code, out = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.assertEqual(code, 0, out)
+        self.assertIn("  src/command.py  (cannot be read)", out)
+
+    def test_non_utf8_bytes_do_not_stop_status(self):
+        with open(self.path(self.CODE), "ab") as fh:
+            fh.write(b"# \xa9 someone\n")
+        self.assertEqual(self.section("Implemented")[1], ["src/command.py"])
+
+    def test_heading_with_a_signature_or_backticks_is_matched_by_its_name(self):
+        self.replace(self.UNIT, "### function: describe\n", "### function: `describe`(self) -> str\n")
+        self.replace(self.UNIT, "## class: Command\n", "## class: `Command` (abstract)\n")
+        self.assertEqual(self.section("Names not found in code")[1], [])
+
+    def test_qualified_heading_is_matched_by_its_last_part(self):
+        self.replace(self.UNIT, "### function: describe\n", "### function: Command::describe\n")
+        self.assertEqual(self.section("Names not found in code")[1], [])
+
+    def test_missing_class_and_symbol_are_listed(self):
+        self.append(self.UNIT, "\n## symbol: MAX_DEPTH\n\n- **Access:** public.\n")
+        self.write_code(self.HEADER + "def apply(): ...\ndef revert(): ...\ndef merge_with(): ...\ndef describe(): ...\n")
+        self.assertEqual(self.section("Names not found in code")[1],
+                         ["src/command.py: class Command", "src/command.py: symbol MAX_DEPTH"])
 
 
 if __name__ == "__main__":

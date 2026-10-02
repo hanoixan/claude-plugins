@@ -51,7 +51,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 
    It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
 4. **Fill each stand-in top-down** from the templates in `assets/templates/`, keeping the front matter step 3 wrote. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
-5. **Walk each dependency as its caller.** For every `Depends on:` link, read the target and confirm that it declares each function, type and callback this unit's prose says it uses, that the mutability and lifetime it offers fit, and that every type named in prose has its own `symbol:` heading. Add what is missing to the target now. Each gap found here is one an implementer would otherwise fill by changing the plan.
+5. **Walk each dependency as its caller.** For every `Depends on:` link, read the target and confirm that it declares each function, type and callback this unit's prose says it uses, that the mutability and lifetime it offers fit, and that every type the tree defines and the prose names has its own `class:` or `symbol:` heading. Add what is missing to the target now. Each gap found here is one an implementer would otherwise fill by changing the plan.
 6. **Generate the backlinks** and review them:
 
    ```bash
@@ -92,7 +92,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]  
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record that code matches its stand-in
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record your claim that code matches its stand-in; checks nothing
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
@@ -101,4 +101,4 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.tx
 
 The reference files and templates name the scripts by filename alone (`skel_check.py check skel/`). Run them by the full paths shown here.
 
-`check` exits non-zero on errors, so it can run in CI or pre-commit to keep skel and code in step. `--lenient` reports missing fields as warnings, so a draft can be checked for structure and links before every field is filled in. Broken links and bad names still fail.
+`check` exits non-zero on errors, so it can run in CI or pre-commit to keep the tree consistent. It never reads code: `status` is what reports code that has drifted from the tree, and it always exits 0. `--lenient` reports missing fields as warnings, so a draft can be checked for structure and links before every field is filled in. Broken links and bad names still fail.

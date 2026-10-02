@@ -220,7 +220,7 @@ A `Referred by:` with no matching `Depends on:` is an error that is not auto-fix
 
 Deeper typed nesting (for example a function inside a function) is not allowed. Describe closures and inner helpers in prose under their owner. Untyped headings (`#### Algorithm`, `## Notes`) may appear anywhere for organization.
 
-A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `skel_check.py status` lists every heading whose name it cannot find in the implemented file. A code stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks.
+A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `skel_check.py status` lists every heading whose name it cannot find in the implemented file. A code stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks. The stamp is the short hash of the stand-in that `skel_check.py stamp` writes into a code file's `Spec:` header; `implementing.md` says when to write it.
 
 ### Prose
 

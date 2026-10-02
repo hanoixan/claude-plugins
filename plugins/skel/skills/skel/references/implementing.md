@@ -5,7 +5,7 @@ During development, `skel/` is the implementation plan. Every stand-in becomes e
 ## Before writing any code
 
 1. Run `skel_check.py check skel/`. Fix the tree, not the code, until there are no errors. A broken link or a missing backlink means the plan itself is inconsistent.
-2. Run `skel_check.py unknowns skel/`. It lists the open decisions in two groups:
+2. Run `skel_check.py unknowns skel/`. It lists the open decisions by kind:
    - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask the user about these before implementing the affected file, every place that follows the decision, and anything that depends on them. Present each with its consequence and what it unlocks, so the user can answer efficiently.
    - **Local** unknowns affect only a function body, such as a tuning constant, and each carries a `Proposed:` value. For those already in the tree when you start, implement the proposal only after the user has accepted it; they may accept all proposals in one answer. Then record the choice in the stand-in and remove the unknown.
 3. If any stand-in is abstract (`.code`, `.data`, `.iac`), adapt it first; see `abstract-systems.md`.
@@ -24,9 +24,10 @@ For each file in order:
    - Make `Inputs` and `Returns` the signature. `State changes` say which side effects are allowed; perform no others. `Access` decides visibility (public or private, exported or not).
    - Handle each listed failure mode explicitly.
    - Treat prose guidance as implementation instructions.
-3. Add a one-line header comment within the first ten lines pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. When the file matches its stand-in, run `skel_check.py stamp skel/ --root . a/b.py`, which adds a short hash of the stand-in to that header. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
+3. In a code file, add a one-line header comment within the first ten lines pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. Data, infrastructure and resource files take no header; they count as implemented once they exist. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
 4. Write tests from the stand-in. Every failure mode and every `State changes` statement is a test case, and data `## Schema` blocks become validation fixtures.
-5. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Unstamped, or Names not found in code.
+5. When a code file and its tests match the stand-in, stamp it: `skel_check.py stamp skel/ --root . a/b.py` adds a short hash of the stand-in to the file's `Spec:` header. A stamp records your claim that the code matches. It checks nothing, so stamp one file at a time, and only what you have just brought in step. `--all` is for adopting stamps on a tree whose code already matches.
+6. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Unstamped, or Names not found in code.
 
 ## When implementation reveals something
 
@@ -44,7 +45,7 @@ Rerun `check` after every batch of skel edits.
 
 A new feature or a late decision changes stand-ins whose files are already implemented. `status` lists those files under **Stale**: the stand-in no longer matches the hash stamped in the code's `Spec:` header. A new backlink or a reflow does not make a file stale; any other edit to its stand-in does.
 
-The Stale group is the work order. Bring each file back in step with its stand-in, then stamp it again. To see what changed in a stand-in:
+The Stale group is the work order. Bring each file back in step with its stand-in, then stamp it again. When the stale file is a unit's primary, `status` names the unit's other files beside it, because a changed contract usually means work in the source and not only the header. To see what changed in a stand-in:
 
 ```bash
 git diff <last commit where code and skel agreed> -- skel

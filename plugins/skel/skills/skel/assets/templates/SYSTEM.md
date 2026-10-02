@@ -33,4 +33,4 @@ Out of scope: ...
 1. Answer the unknowns (`skel_check.py unknowns skel/`).
 2. Map placeholder paths to real paths and run `skel_mv.py skel --map map.txt`.
 3. Make signatures concrete; delete resolved unknowns.
-4. Run `skel_check.py check skel/`, then `order`.
+4. Run `skel_check.py check skel/`, then `batches`.

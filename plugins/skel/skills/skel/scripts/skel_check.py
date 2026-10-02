@@ -45,7 +45,7 @@ FIELD_RE = re.compile(
     r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?(" + "|".join(re.escape(l) for l in LABELS) +
     r")(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$", re.I)
 CANON = {l.lower(): l for l in LABELS}
-UNKNOWN_RE = re.compile(r"\*{1,2}UNKNOWN(?:\*{1,2}\s*:|:\*{1,2})\s*(.*)")
+UNKNOWN_RE = re.compile(r"(?:\*{1,2}UNKNOWN\*{1,2}\s*:|\*\*UNKNOWN:\*\*)\s*(.*)")
 INFORMAL_RE = re.compile(r"(\bTBD\b|\bTODO\b|\bFIXME\b|\?\?\?|(?<![*\w])UNKNOWN(?![*\w]))")
 NONE_RE = re.compile(r"^\s*(none|n/?a)\b", re.I)
 BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
@@ -79,7 +79,7 @@ WEAK_TEST_NAME_RE = re.compile(r"^.+(Test|Tests|IT)\.[^.]+$")
 UNSURE_DIRS = {"tools", "scripts", "examples", "bench", "benches", "benchmarks"}
 SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
 HEADER_EXT = {"h", "hh", "hpp", "hxx"}
-SPEC_RE = re.compile(r"Spec:\s*(\S+?\.skel\.md)(?:\s*@\s*([0-9a-f]{8}))?")
+SPEC_RE = re.compile(r"Spec:\s*(\S+?\.skel\.md)(?:\s*@\s*([0-9A-Fa-f]+)\b)?")
 SPEC_LINES = 10
 
 LEVEL_FIELDS = {
@@ -569,7 +569,7 @@ def read_system(skel_root):
     path = os.path.join(skel_root, SYSTEM_FILE)
     if not os.path.exists(path):
         return unknowns, links, slugs
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         fence = False
         for ln, line in enumerate(fh, 1):
             if FENCE_RE.match(line):
@@ -661,7 +661,7 @@ def unknown_problems(u, lenient):
     out = []
     if u.bad_name is not None:
         out.append(("error", f"unknown name [{u.bad_name}] must be lower-case letters, digits and hyphens"))
-    if UNKNOWN_RE.search(u.text):
+    if UNKNOWN_RE.search(re.sub(r"`[^`]*`", "", u.text)):      # a marker quoted in backticks is prose
         out.append(("warning", "more than one *UNKNOWN* on this line; write one unknown per line"))
     if u.follows:
         if "consequence" not in u.clauses:
@@ -869,25 +869,44 @@ def cmd_order(args):
 
 
 def stand_in_hash(sf):
-    """Eight hex digits over the stand-in's text, ignoring backlinks, blank lines and trailing space."""
-    kept, in_backlinks = [], False
+    """Eight hex digits over the stand-in's words. Backlinks are left out, and so is how the text
+    is wrapped, indented or spaced, so only a change to what it says moves the hash."""
+    kept, in_backlinks, fence = [], False, None
     for line in sf.lines:
+        fm = FENCE_RE.match(line)
+        if fence:                                   # fenced text is content, whatever it looks like
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence) and not fm.group(2).strip():
+                fence = None
+            kept.append(line)
+            continue
+        if fm:
+            fence, in_backlinks = fm.group(1), False
+            kept.append(line)
+            continue
         fld = FIELD_RE.match(line)
-        if fld and CANON[fld.group(1).lower()] == "Referred by":
-            in_backlinks = fld.group(2).strip() == ""   # block form: its bulleted links follow
+        if fld:
+            backlink = CANON[fld.group(1).lower()] == "Referred by"
+            in_backlinks = backlink and fld.group(2).strip() == ""   # block form: its bulleted links follow
+            if backlink:
+                continue
+        elif in_backlinks and BULLET_LINK_RE.match(line):
             continue
-        if in_backlinks and BULLET_LINK_RE.match(line):
-            continue
-        in_backlinks = False
-        if line.strip():
-            kept.append(line.rstrip())
-    return hashlib.sha256("\n".join(kept).encode("utf-8")).hexdigest()[:8]
+        elif line.strip():
+            in_backlinks = False
+        kept.append(line)
+    return hashlib.sha256(" ".join(" ".join(kept).split()).encode("utf-8")).hexdigest()[:8]
+
+
+def is_generated(sf):
+    """True when the stand-in says, at file level, that a tool writes its file."""
+    top = next((s for s in sf.sections if s.level == 1), None)
+    sources = own_fields(top).get("Source", []) if top else []
+    return any(value.strip().lower().startswith("generated") for _, value in sources)
 
 
 def drift_checked(sf):
     """Stamps and name checks apply to code stand-ins that a person or agent writes."""
-    generated = any("generat" in value.lower() for _, value in file_fields(sf).get("Source", []))
-    return sf.kind == "code" and not generated
+    return sf.kind == "code" and not is_generated(sf)
 
 
 def spec_path(sf, root):
@@ -916,7 +935,13 @@ def stamp_state(sf, impl, root):
         return "unstamped", f"Spec: header names {header[0]}"
     if header[1] is None:
         return "unstamped", "no hash; run stamp"
-    return ("implemented" if header[1] == stand_in_hash(sf) else "stale"), None
+    return ("implemented" if header[1].lower() == stand_in_hash(sf) else "stale"), None
+
+
+def heading_name(sec):
+    """The identifier a typed heading stands for: its first word, without markup, signature or qualifier."""
+    token = re.split(r"[\s(<\[,]", sec.name.strip().lstrip("`*"), maxsplit=1)[0].rstrip("`*:")
+    return re.split(r"::|\.", token)[-1]
 
 
 def missing_names(sf, impl):
@@ -926,7 +951,7 @@ def missing_names(sf, impl):
     out = []
     for s in sf.sections:
         if s.level > 1 and s.kind in ("class", "function", "symbol"):
-            name = re.split(r"[\s(<]", s.name.strip("`"), maxsplit=1)[0]
+            name = heading_name(s)
             if name and not re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", text):
                 out.append(f"{s.kind} {name}")
     return out
@@ -937,6 +962,8 @@ def cmd_stamp(args):
     root = os.path.abspath(args.root)
     if not args.paths and not args.all:
         sys.exit("stamp needs the implemented files to stamp, or --all")
+    if args.paths and args.all:
+        sys.exit("give the files to stamp or --all, not both")
     by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
     targets = sorted(by_impl) if args.all else [os.path.normpath(os.path.abspath(p)) for p in args.paths]
     stamped = current = failed = 0
@@ -956,18 +983,26 @@ def cmd_stamp(args):
             continue
         want, header = spec_path(sf, root), read_spec_header(impl)
         if header is None or header[0] != want:
-            print(f"{shown}: no `Spec: {want}` header in its first {SPEC_LINES} lines")
+            if header is None:
+                print(f"{shown}: no `Spec: {want}` header in its first {SPEC_LINES} lines")
+            else:
+                print(f"{shown}: its Spec: header names {header[0]}, not {want}")
             failed += not args.all
             continue
         digest = stand_in_hash(sf)
-        if header[1] == digest:
+        if (header[1] or "").lower() == digest:
             current += 1
             continue
-        with open(impl, encoding="utf-8") as fh:
-            lines = fh.readlines()
-        lines[header[2]] = SPEC_RE.sub(lambda m: f"Spec: {m.group(1)} @ {digest}", lines[header[2]], count=1)
-        with open(impl, "w", encoding="utf-8") as fh:
-            fh.writelines(lines)
+        try:    # bytes and line endings outside the header line are written back exactly as read
+            with open(impl, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                lines = fh.readlines()
+            lines[header[2]] = SPEC_RE.sub(lambda m: f"Spec: {m.group(1)} @ {digest}", lines[header[2]], count=1)
+            with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.writelines(lines)
+        except OSError as exc:
+            print(f"{shown}: cannot be rewritten ({exc.strerror})")
+            failed += 1
+            continue
         print(f"stamped {shown} @ {digest}")
         stamped += 1
     print(f"\n{stamped} stamped, {current} already current")
@@ -1048,16 +1083,22 @@ def cmd_status(args):
     root = os.path.abspath(args.root)
     groups = {"implemented": [], "stale": [], "unstamped": [], "pending": [], "abstract": []}
     missing, specified = [], set()
+    members = unit_members(files, resolve_units(files, report=False))
     for sf in sorted(files.values(), key=lambda f: f.rel):
         impl = os.path.join(root, sf.impl_rel)
         specified.add(os.path.normpath(impl))
         if not os.path.exists(impl):
             unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
             groups["abstract" if sf.abstract else "pending"].append(f"{sf.impl_rel}{unk}")
+        elif not (os.path.isfile(impl) and os.access(impl, os.R_OK)):
+            groups["unstamped"].append(f"{sf.impl_rel}  (cannot be read)")
         elif not drift_checked(sf):
-            groups["implemented"].append(sf.impl_rel)
+            groups["implemented"].append(f"{sf.impl_rel}  (generated)" if sf.kind == "code" else sf.impl_rel)
         else:
             group, reason = stamp_state(sf, impl, root)
+            rest = [m.impl_rel for m in members.get(sf.path, [])[1:]]
+            if group == "stale" and rest:       # a stale primary puts its whole unit on the work list
+                reason = "unit: also " + ", ".join(rest)
             groups[group].append(f"{sf.impl_rel}  ({reason})" if reason else sf.impl_rel)
             missing.extend(f"{sf.impl_rel}: {name}" for name in missing_names(sf, impl))
     unspecified = []

@@ -30,7 +30,6 @@ Out of scope: branching (tree) history, collaborative/multi-user undo (needs OT/
 - Levels in this plan: behaviour tests of the undo core against a fake `DocumentTarget` ([history_test](./undo/history_test.code.skel.md)).
 - Left out on purpose: tests of the host binding. Shortcuts and menus are exercised by the host application's own interface tests.
 
-
 ## Entry points
 
 - [UndoHistory](./undo/history.code.skel.md#class-undohistory): the object the host owns.
@@ -42,4 +41,4 @@ Out of scope: branching (tree) history, collaborative/multi-user undo (needs OT/
 1. Answer the unknowns above and in `skel_check.py unknowns skel/`.
 2. Write a mapping file from placeholder paths to real project paths and run `skel_mv.py`.
 3. Replace meaning-only signatures with concrete types; delete resolved unknowns.
-4. Run `skel_check.py check skel/` until clean, then `order` to plan implementation.
+4. Run `skel_check.py check skel/` until clean, then `batches` to plan implementation.

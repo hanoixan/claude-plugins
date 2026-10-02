@@ -204,14 +204,15 @@ skel/infra/main.tf.skel.md       ->  infra/main.tf
 Inside a code stand-in the headings follow the code: module, then class, then function.
 Every dependency is a link, and every link has a backlink in its target, so a reader
 sees both what a unit needs and what relies on it. Anything not yet decided is a formal
-`*UNKNOWN*:` entry that states its kind, its consequence and, where the author has one, a proposed default, rather than a guess. The finished tree
-is an implementation plan an agent can follow file by file.
+`*UNKNOWN*:` entry that states its kind, its consequence and, where the author has one,
+a proposed default, rather than a guess. The finished tree is an implementation plan an
+agent can follow file by file.
 
 **What ships**
 
 | Piece | Role |
 | --- | --- |
-| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1650 words. |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1678 words. |
 | `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
 | `scripts/skel_check.py` | The checker, below. |
 | `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |
@@ -224,15 +225,22 @@ is an implementation plan an agent can follow file by file.
 skel_check.py check SKEL_DIR            grammar, required fields, links and their backlinks, SYSTEM.md links
 skel_check.py unknowns SKEL_DIR         open decisions, blocking and local, each listed once
 skel_check.py order SKEL_DIR            dependency order (what must exist before what)
-skel_check.py status SKEL_DIR --root .  implemented, stale, unstamped, pending; names missing from code
-skel_check.py stamp SKEL_DIR --root . PATH...   record that a file matches its stand-in
+skel_check.py status SKEL_DIR --root .  implemented, stale, unstamped, pending, abstract;
+                                        names missing from code
+skel_check.py stamp SKEL_DIR --root . PATH... | --all
+                                        record your claim that a file matches its stand-in
 skel_check.py fix-backlinks SKEL_DIR    insert missing `Referred by:` lines
 skel_check.py infer-roles SKEL_DIR      propose each stand-in's role and its unit
 skel_check.py batches SKEL_DIR          buildable batches of units, manifests set aside
 ```
 
 `check` exits non-zero on errors, so it can run in CI or a pre-commit hook to keep the
-tree and the code in step.
+tree consistent. It never reads code; `status` is what reports code that has drifted from
+the tree.
+
+**Upgrading a tree written for skel 1.x.** `check` now needs a `role:` on every stand-in
+and a `Kind:` on every unknown. Run `infer-roles --write` and settle the ones it marks
+unsure, add the kinds by hand, and, once the code matches the tree, run `stamp --all`.
 
 No hook. The rules that have to hold are enforced by a checker that can be run at any
 point, so nothing depends on the model still remembering them.
