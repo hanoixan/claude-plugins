@@ -273,11 +273,40 @@ class UnknownsCommand(TreeCase):
         body = self.group(out, "Blocking")
         self.assertTrue(any("undo/command.code.skel.md:" in l and "Which wire format." in l for l in body), body)
 
-    def test_unknown_without_kind_is_listed_under_no_kind_stated(self):
+    def test_unknown_without_kind_is_listed_under_no_valid_kind(self):
         self.declare(COMMAND, "Something open. Consequence: c. Unlocks: u.")
         _, out = self.unknowns()
-        body = self.group(out, "No kind stated")
+        body = self.group(out, "No valid kind")
         self.assertTrue(any("Something open." in l for l in body), body)
+
+    def test_invalid_kind_is_listed_under_no_valid_kind(self):
+        self.declare(COMMAND, "Something open. Kind: maybe. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns()
+        body = self.group(out, "No valid kind")
+        self.assertTrue(any("Something open." in l for l in body), body)
+
+    def test_json_items_share_one_shape(self):
+        self.declare(COMMAND, "Follows [nosuch]. Consequence: unspecified here.")
+        _, out = self.unknowns("--json")
+        items = json.loads(out)
+        keys = {"file", "line", "where", "text", "name", "follows", "kind", "proposed", "consequence",
+                "unlocks", "followers"}
+        for item in items:
+            self.assertEqual(set(item), keys, item)
+        self.assertEqual([i["follows"] for i in items if i["follows"]], ["nosuch"])
+
+    def test_bold_marker_with_the_colon_inside_is_an_unknown(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "**UNKNOWN:** [retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.\n")
+        _, out = self.unknowns("--json")
+        self.assertEqual([i["kind"] for i in json.loads(out) if i["name"] == "retry"], ["local"])
+
+    def test_clauses_may_come_in_any_order(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Unlocks: u. Consequence: c. Proposed: three. Kind: local.")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if i["name"] == "retry")
+        self.assertEqual((item["kind"], item["proposed"], item["consequence"], item["unlocks"]),
+                         ("local", "three.", "c.", "u."))
 
     def test_follower_is_listed_under_its_decision(self):
         self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
@@ -309,11 +338,22 @@ class UnknownsCommand(TreeCase):
         self.assertIsNone(item["name"])
 
     def test_double_star_marker_parses_the_same(self):
-        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.",
-                     marker="**UNKNOWN**")
-        _, out = self.unknowns("--json")
-        item = next(i for i in json.loads(out) if i.get("name") == "retry")
-        self.assertEqual(item["kind"], "local")
+        text = "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u."
+
+        def parsed(marker):
+            tree = tempfile.mkdtemp(prefix="skel-test-")
+            self.addCleanup(shutil.rmtree, tree, ignore_errors=True)
+            shutil.copytree(EXAMPLE, os.path.join(tree, "skel"))
+            path = os.path.join(tree, TRANSACTION)
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body.replace(NO_UNKNOWNS, f"{marker}: {text}\n"))
+            proc = subprocess.run([sys.executable, CHECK, "unknowns", "skel", "--json"], cwd=tree,
+                                  capture_output=True, text=True)
+            return next(i for i in json.loads(proc.stdout) if i["name"] == "retry")
+
+        self.assertEqual(parsed("*UNKNOWN*"), parsed("**UNKNOWN**"))
 
     def test_json_carries_the_parsed_fields(self):
         self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
@@ -517,6 +557,45 @@ class UnknownRules(TreeCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
         self.assertIn("0 errors, 0 warnings", out)
+
+    def test_empty_proposal_counts_as_missing(self):
+        self.replace(HISTORY, " Proposed: 1000 steps.", " Proposed: .")
+        self.assertCheckFails("*UNKNOWN* with `Kind: local` needs `Proposed:`")
+
+    def test_empty_consequence_warns(self):
+        self.replace(STORE, " Consequence: placeholder `.iac`; retention and access cannot be implemented.",
+                     " Consequence: .")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* should state `Consequence:` and `Unlocks:`", out)
+
+    def test_two_markers_on_one_line_warn(self):
+        self.replace(TRANSACTION, NO_UNKNOWNS,
+                     "*UNKNOWN*: Follows [cross-session-undo]. Consequence: a. "
+                     "*UNKNOWN*: Follows [language]. Consequence: b.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: more than one *UNKNOWN* on this line; write one unknown per line", out)
+
+    def test_extra_clauses_on_a_follower_warn(self):
+        self.replace(STORE, "Follows [cross-session-undo]. Consequence:",
+                     "Follows [cross-session-undo]. Proposed: keep it. Consequence:")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* that follows another takes only `Consequence:`; "
+                      "move `Proposed:` to the declaration", out)
+
+    def test_invalid_kind_is_a_warning_when_lenient(self):
+        self.replace(STORE, self.KIND, " Kind: maybe.")
+        code, out = self.check("--lenient")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* has `Kind: maybe`", out)
+
+    def test_local_without_a_proposal_is_a_warning_when_lenient(self):
+        self.replace(HISTORY, " Proposed: 1000 steps.", "")
+        code, out = self.check("--lenient")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: *UNKNOWN* with `Kind: local` needs `Proposed:`", out)
 
 
 class Roles(TreeCase):

@@ -43,7 +43,7 @@ FIELD_RE = re.compile(
     r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?(" + "|".join(re.escape(l) for l in LABELS) +
     r")(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$", re.I)
 CANON = {l.lower(): l for l in LABELS}
-UNKNOWN_RE = re.compile(r"\*{1,2}UNKNOWN\*{1,2}\s*:\s*(.*)")
+UNKNOWN_RE = re.compile(r"\*{1,2}UNKNOWN(?:\*{1,2}\s*:|:\*{1,2})\s*(.*)")
 INFORMAL_RE = re.compile(r"(\bTBD\b|\bTODO\b|\bFIXME\b|\?\?\?|(?<![*\w])UNKNOWN(?![*\w]))")
 NONE_RE = re.compile(r"^\s*(none|n/?a)\b", re.I)
 BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
@@ -165,10 +165,10 @@ class Unknown:
             if not NAME_RE.match(m.group(1)):
                 self.bad_name, self.name = m.group(1), None
         parts = CLAUSE_RE.split(body)
-        self.what = parts[0].strip()
         self.clauses = {}
         for label, value in zip(parts[1::2], parts[2::2]):
-            self.clauses.setdefault(label.lower(), value.strip())
+            if value.strip(" ."):                      # a label with nothing after it states nothing
+                self.clauses.setdefault(label.lower(), value.strip())
 
     @property
     def kind(self):
@@ -657,9 +657,15 @@ def unknown_problems(u, lenient):
     out = []
     if u.bad_name is not None:
         out.append(("error", f"unknown name [{u.bad_name}] must be lower-case letters, digits and hyphens"))
+    if UNKNOWN_RE.search(u.text):
+        out.append(("warning", "more than one *UNKNOWN* on this line; write one unknown per line"))
     if u.follows:
         if "consequence" not in u.clauses:
             out.append(("warning", "*UNKNOWN* that follows another should state `Consequence:`"))
+        extra = [f"`{c.capitalize()}:`" for c in ("kind", "proposed", "unlocks") if c in u.clauses]
+        if extra:
+            out.append(("warning", "*UNKNOWN* that follows another takes only `Consequence:`; "
+                                   f"move {', '.join(extra)} to the declaration"))
         return out
     if not u.kind:
         out.append((missing, "*UNKNOWN* is missing `Kind:` (blocking or local)"))
@@ -752,24 +758,20 @@ def decisions(pairs):
     return declared, orphans
 
 
-def unknown_item(rel, u):
-    return {"file": rel, "line": u.line, "where": u.where, "text": u.text}
+def unknown_item(rel, u, followers=()):
+    return {"file": rel, "line": u.line, "where": u.where, "text": u.text, "name": u.name, "follows": u.follows,
+            "kind": u.kind, "proposed": u.clauses.get("proposed"), "consequence": u.clauses.get("consequence"),
+            "unlocks": u.clauses.get("unlocks"),
+            "followers": [{"file": r, "line": f.line, "where": f.where,
+                           "consequence": f.clauses.get("consequence")} for r, f in followers]}
 
 
 def cmd_unknowns(args):
     skel_root, files = load_tree(args.skel_dir)
     declared, orphans = decisions(tree_unknowns(files, read_system(skel_root)[0]))
     if args.json:
-        items = []
-        for rel, u, followers in declared:
-            item = unknown_item(rel, u)
-            item.update(name=u.name, kind=u.kind, proposed=u.clauses.get("proposed"),
-                        consequence=u.clauses.get("consequence"), unlocks=u.clauses.get("unlocks"),
-                        followers=[{"file": r, "line": f.line, "where": f.where,
-                                    "consequence": f.clauses.get("consequence")} for r, f in followers])
-            items.append(item)
-        for rel, u in orphans:
-            items.append(dict(unknown_item(rel, u), follows=u.follows))
+        items = [unknown_item(rel, u, followers) for rel, u, followers in declared]
+        items += [unknown_item(rel, u) for rel, u in orphans]
         print(json.dumps(items, indent=2))
         return 0
     if not declared and not orphans:
@@ -777,7 +779,7 @@ def cmd_unknowns(args):
         return 0
     groups = [("Blocking", [d for d in declared if d[1].kind == "blocking"]),
               ("Local", [d for d in declared if d[1].kind == "local"]),
-              ("No kind stated", [d for d in declared if d[1].kind not in KINDS])]
+              ("No valid kind", [d for d in declared if d[1].kind not in KINDS])]
     for title, group in groups:
         if not group:
             continue
