@@ -211,7 +211,7 @@ is an implementation plan an agent can follow file by file.
 
 | Piece | Role |
 | --- | --- |
-| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1149 words. |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1292 words. |
 | `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
 | `scripts/skel_check.py` | The checker, below. |
 | `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |
@@ -222,7 +222,7 @@ is an implementation plan an agent can follow file by file.
 
 ```
 skel_check.py check SKEL_DIR            grammar, required fields, links and their backlinks, SYSTEM.md links
-skel_check.py unknowns SKEL_DIR         every open decision, with its location
+skel_check.py unknowns SKEL_DIR         open decisions, blocking and local, each listed once
 skel_check.py order SKEL_DIR            dependency order (what must exist before what)
 skel_check.py status SKEL_DIR --root .  implemented, pending, abstract, or code with no stand-in
 skel_check.py fix-backlinks SKEL_DIR    insert missing `Referred by:` lines

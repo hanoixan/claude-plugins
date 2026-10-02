@@ -35,12 +35,12 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 - **Links:** `Depends on: [Symbol](./rel/path.ext.skel.md#class-symbol)` must be matched by `Referred by: [Symbol](./back/path.ext.skel.md)` in the target, and vice versa.
 - **Data:** state `Source:`, give a `## Schema` with a fenced block, and if the data is generated, add a `## Generation` section with the pipeline, tool links, and a development usage fence.
 - **Storage is infrastructure-as-code:** each store is a `## resource:` in an iac stand-in, with `Data requirements:` and its consumers listed as `Referred by:`.
-- **Unknowns:** use `*UNKNOWN*: <what>. Consequence: <...>. Unlocks: <...>.` Never invent a specification to fill a gap.
+- **Unknowns:** use `*UNKNOWN*: [name] <what>. Kind: blocking | local. Proposed: <...>. Consequence: <...>. Unlocks: <...>.` Declare a decision once and mark the other places it affects with `*UNKNOWN*: Follows [name]. Consequence: <...>.` Anything you choose that the user did not state is an unknown with a `Proposed:`. Never present your own choice as settled.
 - **Fences** always carry a language tag. Include sample code only when code is the clearest way to state a contract.
 
 ## Authoring workflow
 
-1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions. Don't resolve open questions yourself; they become unknowns.
+1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions. Don't resolve open questions yourself; they become unknowns. A choice you make to keep the design moving is an unknown too, with your choice as its `Proposed:`.
 2. **Write `skel/SYSTEM.md`** from `assets/templates/SYSTEM.md`. Include scope, glossary, global decisions, and entry points.
 3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix.
 4. **Fill each stand-in top-down** from the templates in `assets/templates/`. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
@@ -56,7 +56,12 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
-7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py order skel`. Give the user the unknowns grouped by what they block and the dependency order. Unknowns that change interfaces should be answered before implementation starts.
+7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py order skel`, and report in this shape:
+   1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence and what it unlocks.
+   2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
+   3. **Dependency order:** what must exist before what.
+
+   The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
 
 ## Writing good stand-ins
 
@@ -65,7 +70,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 - **Prefer the narrowest level.** A dependency used by one method is linked from that method, so the backlink names the method and change impact stays precise.
 - **Make failure modes concrete:** say what triggers each one and what the expected handling is. They become the test list.
 - **Frame persistence as infrastructure.** If a function reads or writes state that outlives the process, it links to an iac resource.
-- **Keep unknowns honest.** An unknown with a clear consequence and unlock is more useful than a confident guess, because it tells the user exactly which decision to make.
+- **Keep unknowns honest.** An unknown with a clear consequence and unlock is more useful than a confident guess, because it tells the user exactly which decision to make. The same goes for your own choices: a proposal the user can veto is worth more than a decision they never saw.
 
 ## Tools
 
@@ -73,7 +78,7 @@ All scripts use only the Python standard library.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # unknowns inventory (including SYSTEM.md)
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / pending / abstract / code with no stand-in
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]

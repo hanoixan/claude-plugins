@@ -98,20 +98,40 @@ Fields belong to the nearest typed heading above them (`module:`, `class:`, `fun
 
 ## 5. Unknowns
 
-Only describe what is known. Anything that isn't known is declared as a formal unknown, never guessed:
+Only describe what is known. Anything that isn't known is declared as a formal unknown, never guessed. An unknown is one line, in one of two forms.
+
+A **declaration** states a decision that is still open:
 
 ```markdown
-*UNKNOWN*: <what is unknown>. Consequence: <what goes wrong or stays blocked while it is unknown>. Unlocks: <what can be specified or built once it is known>.
+*UNKNOWN*: [short-name] <what is unknown>. Kind: blocking | local. Proposed: <the default you would choose>. Consequence: <what goes wrong or stays blocked while it is unknown>. Unlocks: <what can be specified or built once it is known>.
+```
+
+A **follower** marks another place that the same decision affects:
+
+```markdown
+*UNKNOWN*: Follows [short-name]. Consequence: <what the open decision means here>.
 ```
 
 - The marker `*UNKNOWN*:` is exact. The checker also accepts `**UNKNOWN**:`.
 - An unknown can stand on its own line, inside a bullet, or as a field value (`- **Returns:** *UNKNOWN*: ...`).
-- The checker warns when an unknown has no `Consequence:` or `Unlocks:` clause, because an unknown without consequences can't be prioritized.
+- `[short-name]` is optional: lower-case letters, digits and hyphens, directly after the marker. A decision needs a name once a follower refers to it. Names are unique across the tree, `SYSTEM.md` included. **(checked)**
+- `Kind:` is required. **(checked)** `blocking` means the answer changes an interface, a schema, or whether a file exists. `local` means it affects only a function body, a constant, or a default.
+- `Proposed:` is required when the kind is `local`. **(checked)** On a blocking unknown it is optional and reads as a recommendation.
+- Declare a decision once. Where it affects other stand-ins, write a follower there instead of repeating it. A follower must name a declared unknown. **(checked)**
+- The checker warns when a declaration has no `Consequence:` or `Unlocks:` clause, or a follower has no `Consequence:`, because an unknown without consequences can't be prioritized.
 - The checker warns about informal markers (`TBD`, `TODO`, `FIXME`, `???`, or a bare `UNKNOWN`) outside code fences. Convert them to formal unknowns.
 - Place an unknown at the level it affects. A wire-format unknown belongs on the function that encodes it, not on the module.
 - Never add detail that contradicts an open unknown. If the database engine is unknown, don't write PostgreSQL-specific SQL in a sample; write the unknown instead.
 
-`skel_check.py unknowns skel/` prints the inventory. That list is the agenda for the next conversation with the user.
+### Your own choices are unknowns too
+
+Anything you settle that the user did not state is an unknown with a `Proposed:`. Write the stand-in as if the proposal holds, so the tree stays coherent, and leave the marker in place. Remove it only when the user agrees. A tree whose unknowns list is empty claims that the user has decided everything in it.
+
+A blocking unknown may carry a proposal too. The tree may be written to that proposal, and every place that depends on the answer carries a follower.
+
+Resolving a decision means replacing it with the decided text and deleting the declaration and every follower of it.
+
+`skel_check.py unknowns skel/` prints the decisions grouped into blocking and local, each once, with its followers beneath it. That list is the agenda for the next conversation with the user. `check` and `unknowns` count decisions; followers are not counted.
 
 ## 6. Links and bidirectionality
 
@@ -260,4 +280,4 @@ Images, fonts, stylesheets, templates, and similar assets use `# resource: <name
 - cross-cutting concerns (logging, error policy, concurrency model)
 - an entry-point index linking to the main stand-ins
 
-Use the same `*UNKNOWN*:` convention in it. The checker counts its unknowns and checks that its links resolve **(checked)**; it does not apply the stand-in grammar to it. `skel_mv.py` keeps its links up to date.
+Use the same `*UNKNOWN*:` convention in it. The checker holds its unknowns to the rules in section 5 and checks that its links resolve **(checked)**; it does not apply the rest of the stand-in grammar to it. `skel_mv.py` keeps its links up to date.
