@@ -11,7 +11,8 @@ mapping.txt has one "OLD NEW" pair per line (paths relative to the current direc
   skel/undo/history.code.skel.md    skel/src/editor/undo/history.ts.skel.md
   skel/infra/history_store.iac.skel.md  skel/infra/undo_store.tf.skel.md
 
-Links inside fenced code blocks are left untouched.
+A `unit:` path in front matter is rewritten the same way. Links inside fenced code blocks
+are left untouched.
 """
 import argparse
 import os
@@ -22,6 +23,7 @@ import sys
 LINK_RE = re.compile(r"(\[[^\]]*\]\()(\s*)([^)\s#]*)(#[^)\s]*)?((?:\s+\"[^\"]*\")?\s*\))")
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+UNIT_RE = re.compile(r"^(\s*unit\s*:\s*)(\S+)(\s*)$")
 
 
 def expand(pairs):
@@ -47,7 +49,41 @@ def expand(pairs):
 
 def rewrite(text, old_loc, new_loc, mapping):
     out, fence, changed = [], None, 0
-    for line in text.split("\n"):
+    lines = text.split("\n")
+    front_end = 0
+    if lines and lines[0].strip() == "---":
+        front_end = next((j for j in range(1, len(lines)) if lines[j].strip() == "---"), 0)
+
+    def moved(path):
+        """The relative path to write instead, or None when this one still holds."""
+        if not path or EXTERNAL_RE.match(path):
+            return None
+        old_target = os.path.normpath(os.path.join(os.path.dirname(old_loc), path))
+        target = mapping.get(old_target, old_target)
+        if target == old_target and new_loc == old_loc:
+            return None
+        rel = os.path.relpath(target, os.path.dirname(new_loc))
+        if not rel.startswith("."):
+            rel = "./" + rel
+        return None if rel == path else rel
+
+    def sub(m):
+        nonlocal changed
+        rel = moved(m.group(3))
+        if rel is None:
+            return m.group(0)
+        changed += 1
+        return f"{m.group(1)}{m.group(2)}{rel}{m.group(4) or ''}{m.group(5)}"
+
+    for idx, line in enumerate(lines):
+        if 0 < idx < front_end:
+            um = UNIT_RE.match(line)
+            rel = moved(um.group(2)) if um else None
+            if rel is not None:
+                changed += 1
+                line = f"{um.group(1)}{rel}{um.group(3)}"
+            out.append(line)
+            continue
         fm = FENCE_RE.match(line)
         if fence:
             if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence):
@@ -58,23 +94,6 @@ def rewrite(text, old_loc, new_loc, mapping):
             fence = fm.group(1)
             out.append(line)
             continue
-
-        def sub(m):
-            nonlocal changed
-            path = m.group(3)
-            if not path or EXTERNAL_RE.match(path):
-                return m.group(0)
-            old_target = os.path.normpath(os.path.join(os.path.dirname(old_loc), path))
-            target = mapping.get(old_target, old_target)
-            if target == old_target and new_loc == old_loc:
-                return m.group(0)
-            rel = os.path.relpath(target, os.path.dirname(new_loc))
-            if not rel.startswith("."):
-                rel = "./" + rel
-            if rel == path:
-                return m.group(0)
-            changed += 1
-            return f"{m.group(1)}{m.group(2)}{rel}{m.group(4) or ''}{m.group(5)}"
         out.append(LINK_RE.sub(sub, line))
     return "\n".join(out), changed
 

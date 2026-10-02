@@ -890,6 +890,35 @@ class Move(TreeCase):
         self.assertTrue(os.path.exists(self.path(COMMAND)))
 
 
+class MoveUnits(MiniTree):
+    def setUp(self):
+        super().setUp()
+        self.stand_in("src/fm.hpp", front=["role: product"])
+        self.stand_in("src/fm_posix.cpp", depends=["src/fm.hpp"], front=["role: product", "unit: ./fm.hpp.skel.md"])
+
+    def move(self, old, new):
+        proc = subprocess.run([sys.executable, MV, "skel", old, new], cwd=self.dir, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_moving_the_header_updates_the_source(self):
+        self.move("skel/src/fm.hpp.skel.md", "skel/include/fm.hpp.skel.md")
+        self.assertIn("unit: ../include/fm.hpp.skel.md\n", self.read("src/fm_posix.cpp"))
+
+    def test_moving_the_source_updates_its_own_unit_path(self):
+        self.move("skel/src/fm_posix.cpp.skel.md", "skel/src/posix/fm_posix.cpp.skel.md")
+        self.assertIn("unit: ../fm.hpp.skel.md\n", self.read("src/posix/fm_posix.cpp"))
+
+    def test_moving_both_together_leaves_the_path_alone(self):
+        self.move("skel/src", "skel/lib")
+        self.assertIn("unit: ./fm.hpp.skel.md\n", self.read("lib/fm_posix.cpp"))
+
+    def test_unit_like_text_in_the_body_is_not_touched(self):
+        with open(self.file("src/fm_posix.cpp"), "a", encoding="utf-8") as fh:
+            fh.write("unit: ./fm.hpp.skel.md\n")
+        self.move("skel/src/fm.hpp.skel.md", "skel/include/fm.hpp.skel.md")
+        self.assertTrue(self.read("src/fm_posix.cpp").endswith("unit: ./fm.hpp.skel.md\n"))
+
+
 class Status(TreeCase):
     def setUp(self):
         super().setUp()
