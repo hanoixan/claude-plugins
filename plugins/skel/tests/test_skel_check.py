@@ -7,7 +7,9 @@ Run from the repository root:
 
     python3 -m unittest discover -s plugins/skel/tests
 """
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,8 @@ TRANSACTION = "skel/undo/transaction.code.skel.md"
 HISTORY = "skel/undo/history.code.skel.md"
 STORE = "skel/infra/history_store.iac.skel.md"
 SYSTEM = "skel/SYSTEM.md"
+SNAPSHOT = "skel/undo/history_snapshot.data.skel.md"
+NO_UNKNOWNS = "- **Unknowns:** none\n"
 
 BACKLINK = "- **Referred by:** [Transaction](./transaction.code.skel.md#class-transaction)\n"
 COMMAND_LINK = "./command.code.skel.md#class-command"
@@ -185,6 +189,116 @@ class SystemFile(TreeCase):
         self.append(SYSTEM, "\n```text\n[gone](./undo/gone.code.skel.md)\n```\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
+
+
+class UnknownsCommand(TreeCase):
+    """TRANSACTION and COMMAND both say `Unknowns: none`; tests swap that line for a marker."""
+
+    def unknowns(self, *args):
+        return self.run_script(CHECK, "unknowns", "skel", *args)
+
+    def declare(self, rel, text, marker="*UNKNOWN*"):
+        self.replace(rel, NO_UNKNOWNS, f"{marker}: {text}\n")
+
+    def group(self, out, title):
+        lines = out.splitlines()
+        start = next((i for i, l in enumerate(lines) if l.startswith(title + " (")), None)
+        self.assertIsNotNone(start, f"no '{title}' group in:\n{out}")
+        body = []
+        for line in lines[start + 1:]:
+            if not line.strip():
+                break
+            body.append(line)
+        return body
+
+    def count(self, out):
+        return int(re.search(r"(\d+) unknowns", out).group(1))
+
+    def test_local_unknown_is_listed_under_local(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns()
+        body = self.group(out, "Local")
+        self.assertTrue(any(l.startswith("- [retry] undo/transaction.code.skel.md:") and
+                            l.endswith("(module: transaction): How many retries. Kind: local. "
+                                       "Proposed: three. Consequence: c. Unlocks: u.") for l in body), body)
+
+    def test_blocking_unknown_is_listed_under_blocking(self):
+        self.declare(COMMAND, "Which wire format. Kind: blocking. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns()
+        body = self.group(out, "Blocking")
+        self.assertTrue(any("undo/command.code.skel.md:" in l and "Which wire format." in l for l in body), body)
+
+    def test_unknown_without_kind_is_listed_under_no_kind_stated(self):
+        self.declare(COMMAND, "Something open. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns()
+        body = self.group(out, "No kind stated")
+        self.assertTrue(any("Something open." in l for l in body), body)
+
+    def test_follower_is_listed_under_its_decision(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        self.declare(COMMAND, "Follows [retry]. Consequence: the retry loop here is unspecified.")
+        _, out = self.unknowns()
+        body = self.group(out, "Local")
+        index = next(i for i, l in enumerate(body) if l.startswith("- [retry] "))
+        follower = body[index + 1]
+        self.assertTrue(follower.startswith("    followed at undo/command.code.skel.md:"), follower)
+        self.assertTrue(follower.endswith("(module: command): the retry loop here is unspecified."), follower)
+
+    def test_followers_are_not_counted(self):
+        before = self.count(self.unknowns()[1])
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        self.declare(COMMAND, "Follows [retry]. Consequence: unspecified here.")
+        self.assertEqual(self.count(self.unknowns()[1]), before + 1)
+
+    def test_follower_of_an_undeclared_name_is_listed_apart(self):
+        self.declare(COMMAND, "Follows [nosuch]. Consequence: unspecified here.")
+        _, out = self.unknowns()
+        body = self.group(out, "Following an undeclared name")
+        self.assertTrue(any("undo/command.code.skel.md:" in l and "Follows [nosuch]" in l for l in body), body)
+
+    def test_unknown_starting_with_a_link_is_not_named_after_it(self):
+        self.declare(TRANSACTION, "[command](./command.code.skel.md) may gain a method. "
+                                  "Kind: blocking. Consequence: c. Unlocks: u.")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if "may gain a method" in i["text"])
+        self.assertIsNone(item["name"])
+
+    def test_double_star_marker_parses_the_same(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.",
+                     marker="**UNKNOWN**")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if i.get("name") == "retry")
+        self.assertEqual(item["kind"], "local")
+
+    def test_json_carries_the_parsed_fields(self):
+        self.declare(TRANSACTION, "[retry] How many retries. Kind: local. Proposed: three. Consequence: c. Unlocks: u.")
+        self.declare(COMMAND, "Follows [retry]. Consequence: unspecified here.")
+        _, out = self.unknowns("--json")
+        item = next(i for i in json.loads(out) if i.get("name") == "retry")
+        self.assertEqual(item["file"], "undo/transaction.code.skel.md")
+        self.assertEqual(item["where"], "module: transaction")
+        self.assertEqual(item["kind"], "local")
+        self.assertEqual(item["proposed"], "three.")
+        self.assertEqual(item["consequence"], "c.")
+        self.assertEqual(item["unlocks"], "u.")
+        self.assertEqual(len(item["followers"]), 1)
+        follower = item["followers"][0]
+        self.assertEqual(follower["file"], "undo/command.code.skel.md")
+        self.assertEqual(follower["where"], "module: command")
+        self.assertEqual(follower["consequence"], "unspecified here.")
+        self.assertIsInstance(follower["line"], int)
+
+    def test_json_keeps_the_original_keys_on_every_item(self):
+        _, out = self.unknowns("--json")
+        for item in json.loads(out):
+            for key in ("file", "line", "where", "text"):
+                self.assertIn(key, item)
+
+    def test_tree_with_no_unknowns_says_so(self):
+        os.makedirs(self.path("empty"))
+        code, out = self.run_script(CHECK, "unknowns", "empty")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "No unknowns.")
 
 
 class FixBacklinks(TreeCase):

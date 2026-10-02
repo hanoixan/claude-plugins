@@ -3,7 +3,7 @@
 
 Subcommands
   check SKEL_DIR [--lenient]          validate grammar, traits and bidirectional links (and SYSTEM.md links)
-  unknowns SKEL_DIR [--json]          list every *UNKNOWN* with its location
+  unknowns SKEL_DIR [--json]          list open decisions by kind, each once, with its followers
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
   status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
@@ -48,6 +48,10 @@ BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 DOTTED_RE = re.compile(r"^`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)`?$")
 SYSTEM_FILE = "SYSTEM.md"
+UNKNOWN_NAME_RE = re.compile(r"^\[([a-z0-9][a-z0-9-]*)\](?!\()\s*")
+FOLLOWS_RE = re.compile(r"^follows\s+\[([a-z0-9][a-z0-9-]*)\]\s*\.?\s*", re.I)
+CLAUSE_RE = re.compile(r"\b(Kind|Proposed|Consequence|Unlocks)\s*:\s*", re.I)
+KINDS = ("blocking", "local")
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -96,6 +100,37 @@ class Link:
         self.label, self.text, self.target, self.line, self.section = label, text, target, line, section
 
 
+class Unknown:
+    """One *UNKNOWN* marker: a declaration, or a follower of a named declaration."""
+
+    def __init__(self, line, text, section=None):
+        self.line, self.text, self.section = line, text, section
+        self.name = self.follows = None
+        body = text
+        m = FOLLOWS_RE.match(body)
+        if m:
+            self.follows = m.group(1)
+        else:
+            m = UNKNOWN_NAME_RE.match(body)
+            if m:
+                self.name = m.group(1)
+        if m:
+            body = body[m.end():]
+        parts = CLAUSE_RE.split(body)
+        self.what = parts[0].strip()
+        self.clauses = {}
+        for label, value in zip(parts[1::2], parts[2::2]):
+            self.clauses.setdefault(label.lower(), value.strip())
+
+    @property
+    def kind(self):
+        return re.split(r"[^a-z]", self.clauses.get("kind", "").lower(), maxsplit=1)[0]
+
+    @property
+    def where(self):
+        return heading_path(self.section) if self.section is not None else "(system)"
+
+
 class SkelFile:
     def __init__(self, path, skel_root):
         self.path = os.path.abspath(path)
@@ -108,7 +143,7 @@ class SkelFile:
         self.kind_override = None
         self.root = Section(0, None, "", "", 0)
         self.sections = []
-        self.unknowns = []      # (line, text, section)
+        self.unknowns = []      # [Unknown]
         self.lines = []
         self.diags = []         # (severity, line, msg)
 
@@ -222,7 +257,7 @@ def parse(path, skel_root):
             pending = None
         um = UNKNOWN_RE.search(line)
         if um:
-            sf.unknowns.append((ln, um.group(1).strip(), cur))
+            sf.unknowns.append(Unknown(ln, um.group(1).strip(), cur))
             body = um.group(1).lower()
             if "consequence" not in body or "unlock" not in body:
                 sf.warn(ln, "*UNKNOWN* should state `Consequence:` and `Unlocks:`")
@@ -468,7 +503,7 @@ def read_system(skel_root):
                 continue
             um = UNKNOWN_RE.search(line)
             if um:
-                unknowns.append((ln, um.group(1).strip()))
+                unknowns.append(Unknown(ln, um.group(1).strip()))
             links.extend((ln, text, target) for text, target in LINK_RE.findall(line))
     return unknowns, links, slugs
 
@@ -521,27 +556,69 @@ def heading_path(sec):
     return " > ".join(reversed(parts)) or "(top)"
 
 
+def tree_unknowns(files, system_unknowns):
+    """Every unknown as (file, Unknown): stand-ins in path order, then SYSTEM.md."""
+    pairs = [(sf.rel, u) for sf in sorted(files.values(), key=lambda f: f.rel) for u in sf.unknowns]
+    pairs.extend((SYSTEM_FILE, u) for u in system_unknowns)
+    return pairs
+
+
+def decisions(pairs):
+    """Declarations, each with the followers that name it, and followers that name nothing."""
+    declared = [(rel, u, []) for rel, u in pairs if not u.follows]
+    by_name = {}
+    for _, u, followers in declared:
+        if u.name:
+            by_name.setdefault(u.name, followers)
+    orphans = []
+    for rel, u in pairs:
+        if u.follows:
+            by_name.get(u.follows, orphans).append((rel, u))
+    return declared, orphans
+
+
+def unknown_item(rel, u):
+    return {"file": rel, "line": u.line, "where": u.where, "text": u.text}
+
+
 def cmd_unknowns(args):
     skel_root, files = load_tree(args.skel_dir)
-    items = []
-    for sf in sorted(files.values(), key=lambda f: f.rel):
-        for ln, text, sec in sf.unknowns:
-            items.append({"file": sf.rel, "line": ln, "where": heading_path(sec), "text": text})
-    for ln, text in read_system(skel_root)[0]:
-        items.append({"file": SYSTEM_FILE, "line": ln, "where": "(system)", "text": text})
+    declared, orphans = decisions(tree_unknowns(files, read_system(skel_root)[0]))
     if args.json:
+        items = []
+        for rel, u, followers in declared:
+            item = unknown_item(rel, u)
+            item.update(name=u.name, kind=u.kind, proposed=u.clauses.get("proposed"),
+                        consequence=u.clauses.get("consequence"), unlocks=u.clauses.get("unlocks"),
+                        followers=[{"file": r, "line": f.line, "where": f.where,
+                                    "consequence": f.clauses.get("consequence")} for r, f in followers])
+            items.append(item)
+        for rel, u in orphans:
+            items.append(dict(unknown_item(rel, u), follows=u.follows))
         print(json.dumps(items, indent=2))
         return 0
-    if not items:
+    if not declared and not orphans:
         print("No unknowns.")
         return 0
-    cur = None
-    for it in items:
-        if it["file"] != cur:
-            cur = it["file"]
-            print(f"\n## {cur}")
-        print(f"- L{it['line']} ({it['where']}): {it['text']}")
-    print(f"\n{len(items)} unknowns")
+    groups = [("Blocking", [d for d in declared if d[1].kind == "blocking"]),
+              ("Local", [d for d in declared if d[1].kind == "local"]),
+              ("No kind stated", [d for d in declared if d[1].kind not in KINDS])]
+    for title, group in groups:
+        if not group:
+            continue
+        print(f"{title} ({len(group)}):")
+        for rel, u, followers in group:
+            label = f"[{u.name}] " if u.name else ""
+            print(f"- {label}{rel}:{u.line} ({u.where}): {UNKNOWN_NAME_RE.sub('', u.text)}")
+            for frel, f in followers:
+                print(f"    followed at {frel}:{f.line} ({f.where}): {f.clauses.get('consequence', f.text)}")
+        print()
+    if orphans:
+        print(f"Following an undeclared name ({len(orphans)}):")
+        for rel, u in orphans:
+            print(f"- {rel}:{u.line} ({u.where}): {u.text}")
+        print()
+    print(f"{len(declared)} unknowns")
     return 0
 
 
