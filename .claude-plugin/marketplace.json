@@ -26,6 +26,11 @@
       "name": "ask-questions",
       "source": "./plugins/ask-questions",
       "description": "Ask rather than assume, restated every turn"
+    },
+    {
+      "name": "skel",
+      "source": "./plugins/skel",
+      "description": "Code-shaped prose specs: one stand-in per file, checked links, formal unknowns"
     }
   ]
 }

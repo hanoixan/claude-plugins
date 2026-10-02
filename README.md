@@ -1,13 +1,16 @@
 # hanoixan-claude-plugins
 
-A Claude Code plugin marketplace. Four small plugins, each one built around the same
-observation: **a skill body reaches the model once, when it is invoked, and then sits
-at a fixed point in the conversation while everything after it competes for
-attention.** Guidance that has to hold for a whole session cannot live there.
+A Claude Code plugin marketplace. Five plugins.
 
-Every plugin here therefore pairs its skill (where the long-form reasoning belongs)
-with a hook (which re-states the short form on every turn, at the end of the context
-window, where recency works in its favour).
+Four are small and built around the same observation: **a skill body reaches the model
+once, when it is invoked, and then sits at a fixed point in the conversation while
+everything after it competes for attention.** Guidance that has to hold for a whole
+session cannot live there. Each of those pairs its skill (where the long-form reasoning
+belongs) with a hook (which re-states the short form on every turn, at the end of the
+context window, where recency works in its favour).
+
+The fifth, [skel](#skel), is a different kind of thing: a design format with its own
+grammar, checker and templates, loaded when you ask for it.
 
 ---
 
@@ -26,12 +29,16 @@ Then install whichever plugins you want:
 /plugin install do-next@hanoixan-claude-plugins
 /plugin install plan-batch-execution@hanoixan-claude-plugins
 /plugin install ask-questions@hanoixan-claude-plugins
+/plugin install skel@hanoixan-claude-plugins
 ```
 
 ### Requirements
 
 `bash` and `jq` on `PATH`. Every hook exits quietly if `jq` is missing, so a plugin
 degrades to its skill rather than erroring.
+
+skel has no hooks and needs `python3` instead, for its two scripts. They use only the
+standard library.
 
 ---
 
@@ -43,6 +50,7 @@ degrades to its skill rather than erroring.
 | [do-next](#do-next) | Working a prompt queue | none | yes | none |
 | [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
+| [skel](#skel) | Designing a codebase before writing it | none | yes | none |
 
 ---
 
@@ -108,8 +116,8 @@ It can span many lines.
 parallelism: prompts run in order, each finished and archived before the next starts,
 and trouble anywhere stops the batch with the queue left honest about what remains.
 
-This is the one plugin with no hook. The skill is invoked deliberately, by you, so
-there is nothing to keep alive between turns.
+Of the four small plugins, this is the one with no hook. The skill is invoked
+deliberately, by you, so there is nothing to keep alive between turns.
 
 ```
 /plugin install do-next@hanoixan-claude-plugins
@@ -181,6 +189,57 @@ before it was split out for doing a different job than concision.
 
 ---
 
+## skel
+
+Designs a codebase in prose before any of it is written. A `skel/` folder mirrors the
+project root, and each file in it is a stand-in for one file that will be generated in
+its place:
+
+```
+skel/src/net/client.py.skel.md   ->  src/net/client.py
+skel/data/regions.json.skel.md   ->  data/regions.json
+skel/infra/main.tf.skel.md       ->  infra/main.tf
+```
+
+Inside a code stand-in the headings follow the code: module, then class, then function.
+Every dependency is a link, and every link has a backlink in its target, so a reader
+sees both what a unit needs and what relies on it. Anything not yet decided is a formal
+`*UNKNOWN*:` entry that states its consequence, rather than a guess. The finished tree
+is an implementation plan an agent can follow file by file.
+
+**What ships**
+
+| Piece | Role |
+| --- | --- |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1114 words. |
+| `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
+| `scripts/skel_check.py` | The checker, below. |
+| `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |
+| `assets/templates/` | A starting stand-in for each kind: code, data, infrastructure, and the tree's `SYSTEM.md`. |
+| `assets/examples/undo-system/` | A complete abstract tree for an undo system, which passes the checker. |
+
+**The checker**
+
+```
+skel_check.py check SKEL_DIR            grammar, required fields, links and their backlinks
+skel_check.py unknowns SKEL_DIR         every open decision, with its location
+skel_check.py order SKEL_DIR            build order, dependencies first
+skel_check.py status SKEL_DIR --root .  implemented, pending, or code with no stand-in
+skel_check.py fix-backlinks SKEL_DIR    insert missing `Referred by:` lines
+```
+
+`check` exits non-zero on errors, so it can run in CI or a pre-commit hook to keep the
+tree and the code in step.
+
+No hook. The rules that have to hold are enforced by a checker that can be run at any
+point, so nothing depends on the model still remembering them.
+
+```
+/plugin install skel@hanoixan-claude-plugins
+```
+
+---
+
 ## Editing a plugin's injected text
 
 Every hook reads `${CLAUDE_PLUGIN_DATA}/<file>.txt` first and falls back to the copy
@@ -200,13 +259,16 @@ Find the data directory under `~/.claude/plugins/data/<plugin>-<marketplace>/`.
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json     the four plugin entries
+.claude-plugin/marketplace.json     the five plugin entries
 plugins/<name>/
   .claude-plugin/plugin.json        manifest
   hooks/hooks.json                  hook registrations
   hooks/*.sh                        hook scripts
   hooks/*.txt                       the injected text, editable
   skills/<name>/SKILL.md            the long form
+  skills/skel/references/           skel only: grammar and guides
+  skills/skel/scripts/              skel only: the checker and the mover
+  skills/skel/assets/               skel only: templates and a worked example
 ```
 
 ---

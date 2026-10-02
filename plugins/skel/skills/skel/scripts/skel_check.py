@@ -1,0 +1,666 @@
+#!/usr/bin/env python3
+"""skel_check.py: validate and analyze a Skel specification tree.
+
+Subcommands
+  check SKEL_DIR [--lenient]          validate grammar, traits and bidirectional links
+  unknowns SKEL_DIR [--json]          list every *UNKNOWN* with its location
+  order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
+  status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, or missing
+  fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
+
+Standard library only. Exit code 1 if `check` finds errors.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+
+SKEL_SUFFIX = ".skel.md"
+
+CODE_EXT = set("""py pyi js mjs cjs jsx ts tsx go rs java kt kts scala cs fs vb cpp cc cxx c h hpp hh hxx
+m mm swift rb php lua dart ex exs erl hrl hs ml mli clj cljs groovy sh bash zsh fish ps1 r jl
+vue svelte zig nim cr pl pm code""".split())
+DATA_EXT = set("""json jsonc jsonl ndjson yaml yml toml csv tsv xml parquet avro proto ini env
+graphql gql data""".split())
+IAC_EXT = set("tf tfvars hcl bicep sql nomad iac".split())
+EXTLESS = {"Dockerfile": "iac", "Containerfile": "iac", "Makefile": "code", "Procfile": "iac",
+           "Jenkinsfile": "code", "Vagrantfile": "iac", "Gemfile": "data", "Brewfile": "data",
+           "Justfile": "code", "Rakefile": "code"}
+PLACEHOLDER_EXT = {"code", "data", "iac"}
+LEVEL1 = {"code": "module", "data": "data", "iac": "infrastructure", "resource": "resource"}
+
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+TYPED_RE = re.compile(r"^(module|class|function|symbol|data|infrastructure|resource)\s*:\s*(.+)$", re.I)
+FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+LINK_RE = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
+LABELS = ["Depends on", "Referred by", "Inputs", "Returns", "State changes", "Owns", "Access",
+          "Required", "Failure modes", "Unknowns", "Source", "Data requirements"]
+FIELD_RE = re.compile(
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?(" + "|".join(re.escape(l) for l in LABELS) +
+    r")(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$", re.I)
+CANON = {l.lower(): l for l in LABELS}
+UNKNOWN_RE = re.compile(r"\*{1,2}UNKNOWN\*{1,2}\s*:\s*(.*)")
+INFORMAL_RE = re.compile(r"(\bTBD\b|\bTODO\b|\bFIXME\b|\?\?\?|(?<![*\w])UNKNOWN(?![*\w]))")
+NONE_RE = re.compile(r"^\s*(none|n/?a)\b", re.I)
+BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
+EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+
+LEVEL_FIELDS = {
+    "module": ["Owns", "Access"],
+    "class": ["Inputs", "State changes", "Owns", "Access"],
+    "function": ["Inputs", "Returns", "State changes", "Access"],
+    "symbol": ["Access"],
+}
+
+
+def slugify(text):
+    s = text.strip().lower()
+    s = re.sub(r"[^\w\- ]", "", s)
+    return s.replace(" ", "-")
+
+
+class Section:
+    def __init__(self, level, kind, name, title, line, parent=None):
+        self.level, self.kind, self.name, self.title, self.line = level, kind, name, title, line
+        self.parent = parent
+        self.fields = defaultdict(list)   # label -> [(line, value)]
+        self.links = []                   # field links
+        self.any_links = 0                # any markdown link in prose
+        self.fences = 0
+        self.children = []
+
+    def typed_owner(self):
+        s = self
+        while s is not None and s.kind is None:
+            s = s.parent
+        return s
+
+    def qualified(self):
+        """Dotted name of typed ancestors; the level-1 name is used only for level-1 itself."""
+        if self.level == 1:
+            return self.name
+        parts, s = [], self
+        while s is not None and s.level > 1:
+            if s.kind:
+                parts.append(s.name)
+            s = s.parent
+        return ".".join(reversed(parts)) or self.name
+
+
+class Link:
+    def __init__(self, label, text, target, line, section):
+        self.label, self.text, self.target, self.line, self.section = label, text, target, line, section
+
+
+class SkelFile:
+    def __init__(self, path, skel_root):
+        self.path = os.path.abspath(path)
+        self.rel = os.path.relpath(self.path, skel_root)
+        self.impl_rel = self.rel[: -len(SKEL_SUFFIX)]
+        base = os.path.basename(self.impl_rel)
+        self.ext = base.rsplit(".", 1)[1] if "." in base else ""
+        self.base = base
+        self.kind = None
+        self.kind_override = None
+        self.root = Section(0, None, "", "", 0)
+        self.sections = []
+        self.unknowns = []      # (line, text, section)
+        self.lines = []
+        self.diags = []         # (severity, line, msg)
+
+    @property
+    def abstract(self):
+        return self.ext in PLACEHOLDER_EXT
+
+    def err(self, line, msg):
+        self.diags.append(("error", line, msg))
+
+    def warn(self, line, msg):
+        self.diags.append(("warning", line, msg))
+
+    def all_links(self):
+        out = list(self.root.links)
+        for s in self.sections:
+            out.extend(s.links)
+        return out
+
+    def slugs(self):
+        return {slugify(s.title) for s in self.sections}
+
+
+def infer_kind(sf):
+    if sf.kind_override:
+        return sf.kind_override
+    if not sf.ext:
+        return EXTLESS.get(sf.base, "resource")
+    e = sf.ext.lower()
+    if e in CODE_EXT:
+        return "code"
+    if e in DATA_EXT:
+        return "data"
+    if e in IAC_EXT:
+        return "iac"
+    return "resource"
+
+
+def parse(path, skel_root):
+    sf = SkelFile(path, skel_root)
+    with open(path, encoding="utf-8") as fh:
+        sf.lines = fh.read().split("\n")
+    lines = sf.lines
+    start = 0
+    if lines and lines[0].strip() == "---":
+        for j in range(1, len(lines)):
+            if lines[j].strip() == "---":
+                for l in lines[1:j]:
+                    m = re.match(r"\s*kind\s*:\s*(\w+)", l)
+                    if m:
+                        k = m.group(1).lower()
+                        if k in LEVEL1:
+                            sf.kind_override = k
+                        else:
+                            sf.err(j, f"front matter kind '{k}' must be one of {sorted(LEVEL1)}")
+                start = j + 1
+                break
+    sf.kind = infer_kind(sf)
+
+    stack = [sf.root]
+    cur = sf.root
+    fence = None
+    pending = None  # label awaiting block-form links
+    for idx in range(start, len(lines)):
+        line, ln = lines[idx], idx + 1
+        fm = FENCE_RE.match(line)
+        if fence:
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence) and not fm.group(2).strip():
+                fence = None
+            continue
+        if fm:
+            fence = fm.group(1)
+            if not fm.group(2).strip():
+                sf.err(ln, "code fence has no language tag (use ```text for plain text)")
+            cur.fences += 1
+            pending = None
+            continue
+        hm = HEADING_RE.match(line)
+        if hm:
+            level, title = len(hm.group(1)), hm.group(2)
+            tm = TYPED_RE.match(title)
+            kind = tm.group(1).lower() if tm else None
+            name = tm.group(2).strip() if tm else title
+            while stack[-1].level >= level:
+                stack.pop()
+            sec = Section(level, kind, name, title, ln, stack[-1])
+            stack[-1].children.append(sec)
+            stack.append(sec)
+            sf.sections.append(sec)
+            cur = sec
+            pending = None
+            continue
+        cur.any_links += len(LINK_RE.findall(line))
+        fld = FIELD_RE.match(line)
+        if fld:
+            label, value = CANON[fld.group(1).lower()], fld.group(2)
+            cur.fields[label].append((ln, value))
+            pending = None
+            if label in ("Depends on", "Referred by"):
+                found = LINK_RE.findall(value)
+                for text, target in found:
+                    cur.links.append(Link(label, text, target, ln, cur))
+                if not found:
+                    if value.strip() == "":
+                        pending = (label, ln)
+                    elif not NONE_RE.match(value) and not UNKNOWN_RE.search(value):
+                        sf.err(ln, f"`{label}:` has no markdown link; use [symbol](path) or 'none'")
+        elif pending and BULLET_LINK_RE.match(line):
+            for text, target in LINK_RE.findall(line):
+                cur.links.append(Link(pending[0], text, target, ln, cur))
+        elif pending and line.strip():
+            if not cur.links or cur.links[-1].line < pending[1]:
+                sf.err(pending[1], f"`{pending[0]}:` is empty and not followed by bulleted links")
+            pending = None
+        um = UNKNOWN_RE.search(line)
+        if um:
+            sf.unknowns.append((ln, um.group(1).strip(), cur))
+            body = um.group(1).lower()
+            if "consequence" not in body or "unlock" not in body:
+                sf.warn(ln, "*UNKNOWN* should state `Consequence:` and `Unlocks:`")
+        elif INFORMAL_RE.search(line):
+            sf.warn(ln, f"informal marker '{INFORMAL_RE.search(line).group(1)}'; use *UNKNOWN*: ...")
+    if pending and (not cur.links or cur.links[-1].line < pending[1]):
+        sf.err(pending[1], f"`{pending[0]}:` is empty and not followed by bulleted links")
+    if fence:
+        sf.err(len(lines), "unclosed code fence")
+    return sf
+
+
+def own_fields(sec):
+    """Fields of a typed section plus its untyped descendants (stopping at typed ones)."""
+    agg = defaultdict(list)
+    todo = [sec]
+    while todo:
+        s = todo.pop()
+        for k, v in s.fields.items():
+            agg[k].extend(v)
+        todo.extend(c for c in s.children if c.kind is None)
+    return agg
+
+
+def own_count(sec, attr):
+    total, todo = 0, [sec]
+    while todo:
+        s = todo.pop()
+        total += getattr(s, attr)
+        todo.extend(c for c in s.children if c.kind is None)
+    return total
+
+
+def file_fields(sf):
+    agg = defaultdict(list)
+    for s in [sf.root] + sf.sections:
+        for k, v in s.fields.items():
+            agg[k].extend(v)
+    return agg
+
+
+def find_untyped(sf, title):
+    return [s for s in sf.sections if s.kind is None and s.title.strip().lower() == title.lower()]
+
+
+def validate_file(sf, lenient):
+    miss = sf.warn if lenient else sf.err
+    # naming
+    if not sf.ext and sf.base not in EXTLESS:
+        sf.err(1, f"stand-in name must be <file>.<ext>{SKEL_SUFFIX} (got '{sf.base}{SKEL_SUFFIX}')")
+    # level-1 heading
+    l1 = [s for s in sf.sections if s.level == 1]
+    expected = LEVEL1[sf.kind]
+    if len(l1) != 1:
+        sf.err(l1[1].line if len(l1) > 1 else 1,
+               f"expected exactly one level-1 heading `# {expected}: <name>` (found {len(l1)})")
+    elif l1[0].kind != expected:
+        sf.err(l1[0].line, f"{sf.kind} file must start with `# {expected}: <name>`")
+    if sf.root.fields:
+        ln = min(v[0][0] for v in sf.root.fields.values())
+        sf.warn(ln, "fields before the first heading are not attached to any symbol")
+
+    for s in sf.sections:
+        if s.kind is None:
+            continue
+        if s.level == 1:
+            continue
+        par = s.parent.typed_owner() if s.parent else None
+        pk = par.kind if par else None
+        if sf.kind == "code":
+            ok = ((s.kind == "class" and s.level == 2 and pk == "module") or
+                  (s.kind == "function" and ((s.level == 2 and pk == "module") or (s.level == 3 and pk == "class"))) or
+                  (s.kind == "symbol" and ((s.level == 2 and pk == "module") or (s.level == 3 and pk == "class"))))
+            if not ok:
+                sf.err(s.line, f"`{'#' * s.level} {s.kind}:` not allowed here; hierarchy is "
+                               "# module > ## class|function|symbol > ### function|symbol (under class)")
+        elif sf.kind == "iac":
+            if not (s.kind == "resource" and s.level == 2 and pk == "infrastructure"):
+                sf.err(s.line, "iac files allow only `## resource: <name>` under `# infrastructure:`")
+        else:
+            sf.err(s.line, f"typed heading `{s.kind}:` not allowed in a {sf.kind} file")
+
+    # per-level code fields
+    if sf.kind == "code":
+        for s in sf.sections:
+            if s.kind in LEVEL_FIELDS:
+                f = own_fields(s)
+                for label in LEVEL_FIELDS[s.kind]:
+                    if label not in f:
+                        miss(s.line, f"{s.kind} '{s.name}' is missing `{label}:`")
+
+    # data specifics
+    ff = file_fields(sf)
+    if sf.kind == "data":
+        if "Source" not in ff:
+            sf.err(1, "data file is missing `Source:` (hand-authored | generated | external)")
+        schema = find_untyped(sf, "Schema")
+        if not schema:
+            sf.err(1, "data file is missing a `## Schema` section")
+        elif sum(own_count(s, "fences") for s in schema) == 0:
+            sf.err(schema[0].line, "`## Schema` must contain a fenced block")
+        if any("generat" in v.lower() for _, v in ff.get("Source", [])):
+            gen = find_untyped(sf, "Generation")
+            if not gen:
+                sf.err(ff["Source"][0][0], "generated data needs a `## Generation` section")
+            else:
+                if sum(own_count(s, "any_links") for s in gen) == 0:
+                    sf.err(gen[0].line, "`## Generation` must link to the generating tool(s)")
+                if sum(own_count(s, "fences") for s in gen) == 0:
+                    sf.err(gen[0].line, "`## Generation` must include a fenced development-usage example")
+
+    # iac specifics
+    if sf.kind == "iac":
+        res = [s for s in sf.sections if s.kind == "resource"]
+        if not res:
+            sf.err(1, "iac file must declare at least one `## resource: <name>`")
+        for r in res:
+            f = own_fields(r)
+            if "Data requirements" not in f:
+                miss(r.line, f"resource '{r.name}' is missing `Data requirements:`")
+            if "Referred by" not in f:
+                sf.err(r.line, f"resource '{r.name}' must list consumers with `Referred by:`")
+            elif all(NONE_RE.match(v) for _, v in f["Referred by"]):
+                sf.warn(r.line, f"resource '{r.name}' has no known consumers")
+
+    # five basic questions
+    for label, q in [("Required", "Is this always required?"), ("Failure modes", "Known failure modes"),
+                     ("Depends on", "What does this depend on?"), ("Referred by", "What depends on this?")]:
+        if label not in ff:
+            sf.err(1, f"missing `{label}:` (answers '{q}'); use 'none' if that is the answer")
+    if not sf.unknowns and "Unknowns" not in ff:
+        sf.err(1, "no *UNKNOWN* entries and no `Unknowns: none`")
+
+
+def load_tree(skel_dir):
+    skel_root = os.path.abspath(skel_dir)
+    if not os.path.isdir(skel_root):
+        sys.exit(f"not a directory: {skel_dir}")
+    files = {}
+    for dp, dns, fns in os.walk(skel_root):
+        dns[:] = sorted(d for d in dns if not d.startswith("."))
+        for fn in sorted(fns):
+            if fn.endswith(SKEL_SUFFIX):
+                sf = parse(os.path.join(dp, fn), skel_root)
+                files[sf.path] = sf
+    return skel_root, files
+
+
+def relpath_dot(target, start_dir):
+    rel = os.path.relpath(target, start_dir)
+    return rel if rel.startswith(".") else "./" + rel
+
+
+def resolve(sf, target):
+    path, _, frag = target.partition("#")
+    if path == "":
+        return sf.path, frag
+    return os.path.normpath(os.path.join(os.path.dirname(sf.path), path)), frag
+
+
+def build_edges(skel_root, files, report=True):
+    deps = defaultdict(list)   # (A,B) -> [Link]   A depends on B
+    refs = defaultdict(list)   # (B,A) -> [Link]   B says it is referred by A
+    for sf in files.values():
+        for lk in sf.all_links():
+            if EXTERNAL_RE.match(lk.target):
+                if lk.label == "Referred by" and report:
+                    sf.err(lk.line, "`Referred by:` must point at a .skel.md file, not a URL")
+                continue
+            tgt, frag = resolve(sf, lk.target)
+            if tgt == sf.path:
+                if frag and frag not in sf.slugs() and report:
+                    sf.warn(lk.line, f"fragment '#{frag}' does not match any heading in this file")
+                continue
+            if not os.path.exists(tgt):
+                if report:
+                    sf.err(lk.line, f"link target does not exist: {lk.target}")
+                continue
+            inside = os.path.commonpath([tgt, skel_root]) == skel_root
+            if tgt not in files:
+                if report:
+                    if lk.label == "Referred by":
+                        sf.err(lk.line, "`Referred by:` must point at a .skel.md file")
+                    elif inside:
+                        sf.warn(lk.line, "dependency inside skel/ should target a .skel.md stand-in")
+                continue
+            if frag and frag not in files[tgt].slugs() and report:
+                sf.warn(lk.line, f"fragment '#{frag}' does not match any heading in {lk.target.split('#')[0]}")
+            if lk.label == "Depends on":
+                deps[(sf.path, tgt)].append(lk)
+            else:
+                refs[(sf.path, tgt)].append(lk)
+    return deps, refs
+
+
+def check_bidirectional(files, deps, refs):
+    for (a, b), lks in deps.items():
+        if (b, a) not in refs:
+            rel = relpath_dot(a, os.path.dirname(b))
+            files[a].err(lks[0].line, f"missing backlink: {files[b].rel} needs `Referred by: [...]({rel})` "
+                                      "(run fix-backlinks)")
+    for (b, a), lks in refs.items():
+        if (a, b) not in deps:
+            files[b].err(lks[0].line, f"{files[a].rel} is listed as referring here but has no "
+                                      f"`Depends on:` link to {files[b].rel}")
+
+
+def cmd_check(args):
+    skel_root, files = load_tree(args.skel_dir)
+    for sf in files.values():
+        validate_file(sf, args.lenient)
+    deps, refs = build_edges(skel_root, files)
+    check_bidirectional(files, deps, refs)
+    ne = nw = 0
+    for sf in sorted(files.values(), key=lambda f: f.rel):
+        for sev, ln, msg in sorted(sf.diags, key=lambda d: d[1]):
+            print(f"{os.path.join(args.skel_dir, sf.rel)}:{ln}: {sev}: {msg}")
+            ne += sev == "error"
+            nw += sev == "warning"
+    n_unk = sum(len(f.unknowns) for f in files.values())
+    n_abs = sum(f.abstract for f in files.values())
+    print(f"\n{len(files)} stand-ins, {len(deps)} dependency edges, {n_unk} unknowns, "
+          f"{n_abs} abstract (placeholder extension); {ne} errors, {nw} warnings")
+    return 1 if ne else 0
+
+
+def heading_path(sec):
+    parts, s = [], sec
+    while s is not None and s.level > 0:
+        parts.append(s.title)
+        s = s.parent
+    return " > ".join(reversed(parts)) or "(top)"
+
+
+def cmd_unknowns(args):
+    skel_root, files = load_tree(args.skel_dir)
+    items = []
+    for sf in sorted(files.values(), key=lambda f: f.rel):
+        for ln, text, sec in sf.unknowns:
+            items.append({"file": sf.rel, "line": ln, "where": heading_path(sec), "text": text})
+    sysmd = os.path.join(skel_root, "SYSTEM.md")
+    if os.path.exists(sysmd):
+        with open(sysmd, encoding="utf-8") as fh:
+            fence = False
+            for i, line in enumerate(fh, 1):
+                if FENCE_RE.match(line):
+                    fence = not fence
+                    continue
+                m = None if fence else UNKNOWN_RE.search(line)
+                if m:
+                    items.append({"file": "SYSTEM.md", "line": i, "where": "(system)", "text": m.group(1).strip()})
+    if args.json:
+        print(json.dumps(items, indent=2))
+        return 0
+    if not items:
+        print("No unknowns.")
+        return 0
+    cur = None
+    for it in items:
+        if it["file"] != cur:
+            cur = it["file"]
+            print(f"\n## {cur}")
+        print(f"- L{it['line']} ({it['where']}): {it['text']}")
+    print(f"\n{len(items)} unknowns")
+    return 0
+
+
+def sccs(nodes, edges):
+    index, low, on, stack, out, counter = {}, {}, set(), [], [], [0]
+    sys.setrecursionlimit(max(10000, len(nodes) * 4))
+
+    def visit(v):
+        index[v] = low[v] = counter[0]
+        counter[0] += 1
+        stack.append(v)
+        on.add(v)
+        for w in edges.get(v, ()):
+            if w not in index:
+                visit(w)
+                low[v] = min(low[v], low[w])
+            elif w in on:
+                low[v] = min(low[v], index[w])
+        if low[v] == index[v]:
+            comp = []
+            while True:
+                w = stack.pop()
+                on.discard(w)
+                comp.append(w)
+                if w == v:
+                    break
+            out.append(sorted(comp))
+    for v in sorted(nodes):
+        if v not in index:
+            visit(v)
+    return out  # Tarjan emits components in reverse topological order of the edge direction
+
+
+def cmd_order(args):
+    skel_root, files = load_tree(args.skel_dir)
+    deps, _ = build_edges(skel_root, files, report=False)
+    edges = defaultdict(set)
+    for a, b in deps:
+        edges[a].add(b)
+    comps = sccs(list(files), edges)  # dependencies come out first because edges point at dependencies
+    steps = []
+    for i, comp in enumerate(comps, 1):
+        steps.append({"step": i, "cycle": len(comp) > 1, "files": [{
+            "skel": files[p].rel, "implements": files[p].impl_rel, "kind": files[p].kind,
+            "abstract": files[p].abstract, "unknowns": len(files[p].unknowns),
+            "depends_on": sorted(files[b].rel for b in edges.get(p, ()))} for p in comp]})
+    if args.json:
+        print(json.dumps(steps, indent=2))
+        return 0
+    for st in steps:
+        tag = "  (cycle: implement together, consider breaking it)" if st["cycle"] else ""
+        print(f"{st['step']}.{tag}")
+        for f in st["files"]:
+            flags = []
+            if f["abstract"]:
+                flags.append("ABSTRACT")
+            if f["unknowns"]:
+                flags.append(f"{f['unknowns']} UNKNOWN")
+            fl = f"  [{', '.join(flags)}]" if flags else ""
+            print(f"   {f['implements']}  ({f['kind']}){fl}")
+    return 0
+
+
+IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target", "__pycache__",
+               ".idea", ".vscode", "skel", ".next", "out", "vendor"}
+
+
+def cmd_status(args):
+    skel_root, files = load_tree(args.skel_dir)
+    root = os.path.abspath(args.root)
+    implemented, pending = [], []
+    specified = set()
+    for sf in sorted(files.values(), key=lambda f: f.rel):
+        impl = os.path.join(root, sf.impl_rel)
+        specified.add(os.path.normpath(impl))
+        (implemented if os.path.exists(impl) else pending).append(sf)
+    unspecified = []
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in IGNORE_DIRS and not d.startswith(".")
+                  and os.path.abspath(os.path.join(dp, d)) != skel_root]
+        for fn in fns:
+            ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            if (ext in CODE_EXT | IAC_EXT and ext not in PLACEHOLDER_EXT) or fn in EXTLESS:
+                p = os.path.normpath(os.path.join(dp, fn))
+                if p not in specified:
+                    unspecified.append(os.path.relpath(p, root))
+    print(f"Implemented ({len(implemented)}):")
+    for sf in implemented:
+        print(f"  {sf.impl_rel}")
+    print(f"Pending ({len(pending)}):")
+    for sf in pending:
+        extra = "  [ABSTRACT: adapt first]" if sf.abstract else ""
+        unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
+        print(f"  {sf.impl_rel}{extra}{unk}")
+    print(f"Code/IaC files with no stand-in ({len(unspecified)}):")
+    for p in sorted(unspecified):
+        print(f"  {p}")
+    return 0
+
+
+def cmd_fix_backlinks(args):
+    skel_root, files = load_tree(args.skel_dir)
+    deps, refs = build_edges(skel_root, files, report=False)
+    inserts = defaultdict(list)  # target path -> [(line_index, text)]
+    for (a, b), lks in sorted(deps.items()):
+        if (b, a) in refs:
+            continue
+        tf = files[b]
+        frags = {lk.target.partition("#")[2] for lk in lks} - {""}
+        target_secs = [s for s in tf.sections if slugify(s.title) in frags] or \
+                      [s for s in tf.sections if s.level == 1][:1]
+        sym_secs = {lk.section.typed_owner() or lk.section for lk in lks}
+        rel = relpath_dot(a, os.path.dirname(b))
+        entries = set()
+        for s in sym_secs:
+            if s.level == 0:
+                entries.add((files[a].impl_rel, ""))
+            else:
+                entries.add((s.qualified(), "#" + slugify(s.title) if s.level > 1 else ""))
+        for ts in target_secs:
+            idx = section_end(tf, ts)
+            for nm, frag in sorted(entries):
+                inserts[b].append((idx, f"- **Referred by:** [{nm}]({rel}{frag})"))
+    if not inserts:
+        print("All backlinks present.")
+        return 0
+    for path, items in sorted(inserts.items()):
+        sf = files[path]
+        print(f"{sf.rel}:")
+        for idx, text in items:
+            print(f"  + L{idx + 1}: {text}")
+        if args.write:
+            lines = list(sf.lines)
+            for idx, text in reversed(sorted(items, key=lambda x: x[0])):
+                lines.insert(idx, text)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines))
+    if not args.write:
+        print("\n(dry run; pass --write to apply)")
+    return 0
+
+
+def section_end(sf, sec):
+    """Line index (0-based) just after the section's own body, before the next heading."""
+    later = [s.line for s in sf.sections if s.line > sec.line]
+    end = (min(later) - 1) if later else len(sf.lines)
+    # place directly after last field line within the section body, else before trailing blanks
+    last_field = None
+    for i in range(sec.line, end):
+        if FIELD_RE.match(sf.lines[i]) or (BULLET_LINK_RE.match(sf.lines[i]) and last_field is not None
+                                           and i == last_field + 1):
+            last_field = i
+    if last_field is not None:
+        return last_field + 1
+    while end > sec.line and not sf.lines[end - 1].strip():
+        end -= 1
+    return end
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("check"); p.add_argument("skel_dir"); p.add_argument("--lenient", action="store_true",
+                                                                            help="missing per-level fields are warnings")
+    p = sub.add_parser("unknowns"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("order"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("status"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)
+    p = sub.add_parser("fix-backlinks"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
+    args = ap.parse_args()
+    fn = {"check": cmd_check, "unknowns": cmd_unknowns, "order": cmd_order, "status": cmd_status,
+          "fix-backlinks": cmd_fix_backlinks}[args.cmd]
+    sys.exit(fn(args))
+
+
+if __name__ == "__main__":
+    main()
