@@ -73,6 +73,36 @@ class TreeCase(unittest.TestCase):
         self.assertIn(fragment, out)
 
 
+class MiniTree(unittest.TestCase):
+    """A tree built from scratch. The stand-ins are stubs: only their paths, front matter and links matter."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="skel-mini-")
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        os.makedirs(os.path.join(self.dir, "skel"))
+
+    def file(self, rel):
+        return os.path.join(self.dir, "skel", rel + ".skel.md")
+
+    def stand_in(self, rel, depends=(), front=None):
+        path = self.file(rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lines = ["---", *front, "---"] if front else []
+        lines += [f"# module: {os.path.basename(rel)}", ""]
+        for dep in depends:
+            lines.append(f"- **Depends on:** [{dep}]({os.path.relpath(self.file(dep), os.path.dirname(path))})")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+    def read(self, rel):
+        with open(self.file(rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    def run_check(self, *args):
+        proc = subprocess.run([sys.executable, CHECK, *args], cwd=self.dir, capture_output=True, text=True)
+        return proc.returncode, proc.stdout + proc.stderr
+
+
 class CheckAcceptsTheExample(TreeCase):
     def test_pristine_example_has_no_errors_or_warnings(self):
         code, out = self.check()
@@ -611,6 +641,120 @@ class UntestedUnits(TreeCase):
         # history.code depends on command already, and it is product, not test.
         _, out = self.check()
         self.assertIn(self.WARNING, out)
+
+
+class InferRoles(MiniTree):
+    def infer(self, *args):
+        return self.run_check("infer-roles", "skel", *args)
+
+    def test_proposes_roles_from_names_and_folders(self):
+        for rel in ("CMakeLists.txt", "src/a.py", "tests/a_test.py", "src/test_b.py", "tests/helper.py",
+                    "cmake/Warnings.cmake"):
+            self.stand_in(rel)
+        _, out = self.infer()
+        self.assertIn("CMakeLists.txt.skel.md:\n  + role: manifest", out)
+        self.assertIn("cmake/Warnings.cmake.skel.md:\n  + role: manifest", out)
+        self.assertIn("src/a.py.skel.md:\n  + role: product", out)
+        self.assertIn("tests/a_test.py.skel.md:\n  + role: test", out)
+        self.assertIn("src/test_b.py.skel.md:\n  + role: test", out)
+        self.assertIn("tests/helper.py.skel.md:\n  + role: test", out)
+
+    def test_dry_run_writes_nothing(self):
+        self.stand_in("src/a.py")
+        before = self.read("src/a.py")
+        _, out = self.infer()
+        self.assertIn("(dry run; pass --write to apply)", out)
+        self.assertEqual(self.read("src/a.py"), before)
+
+    def test_write_adds_front_matter(self):
+        self.stand_in("src/a.py")
+        self.infer("--write")
+        self.assertTrue(self.read("src/a.py").startswith("---\nrole: product\n---\n# module: a.py\n"))
+
+    def test_write_keeps_existing_front_matter(self):
+        self.stand_in("deploy/stack.yml", front=["kind: iac"])
+        self.infer("--write")
+        self.assertTrue(self.read("deploy/stack.yml").startswith("---\nkind: iac\nrole: product\n---\n"))
+
+    def test_existing_role_is_left_alone(self):
+        self.stand_in("src/a.py", front=["role: test"])
+        _, out = self.infer()
+        self.assertNotIn("src/a.py.skel.md", out)
+
+    def test_tools_folder_is_unsure_and_never_written(self):
+        self.stand_in("tools/gen.py")
+        _, out = self.infer("--write")
+        self.assertIn("tools/gen.py.skel.md:\n  ? role: product  (unsure: under tools/, so it may not be delivered)", out)
+        self.assertFalse(self.read("tools/gen.py").startswith("---"))
+
+    def test_test_folder_file_that_product_depends_on_is_unsure(self):
+        self.stand_in("tests/shared.py")
+        self.stand_in("src/a.py", depends=["tests/shared.py"])
+        _, out = self.infer("--write")
+        self.assertIn("tests/shared.py.skel.md:\n  ? role: test  "
+                      "(unsure: product stand-in src/a.py.skel.md depends on it)", out)
+        self.assertFalse(self.read("tests/shared.py").startswith("---"))
+
+    def test_source_is_paired_with_its_header(self):
+        self.stand_in("src/file_map.hpp")
+        self.stand_in("src/file_map_posix.cpp")
+        _, out = self.infer("--write")
+        self.assertIn("src/file_map_posix.cpp.skel.md:\n  + role: product\n  + unit: ./file_map.hpp.skel.md", out)
+        self.assertTrue(self.read("src/file_map_posix.cpp").startswith(
+            "---\nrole: product\nunit: ./file_map.hpp.skel.md\n---\n"))
+
+    def test_longest_matching_header_wins(self):
+        for rel in ("src/file.hpp", "src/file_map.hpp", "src/file_map_posix.cpp"):
+            self.stand_in(rel)
+        _, out = self.infer()
+        self.assertIn("  + unit: ./file_map.hpp.skel.md", out)
+
+    def test_header_name_must_end_at_a_word_boundary(self):
+        self.stand_in("src/file.hpp")
+        self.stand_in("src/filemap.cpp")
+        _, out = self.infer()
+        self.assertNotIn("unit:", out)
+
+    def test_two_fitting_headers_are_unsure(self):
+        for rel in ("src/x.h", "src/x.hpp", "src/x.cpp"):
+            self.stand_in(rel)
+        _, out = self.infer("--write")
+        self.assertIn("  ? unit: ./x.h.skel.md  (unsure: more than one header fits: x.h.skel.md, x.hpp.skel.md)", out)
+        self.assertNotIn("unit:", self.read("src/x.cpp"))
+
+    def test_source_is_not_paired_with_a_header_of_another_role(self):
+        self.stand_in("src/x.hpp", front=["role: test"])
+        self.stand_in("src/x.cpp")
+        _, out = self.infer()
+        self.assertIn("  ? unit: ./x.hpp.skel.md  (unsure: the header's role is test, this one's is product)", out)
+
+    def test_summary_counts_writes_and_unsure(self):
+        self.stand_in("src/a.py")
+        self.stand_in("tools/gen.py")
+        _, out = self.infer()
+        self.assertIn("1 to write, 1 unsure (never written; set those by hand)", out)
+
+    def test_second_write_changes_nothing(self):
+        self.stand_in("src/file_map.hpp")
+        self.stand_in("src/file_map_posix.cpp")
+        self.infer("--write")
+        after_first = self.read("src/file_map_posix.cpp")
+        _, out = self.infer("--write")
+        self.assertIn("Nothing to infer.", out)
+        self.assertEqual(self.read("src/file_map_posix.cpp"), after_first)
+
+
+class InferRolesOnTheExample(TreeCase):
+    def test_stripped_example_passes_check_again_after_write(self):
+        for dp, _, fns in os.walk(self.path("skel")):
+            for fn in fns:
+                if fn.endswith(".skel.md"):
+                    self.front(os.path.relpath(os.path.join(dp, fn), self.dir))
+        self.assertEqual(self.check()[0], 1)
+        self.run_script(CHECK, "infer-roles", "skel", "--write")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
 
 
 class FixBacklinks(TreeCase):

@@ -7,6 +7,7 @@ Subcommands
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
   status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
+  infer-roles SKEL_DIR [--write]      propose role: and unit: front matter (dry-run by default)
 
 Standard library only. Exit code 1 if `check` finds errors.
 """
@@ -57,6 +58,16 @@ CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unl
 KINDS = ("blocking", "local")
 ROLES = ("product", "test", "manifest")
 META_RE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*)$")
+MANIFEST_NAMES = {"CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json", "Makefile", "makefile",
+                  "GNUmakefile", "Justfile", "Rakefile", "Gemfile", "package.json", "tsconfig.json",
+                  "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Cargo.toml", "go.mod",
+                  "build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml", "meson.build",
+                  "BUILD", "BUILD.bazel", "WORKSPACE"}
+TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
+TEST_NAME_RE = re.compile(r"^(test_.+|.+_test\.[^.]+|.+\.(test|spec)\.[^.]+|.+Test\.[^.]+|conftest\.py)$")
+UNSURE_DIRS = {"tools", "scripts", "examples"}
+SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
+HEADER_EXT = {"h", "hh", "hpp", "hxx"}
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -841,6 +852,104 @@ def cmd_status(args):
     return 0
 
 
+def infer_role(sf):
+    """(role, reason it is unsure or None), judged from the implemented file's path alone."""
+    parts = sf.impl_rel.split(os.sep)
+    name, dirs = parts[-1], parts[:-1]
+    if name in MANIFEST_NAMES or name.endswith(".cmake"):
+        return "manifest", None
+    if TEST_NAME_RE.match(name) or any(d in TEST_DIRS for d in dirs):
+        return "test", None
+    for d in dirs:
+        if d in UNSURE_DIRS:
+            return "product", f"under {d}/, so it may not be delivered"
+    return "product", None
+
+
+def infer_unit(sf, files):
+    """(header stand-in this source is built with or None, reason it is unsure or None)."""
+    if sf.ext.lower() not in SOURCE_EXT:
+        return None, None
+    stem = sf.base.rsplit(".", 1)[0]
+    fits = []
+    for other in files.values():
+        if os.path.dirname(other.path) != os.path.dirname(sf.path) or other.ext.lower() not in HEADER_EXT:
+            continue
+        ostem = other.base.rsplit(".", 1)[0]
+        if stem == ostem or (stem.startswith(ostem) and stem[len(ostem)] in "_-."):
+            fits.append((len(ostem), other))
+    if not fits:
+        return None, None
+    longest = max(n for n, _ in fits)
+    winners = sorted((o for n, o in fits if n == longest), key=lambda o: o.path)
+    reason = None
+    if len(winners) > 1:
+        reason = "more than one header fits: " + ", ".join(os.path.basename(o.path) for o in winners)
+    return winners[0], reason
+
+
+def add_front_matter(sf, pairs):
+    """Write `key: value` lines into the stand-in's front matter, creating the block if it has none."""
+    lines = list(sf.lines)
+    new = [f"{key}: {value}" for key, value in pairs]
+    close = None
+    if lines and lines[0].strip() == "---":
+        close = next((j for j in range(1, len(lines)) if lines[j].strip() == "---"), None)
+    if close is None:
+        lines = ["---", *new, "---"] + lines
+    else:
+        lines[close:close] = new
+    with open(sf.path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+
+def cmd_infer_roles(args):
+    skel_root, files = load_tree(args.skel_dir)
+    deps, _ = build_edges(skel_root, files, report=False)
+    roles, unsure = {}, {}
+    for sf in files.values():
+        roles[sf.path], unsure[sf.path] = (sf.role, None) if sf.role is not None else infer_role(sf)
+    for (a, b) in sorted(deps):
+        if files[b].role is None and roles[b] == "test" and roles[a] == "product" and not unsure[b]:
+            unsure[b] = f"product stand-in {files[a].rel} depends on it"
+    n_write = n_unsure = 0
+    for sf in sorted(files.values(), key=lambda f: f.rel):
+        sure, doubts = [], []
+        if sf.role is None:
+            if unsure[sf.path]:
+                doubts.append(("role", roles[sf.path], unsure[sf.path]))
+            else:
+                sure.append(("role", roles[sf.path]))
+        if "unit" not in sf.meta:
+            header, reason = infer_unit(sf, files)
+            if header is not None:
+                rel = "./" + os.path.basename(header.path)
+                if not reason and roles[header.path] != roles[sf.path]:
+                    reason = f"the header's role is {roles[header.path]}, this one's is {roles[sf.path]}"
+                if reason:
+                    doubts.append(("unit", rel, reason))
+                else:
+                    sure.append(("unit", rel))
+        if not sure and not doubts:
+            continue
+        print(f"{sf.rel}:")
+        for key, value in sure:
+            print(f"  + {key}: {value}")
+        for key, value, reason in doubts:
+            print(f"  ? {key}: {value}  (unsure: {reason})")
+        n_write += len(sure)
+        n_unsure += len(doubts)
+        if args.write and sure:
+            add_front_matter(sf, sure)
+    if not n_write and not n_unsure:
+        print("Nothing to infer.")
+        return 0
+    print(f"\n{n_write} to write, {n_unsure} unsure (never written; set those by hand)")
+    if not args.write:
+        print("(dry run; pass --write to apply)")
+    return 0
+
+
 def cmd_fix_backlinks(args):
     skel_root, files = load_tree(args.skel_dir)
     deps, refs = build_edges(skel_root, files, report=False)
@@ -909,9 +1018,10 @@ def main():
     p = sub.add_parser("order"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("status"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)
     p = sub.add_parser("fix-backlinks"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
+    p = sub.add_parser("infer-roles"); p.add_argument("skel_dir"); p.add_argument("--write", action="store_true")
     args = ap.parse_args()
     fn = {"check": cmd_check, "unknowns": cmd_unknowns, "order": cmd_order, "status": cmd_status,
-          "fix-backlinks": cmd_fix_backlinks}[args.cmd]
+          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles}[args.cmd]
     sys.exit(fn(args))
 
 
