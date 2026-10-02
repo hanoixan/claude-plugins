@@ -49,8 +49,8 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles skel --write
    ```
 
-   It never writes a role it is unsure of. Set those by hand in the front matter, and ask the user about any you cannot settle.
-4. **Fill each stand-in top-down** from the templates in `assets/templates/`. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
+   It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
+4. **Fill each stand-in top-down** from the templates in `assets/templates/`, keeping the front matter step 3 wrote. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
 5. **Generate the backlinks** and review them:
 
    ```bash

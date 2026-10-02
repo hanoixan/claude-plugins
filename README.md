@@ -211,7 +211,7 @@ is an implementation plan an agent can follow file by file.
 
 | Piece | Role |
 | --- | --- |
-| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1419 words. |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1469 words. |
 | `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
 | `scripts/skel_check.py` | The checker, below. |
 | `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |

@@ -23,7 +23,8 @@ import sys
 LINK_RE = re.compile(r"(\[[^\]]*\]\()(\s*)([^)\s#]*)(#[^)\s]*)?((?:\s+\"[^\"]*\")?\s*\))")
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
-UNIT_RE = re.compile(r"^(\s*unit\s*:\s*)(\S+)(\s*)$")
+UNIT_RE = re.compile(r"^(\s*unit\s*:\s*)(\S+)(\s*)$", re.I)
+META_RE = re.compile(r"^\s*[A-Za-z_]+\s*:")
 
 
 def expand(pairs):
@@ -50,9 +51,14 @@ def expand(pairs):
 def rewrite(text, old_loc, new_loc, mapping):
     out, fence, changed = [], None, 0
     lines = text.split("\n")
-    front_end = 0
+    front_end = 0       # front matter is closed by `---` after nothing but `key: value` and blank lines
     if lines and lines[0].strip() == "---":
-        front_end = next((j for j in range(1, len(lines)) if lines[j].strip() == "---"), 0)
+        for j in range(1, len(lines)):
+            if lines[j].strip() == "---":
+                front_end = j
+                break
+            if lines[j].strip() and not META_RE.match(lines[j]):
+                break
 
     def moved(path):
         """The relative path to write instead, or None when this one still holds."""
@@ -82,7 +88,7 @@ def rewrite(text, old_loc, new_loc, mapping):
             if rel is not None:
                 changed += 1
                 line = f"{um.group(1)}{rel}{um.group(3)}"
-            out.append(line)
+            out.append(LINK_RE.sub(sub, line))
             continue
         fm = FENCE_RE.match(line)
         if fence:

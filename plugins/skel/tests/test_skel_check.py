@@ -84,11 +84,11 @@ class MiniTree(unittest.TestCase):
     def file(self, rel):
         return os.path.join(self.dir, "skel", rel + ".skel.md")
 
-    def stand_in(self, rel, depends=(), front=None):
+    def stand_in(self, rel, depends=(), front=None, body=()):
         path = self.file(rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         lines = ["---", *front, "---"] if front else []
-        lines += [f"# module: {os.path.basename(rel)}", ""]
+        lines += [f"# module: {os.path.basename(rel)}", "", *body]
         for dep in depends:
             lines.append(f"- **Depends on:** [{dep}]({os.path.relpath(self.file(dep), os.path.dirname(path))})")
         with open(path, "w", encoding="utf-8") as fh:
@@ -101,6 +101,16 @@ class MiniTree(unittest.TestCase):
     def run_check(self, *args):
         proc = subprocess.run([sys.executable, CHECK, *args], cwd=self.dir, capture_output=True, text=True)
         return proc.returncode, proc.stdout + proc.stderr
+
+    def untested(self):
+        """Relative paths that `untested_units` reports, called directly: the stubs would not pass `check`."""
+        sys.path.insert(0, os.path.dirname(CHECK))
+        self.addCleanup(sys.path.remove, os.path.dirname(CHECK))
+        import skel_check
+        skel_root, files = skel_check.load_tree(os.path.join(self.dir, "skel"))
+        deps, _ = skel_check.build_edges(skel_root, files, report=False)
+        primary = skel_check.resolve_units(files, report=False)
+        return sorted(sf.rel for sf in skel_check.untested_units(files, deps, primary))
 
 
 class CheckAcceptsTheExample(TreeCase):
@@ -571,9 +581,56 @@ class Roles(TreeCase):
         self.assertIn("0 errors, 0 warnings", out)
 
     def test_kind_override_still_works_beside_role(self):
-        self.front(SNAPSHOT, "role: product", "kind: data")
+        moved = "skel/infra/stack.yml.skel.md"      # .yml would be read as data without the override
+        self.run_script(MV, "skel", STORE, moved)
+        self.assertCheckFails("data file must start with `# data: <name>`")
+        self.front(moved, "role: product", "kind: iac")
         code, out = self.check()
         self.assertEqual(code, 0, out)
+
+    def test_invalid_role_is_a_warning_when_lenient(self):
+        self.front(TRANSACTION, "role: helper")
+        code, out = self.check("--lenient")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: front matter role 'helper' must be one of", out)
+
+    def test_untested_is_not_for_manifests_either(self):
+        self.front(TRANSACTION, "role: manifest", "untested: not needed")
+        self.assertCheckFails("`untested:` is only for `role: product` stand-ins")
+
+    def test_duplicate_key_warns_and_the_first_is_used(self):
+        self.front(TRANSACTION, "role: product", "Role: helper")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: front matter key 'role' is given twice; the first is used", out)
+
+    def test_unknown_key_warns(self):
+        self.front(TRANSACTION, "role: product", "untestd: no need")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: unknown front matter key 'untestd' (known: kind, role, unit, untested)", out)
+
+    def test_quotes_and_a_trailing_comment_are_ignored(self):
+        self.front(TRANSACTION, 'role: "product"   # delivered')
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 errors, 0 warnings", out)
+
+    def test_unclosed_front_matter_is_named_as_the_problem(self):
+        self.replace(TRANSACTION, FRONT, "---\nrole: product\n")
+        self.assertCheckFails("front matter is not closed with `---`")
+
+    def test_rules_in_the_body_are_not_front_matter(self):
+        self.replace(TRANSACTION, FRONT, "---\n\nA note above the module.\n\n---\n")
+        code, out = self.check()
+        self.assertIn("missing `role:` in front matter", out)
+        self.assertNotIn("level-1 heading", out)
+
+    def test_product_that_depends_on_a_test_stand_in_warns(self):
+        self.front(COMMAND, "role: test")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: a product stand-in depends on test stand-in undo/command.code.skel.md", out)
 
     def test_invalid_kind_is_reported_on_its_own_line(self):
         self.front(SNAPSHOT, "role: product", "kind: sideways")
@@ -643,6 +700,34 @@ class UntestedUnits(TreeCase):
         self.assertIn(self.WARNING, out)
 
 
+class UntestedUnitRules(MiniTree):
+    P, T_ = ["role: product"], ["role: test"]
+    CLASS, SYMBOL = ["## class: C"], ["## symbol: S"]
+
+    def test_unit_with_only_symbols_is_not_reported(self):
+        self.stand_in("src/consts.py", front=self.P, body=self.SYMBOL)
+        self.assertEqual(self.untested(), [])
+
+    def test_data_unit_is_not_reported(self):
+        self.stand_in("data/table.json", front=self.P, body=self.CLASS)
+        self.assertEqual(self.untested(), [])
+
+    def test_class_in_a_non_primary_member_is_reported_on_the_primary(self):
+        self.stand_in("src/a.hpp", front=self.P, body=self.SYMBOL)
+        self.stand_in("src/a.cpp", front=["role: product", "unit: ./a.hpp.skel.md"], body=self.CLASS)
+        self.assertEqual(self.untested(), ["src/a.hpp.skel.md"])
+
+    def test_test_code_that_depends_on_the_unit_covers_it(self):
+        self.stand_in("src/a.py", front=self.P, body=self.CLASS)
+        self.stand_in("tests/a_test.py", depends=["src/a.py"], front=self.T_)
+        self.assertEqual(self.untested(), [])
+
+    def test_test_data_that_depends_on_the_unit_does_not_cover_it(self):
+        self.stand_in("tools/gen.py", front=self.P, body=self.CLASS)
+        self.stand_in("tests/cases.json", depends=["tools/gen.py"], front=self.T_)
+        self.assertEqual(self.untested(), ["tools/gen.py.skel.md"])
+
+
 class InferRoles(MiniTree):
     def infer(self, *args):
         return self.run_check("infer-roles", "skel", *args)
@@ -697,15 +782,16 @@ class InferRoles(MiniTree):
 
     def test_source_is_paired_with_its_header(self):
         self.stand_in("src/file_map.hpp")
-        self.stand_in("src/file_map_posix.cpp")
+        self.stand_in("src/file_map_posix.cpp", depends=["src/file_map.hpp"])
         _, out = self.infer("--write")
         self.assertIn("src/file_map_posix.cpp.skel.md:\n  + role: product\n  + unit: ./file_map.hpp.skel.md", out)
         self.assertTrue(self.read("src/file_map_posix.cpp").startswith(
             "---\nrole: product\nunit: ./file_map.hpp.skel.md\n---\n"))
 
     def test_longest_matching_header_wins(self):
-        for rel in ("src/file.hpp", "src/file_map.hpp", "src/file_map_posix.cpp"):
-            self.stand_in(rel)
+        self.stand_in("src/file.hpp")
+        self.stand_in("src/file_map.hpp")
+        self.stand_in("src/file_map_posix.cpp", depends=["src/file_map.hpp"])
         _, out = self.infer()
         self.assertIn("  + unit: ./file_map.hpp.skel.md", out)
 
@@ -723,10 +809,124 @@ class InferRoles(MiniTree):
         self.assertNotIn("unit:", self.read("src/x.cpp"))
 
     def test_source_is_not_paired_with_a_header_of_another_role(self):
-        self.stand_in("src/x.hpp", front=["role: test"])
+        self.stand_in("src/foo.h")
+        self.stand_in("src/foo_test.cc", depends=["src/foo.h"])
+        _, out = self.infer()
+        self.assertIn("src/foo_test.cc.skel.md:\n  + role: test\n", out)
+        self.assertNotIn("unit:", out)
+
+    def test_same_name_header_is_paired_without_a_link(self):
+        self.stand_in("src/x.hpp")
         self.stand_in("src/x.cpp")
         _, out = self.infer()
-        self.assertIn("  ? unit: ./x.hpp.skel.md  (unsure: the header's role is test, this one's is product)", out)
+        self.assertIn("src/x.cpp.skel.md:\n  + role: product\n  + unit: ./x.hpp.skel.md", out)
+
+    def test_prefix_match_without_a_link_is_unsure(self):
+        self.stand_in("src/file.hpp")
+        self.stand_in("src/file_map.cpp")
+        _, out = self.infer("--write")
+        self.assertIn("  ? unit: ./file.hpp.skel.md  (unsure: its name only begins with file.hpp, "
+                      "and no `Depends on:` link confirms the pairing)", out)
+        self.assertNotIn("unit:", self.read("src/file_map.cpp"))
+
+    def test_same_name_header_in_another_folder_is_paired_when_linked(self):
+        self.stand_in("include/file_map.hpp")
+        self.stand_in("src/file_map.cpp", depends=["include/file_map.hpp"])
+        _, out = self.infer()
+        self.assertIn("  + unit: ../include/file_map.hpp.skel.md", out)
+
+    def test_same_name_header_in_another_folder_is_ignored_without_a_link(self):
+        self.stand_in("include/file_map.hpp")
+        self.stand_in("src/file_map.cpp")
+        _, out = self.infer()
+        self.assertNotIn("unit:", out)
+
+    def test_header_that_is_itself_in_a_unit_is_unsure(self):
+        self.stand_in("src/core.hpp", front=["role: product"])
+        self.stand_in("src/a.hpp", front=["role: product", "unit: ./core.hpp.skel.md"])
+        self.stand_in("src/a.cpp")
+        _, out = self.infer("--write")
+        self.assertIn("  ? unit: ./a.hpp.skel.md  (unsure: a.hpp is itself part of a unit; "
+                      "name that unit's primary instead)", out)
+        self.assertNotIn("unit:", self.read("src/a.cpp"))
+
+    def test_unit_is_not_written_while_the_role_is_unsure(self):
+        self.stand_in("tools/gen.hpp")
+        self.stand_in("tools/gen.cpp")
+        self.infer("--write")
+        self.assertFalse(self.read("tools/gen.cpp").startswith("---"))
+
+    def test_manifest_names(self):
+        names = ["Makefile", "package.json", "pyproject.toml", "Cargo.toml", "go.mod", "go.sum", "pom.xml",
+                 "settings.gradle.kts", "requirements-dev.txt", "App.csproj", "All.sln", "lib.gemspec",
+                 "tox.ini", "jest.config.js", "vcpkg.json", "cmake/Find.cmake"]
+        for name in names:
+            self.stand_in(name)
+        _, out = self.infer()
+        for name in names:
+            self.assertIn(f"{name}.skel.md:\n  + role: manifest", out)
+
+    def test_test_folders_in_any_case(self):
+        rels = ["Tests/FooTests.cs", "Test/a.py", "src/__tests__/a.js", "App.Tests/Foo.cs",
+                "pkg/testdata/sample.json", "src/test/java/FooTest.java", "web/__mocks__/api.js"]
+        for rel in rels:
+            self.stand_in(rel)
+        _, out = self.infer()
+        for rel in rels:
+            self.assertIn(f"{rel}.skel.md:\n  + role: test", out)
+
+    def test_strong_test_names_anywhere(self):
+        rels = ["pkg/store_test.go", "src/a.test.ts", "src/a.spec.ts", "src/test_b.py", "conftest.py",
+                "lib/foo_spec.rb", "e2e/login.cy.ts"]
+        for rel in rels:
+            self.stand_in(rel)
+        _, out = self.infer()
+        for rel in rels:
+            self.assertIn(f"{rel}.skel.md:\n  + role: test", out)
+
+    def test_weak_test_name_outside_a_test_folder_is_unsure(self):
+        self.stand_in("src/main/java/LoadTest.java")
+        _, out = self.infer("--write")
+        self.assertIn("src/main/java/LoadTest.java.skel.md:\n  ? role: test  (unsure: its name ends in Test, "
+                      "Tests or IT, but it is not in a test folder)", out)
+        self.assertFalse(self.read("src/main/java/LoadTest.java").startswith("---"))
+
+    def test_spec_folder_without_a_test_name_is_unsure(self):
+        self.stand_in("src/spec/openapi.yaml")
+        _, out = self.infer()
+        self.assertIn("  ? role: test  (unsure: a spec/ folder can hold specifications as well as tests)", out)
+
+    def test_scripts_examples_and_benches_are_unsure(self):
+        for rel in ("scripts/deploy.sh", "examples/demo.py", "benches/speed.rs"):
+            self.stand_in(rel)
+        _, out = self.infer()
+        self.assertIn("scripts/deploy.sh.skel.md:\n  ? role: product  (unsure: under scripts/", out)
+        self.assertIn("examples/demo.py.skel.md:\n  ? role: product  (unsure: under examples/", out)
+        self.assertIn("benches/speed.rs.skel.md:\n  ? role: product  (unsure: under benches/", out)
+
+    def test_test_name_under_tools_is_still_unsure(self):
+        self.stand_in("tools/test_gen.py")
+        _, out = self.infer()
+        self.assertIn("tools/test_gen.py.skel.md:\n  ? role: test  (unsure: under tools/", out)
+
+    def malformed(self, text):
+        path = self.file("src/a.py")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        _, out = self.infer("--write")
+        self.assertIn("src/a.py.skel.md:\n  ? front matter  (unsure: it opens with `---` and is not closed; "
+                      "fix it by hand)", out)
+        self.assertEqual(self.read("src/a.py"), text)
+
+    def test_unclosed_front_matter_is_never_written_into(self):
+        self.malformed("---\nrole: test\nuntested: nope\n# module: a\n")
+
+    def test_unclosed_front_matter_with_a_later_rule_is_never_written_into(self):
+        self.malformed("---\nrole: test\n# module: a\n\nProse.\n\n---\n\nMore.\n")
+
+    def test_body_that_opens_with_a_rule_is_never_written_into(self):
+        self.malformed("---\n\nA note.\n\n---\n# module: a\n")
 
     def test_summary_counts_writes_and_unsure(self):
         self.stand_in("src/a.py")
@@ -736,7 +936,7 @@ class InferRoles(MiniTree):
 
     def test_second_write_changes_nothing(self):
         self.stand_in("src/file_map.hpp")
-        self.stand_in("src/file_map_posix.cpp")
+        self.stand_in("src/file_map_posix.cpp", depends=["src/file_map.hpp"])
         self.infer("--write")
         after_first = self.read("src/file_map_posix.cpp")
         _, out = self.infer("--write")
@@ -823,14 +1023,31 @@ class Batches(MiniTree):
                                 "depends_on": ["src/err.hpp"]})
 
     def test_tree_without_roles_is_batched_as_product(self):
-        for rel in ("src/err.hpp", "src/fm.hpp", "tests/fm_test.cpp"):
+        for rel in ("src/err.hpp", "src/fm.hpp", "src/fm_posix.cpp", "tests/fm_test.cpp", "CMakeLists.txt"):
             text = self.read(rel)
             with open(self.file(rel), "w", encoding="utf-8") as fh:
                 fh.write(text.split("---\n", 2)[2])
-        code, out = self.batches()
+        code, out = self.batches("--json")
         self.assertEqual(code, 0, out)
-        self.assertEqual(self.batch_of(out, "src/err.hpp"), 1)
-        self.assertIn("  tests/fm_test.cpp\n", out + "\n")
+        data = json.loads(out)
+        units = [u for b in data["batches"] for u in b["units"]]
+        self.assertEqual(data["manifests"], [])
+        self.assertEqual(sorted(u["unit"] for u in units),
+                         ["CMakeLists.txt", "src/err.hpp", "src/fm.hpp", "src/fm_posix.cpp", "tests/fm_test.cpp"])
+        self.assertEqual({u["role"] for u in units}, {"product"})
+
+    def test_a_dependency_of_a_non_primary_member_orders_the_unit(self):
+        self.stand_in("src/late.hpp", depends=["src/fm.hpp"], front=self.P)
+        self.stand_in("src/z.hpp", front=self.P)
+        self.stand_in("src/z_impl.cpp", depends=["src/late.hpp"], front=["role: product", "unit: ./z.hpp.skel.md"])
+        _, out = self.batches()
+        self.assertEqual(self.batch_of(out, "src/z.hpp"), self.batch_of(out, "src/late.hpp") + 1)
+
+    def test_a_dependency_on_a_manifest_does_not_order_the_unit(self):
+        self.stand_in("src/gen.hpp", depends=["CMakeLists.txt"], front=self.P)
+        _, out = self.batches()
+        self.assertEqual(self.batch_of(out, "src/gen.hpp"), 1)
+        self.assertEqual(out.count("CMakeLists.txt"), 1)
 
 
 class BatchesOnTheExample(TreeCase):
@@ -911,6 +1128,26 @@ class MoveUnits(MiniTree):
     def test_moving_both_together_leaves_the_path_alone(self):
         self.move("skel/src", "skel/lib")
         self.assertIn("unit: ./fm.hpp.skel.md\n", self.read("lib/fm_posix.cpp"))
+
+    def test_unit_key_in_any_case_is_rewritten(self):
+        text = self.read("src/fm_posix.cpp").replace("unit: ./fm.hpp.skel.md", "Unit: ./fm.hpp.skel.md")
+        with open(self.file("src/fm_posix.cpp"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+        self.move("skel/src/fm.hpp.skel.md", "skel/include/fm.hpp.skel.md")
+        self.assertIn("Unit: ../include/fm.hpp.skel.md\n", self.read("src/fm_posix.cpp"))
+
+    def test_link_inside_a_front_matter_value_is_rewritten(self):
+        self.stand_in("src/other.py", front=["role: product", "untested: covered through [fm](./fm.hpp.skel.md)"])
+        self.move("skel/src/fm.hpp.skel.md", "skel/include/fm.hpp.skel.md")
+        self.assertIn("untested: covered through [fm](../include/fm.hpp.skel.md)\n", self.read("src/other.py"))
+
+    def test_links_under_a_rule_at_the_top_of_a_file_are_rewritten(self):
+        notes = os.path.join(self.dir, "skel", "NOTES.md")
+        with open(notes, "w", encoding="utf-8") as fh:
+            fh.write("---\n\nSee [fm](./src/fm.hpp.skel.md).\n\n---\n")
+        self.move("skel/src/fm.hpp.skel.md", "skel/include/fm.hpp.skel.md")
+        with open(notes, encoding="utf-8") as fh:
+            self.assertIn("See [fm](./include/fm.hpp.skel.md).", fh.read())
 
     def test_unit_like_text_in_the_body_is_not_touched(self):
         with open(self.file("src/fm_posix.cpp"), "a", encoding="utf-8") as fh:

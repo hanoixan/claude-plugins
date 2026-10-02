@@ -59,14 +59,22 @@ CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unl
 KINDS = ("blocking", "local")
 ROLES = ("product", "test", "manifest")
 META_RE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*)$")
+FRONT_KEYS = ("kind", "role", "unit", "untested")
 MANIFEST_NAMES = {"CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json", "Makefile", "makefile",
-                  "GNUmakefile", "Justfile", "Rakefile", "Gemfile", "package.json", "tsconfig.json",
-                  "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Cargo.toml", "go.mod",
-                  "build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml", "meson.build",
-                  "BUILD", "BUILD.bazel", "WORKSPACE"}
-TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
-TEST_NAME_RE = re.compile(r"^(test_.+|.+_test\.[^.]+|.+\.(test|spec)\.[^.]+|.+Test\.[^.]+|conftest\.py)$")
-UNSURE_DIRS = {"tools", "scripts", "examples"}
+                  "GNUmakefile", "Justfile", "Rakefile", "Gemfile", "Gemfile.lock", "package.json",
+                  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json", "pyproject.toml",
+                  "setup.py", "setup.cfg", "MANIFEST.in", "Pipfile", "Pipfile.lock", "poetry.lock", "tox.ini",
+                  "pytest.ini", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "build.gradle",
+                  "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "pom.xml",
+                  "meson.build", "BUILD", "BUILD.bazel", "WORKSPACE", "conanfile.txt", "conanfile.py",
+                  "vcpkg.json"}
+MANIFEST_SUFFIXES = (".cmake", ".csproj", ".fsproj", ".vbproj", ".sln", ".gemspec", ".podspec")
+MANIFEST_NAME_RE = re.compile(r"^(requirements[\w.-]*\.txt|[\w.-]+\.config\.[cm]?[jt]s)$")
+TEST_DIRS = {"test", "tests", "__tests__", "testdata", "testutil", "__mocks__"}
+SPEC_DIRS = {"spec", "specs"}                      # these hold API and format specifications too
+STRONG_TEST_NAME_RE = re.compile(r"^(test_.+|.+_test\.[^.]+|.+_spec\.[^.]+|.+\.(test|spec|cy)\.[^.]+|conftest\.py)$")
+WEAK_TEST_NAME_RE = re.compile(r"^.+(Test|Tests|IT)\.[^.]+$")
+UNSURE_DIRS = {"tools", "scripts", "examples", "bench", "benches", "benchmarks"}
 SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
 HEADER_EXT = {"h", "hh", "hpp", "hxx"}
 
@@ -115,6 +123,27 @@ class Section:
 class Link:
     def __init__(self, label, text, target, line, section):
         self.label, self.text, self.target, self.line, self.section = label, text, target, line, section
+
+
+def front_matter_end(lines):
+    """Index of the `---` that closes the front matter, 0 if the file has none, -1 if one opens
+    with `---` and is not closed before the first line that is not `key: value` or blank."""
+    if not lines or lines[0].strip() != "---":
+        return 0
+    for j in range(1, len(lines)):
+        if lines[j].strip() == "---":
+            return j
+        if lines[j].strip() and not META_RE.match(lines[j]):
+            break
+    return -1
+
+
+def meta_value(raw):
+    """A front matter value without a trailing ` # comment` or surrounding quotes."""
+    value = re.sub(r"\s+#.*$", "", raw.strip())
+    if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
 
 
 class Unknown:
@@ -214,15 +243,22 @@ def parse(path, skel_root):
         sf.lines = fh.read().split("\n")
     lines = sf.lines
     start = 0
-    if lines and lines[0].strip() == "---":
-        for j in range(1, len(lines)):
-            if lines[j].strip() == "---":
-                for i, l in enumerate(lines[1:j], 2):
-                    m = META_RE.match(l)
-                    if m:
-                        sf.meta[m.group(1).lower()] = (i, m.group(2).strip())
-                start = j + 1
-                break
+    end = front_matter_end(lines)
+    if end == -1 and len(lines) > 1 and META_RE.match(lines[1]):
+        sf.err(1, "front matter is not closed with `---`")
+    for i, l in enumerate(lines[1:max(end, 0)], 2):
+        m = META_RE.match(l)
+        if not m:
+            continue
+        key = m.group(1).lower()
+        if key not in FRONT_KEYS:
+            sf.warn(i, f"unknown front matter key '{key}' (known: {', '.join(FRONT_KEYS)})")
+        elif key in sf.meta:
+            sf.warn(i, f"front matter key '{key}' is given twice; the first is used")
+        else:
+            sf.meta[key] = (i, meta_value(m.group(2)))
+    if end > 0:
+        start = end + 1
     if "kind" in sf.meta:
         ln, value = sf.meta["kind"]
         k = value.split()[0].lower() if value else ""
@@ -338,7 +374,7 @@ def validate_file(sf, lenient):
     if sf.role is None:
         miss(1, "missing `role:` in front matter (product, test or manifest); `infer-roles` can propose one")
     elif sf.role not in ROLES:
-        sf.err(sf.meta["role"][0], f"front matter role '{sf.role}' must be one of {list(ROLES)}")
+        miss(sf.meta["role"][0], f"front matter role '{sf.role}' must be one of {list(ROLES)}")
     if "untested" in sf.meta:
         ln, reason = sf.meta["untested"]
         if sf.role != "product":
@@ -581,6 +617,8 @@ def resolve_units(files, report=True):
             problem = f"`unit:` target is not a stand-in in this tree: {value}"
         elif "unit" in files[tgt].meta:
             problem = f"`unit:` target {value} has a `unit:` of its own; name the primary stand-in"
+        elif files[tgt].role is None:
+            problem = f"`unit:` target {value} has no role"
         elif files[tgt].role != sf.role:
             problem = f"`unit:` target {value} has role '{files[tgt].role}', not '{sf.role}'"
         else:
@@ -601,7 +639,7 @@ def unit_members(files, primary):
 
 def untested_units(files, deps, primary):
     """Primaries of concrete product code units that no test stand-in depends on."""
-    tested = {primary[b] for (a, b) in deps if files[a].role == "test"}
+    tested = {primary[b] for (a, b) in deps if files[a].role == "test" and files[a].kind == "code"}
     out = []
     for head, group in unit_members(files, primary).items():
         if files[head].role != "product" or head in tested:
@@ -658,6 +696,10 @@ def cmd_check(args):
     deps, refs = build_edges(skel_root, files)
     check_bidirectional(files, deps, refs)
     primary = resolve_units(files)
+    for (a, b), links in deps.items():
+        if files[a].role == "product" and files[b].role == "test":
+            files[a].warn(links[0].line, f"a product stand-in depends on test stand-in {files[b].rel}; "
+                                         "one of the two roles is probably wrong")
     for sf in untested_units(files, deps, primary):
         sf.warn(1, "no test stand-in depends on this unit; link one or state `untested: <reason>` in front matter")
     sys_unknowns, sys_links, sys_slugs = read_system(skel_root)
@@ -909,50 +951,71 @@ def cmd_status(args):
 def infer_role(sf):
     """(role, reason it is unsure or None), judged from the implemented file's path alone."""
     parts = sf.impl_rel.split(os.sep)
-    name, dirs = parts[-1], parts[:-1]
-    if name in MANIFEST_NAMES or name.endswith(".cmake"):
+    name, dirs = parts[-1], [d.lower() for d in parts[:-1]]
+    if name in MANIFEST_NAMES or name.endswith(MANIFEST_SUFFIXES) or MANIFEST_NAME_RE.match(name):
         return "manifest", None
-    if TEST_NAME_RE.match(name) or any(d in TEST_DIRS for d in dirs):
-        return "test", None
+    strong, weak = STRONG_TEST_NAME_RE.match(name), WEAK_TEST_NAME_RE.match(name)
+    in_test_dir = any(d in TEST_DIRS or d.endswith((".test", ".tests")) for d in dirs)
+    looks_test = bool(strong or in_test_dir)
     for d in dirs:
         if d in UNSURE_DIRS:
-            return "product", f"under {d}/, so it may not be delivered"
+            return ("test" if looks_test else "product"), f"under {d}/, so it may not be delivered"
+    if looks_test:
+        return "test", None
+    if any(d in SPEC_DIRS for d in dirs):
+        return "test", "a spec/ folder can hold specifications as well as tests"
+    if weak:
+        return "test", "its name ends in Test, Tests or IT, but it is not in a test folder"
     return "product", None
 
 
-def infer_unit(sf, files):
-    """(header stand-in this source is built with or None, reason it is unsure or None)."""
+def infer_unit(sf, files, deps):
+    """(header stand-in this source is built with or None, reason it is unsure or None).
+
+    A header of the same name in the same folder is taken as it is. A header whose name is only a
+    prefix of the source's, or one of the same name in another folder, needs a `Depends on:` link
+    from the source to confirm it."""
     if sf.ext.lower() not in SOURCE_EXT:
         return None, None
     stem = sf.base.rsplit(".", 1)[0]
-    fits = []
+    linked = {b for (a, b) in deps if a == sf.path}
+    here, elsewhere = [], []
     for other in files.values():
-        if os.path.dirname(other.path) != os.path.dirname(sf.path) or other.ext.lower() not in HEADER_EXT:
+        if other.ext.lower() not in HEADER_EXT:
             continue
         ostem = other.base.rsplit(".", 1)[0]
-        if stem == ostem or (stem.startswith(ostem) and stem[len(ostem)] in "_-."):
-            fits.append((len(ostem), other))
-    if not fits:
-        return None, None
-    longest = max(n for n, _ in fits)
-    winners = sorted((o for n, o in fits if n == longest), key=lambda o: o.path)
-    reason = None
-    if len(winners) > 1:
-        reason = "more than one header fits: " + ", ".join(os.path.basename(o.path) for o in winners)
-    return winners[0], reason
+        if os.path.dirname(other.path) == os.path.dirname(sf.path):
+            if stem == ostem or (stem.startswith(ostem) and stem[len(ostem)] in "_-."):
+                here.append((len(ostem), other))
+        elif stem == ostem and other.path in linked:
+            elsewhere.append(other)
+    if here:
+        longest = max(n for n, _ in here)
+        winners = sorted((o for n, o in here if n == longest), key=lambda o: o.path)
+        header = winners[0]
+        if len(winners) > 1:
+            return header, "more than one header fits: " + ", ".join(os.path.basename(o.path) for o in winners)
+        if longest != len(stem) and header.path not in linked:
+            return header, (f"its name only begins with {header.base}, and no `Depends on:` link "
+                            "confirms the pairing")
+        return header, None
+    if len(elsewhere) == 1:
+        return elsewhere[0], None
+    if elsewhere:
+        elsewhere.sort(key=lambda o: o.path)
+        return elsewhere[0], "more than one linked header has that name: " + ", ".join(o.rel for o in elsewhere)
+    return None, None
 
 
 def add_front_matter(sf, pairs):
     """Write `key: value` lines into the stand-in's front matter, creating the block if it has none."""
     lines = list(sf.lines)
     new = [f"{key}: {value}" for key, value in pairs]
-    close = None
-    if lines and lines[0].strip() == "---":
-        close = next((j for j in range(1, len(lines)) if lines[j].strip() == "---"), None)
-    if close is None:
-        lines = ["---", *new, "---"] + lines
-    else:
+    close = front_matter_end(lines)
+    if close > 0:
         lines[close:close] = new
+    else:
+        lines = ["---", *new, "---"] + lines
     with open(sf.path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
 
@@ -969,17 +1032,21 @@ def cmd_infer_roles(args):
     n_write = n_unsure = 0
     for sf in sorted(files.values(), key=lambda f: f.rel):
         sure, doubts = [], []
-        if sf.role is None:
-            if unsure[sf.path]:
-                doubts.append(("role", roles[sf.path], unsure[sf.path]))
-            else:
-                sure.append(("role", roles[sf.path]))
-        if "unit" not in sf.meta:
-            header, reason = infer_unit(sf, files)
-            if header is not None:
-                rel = "./" + os.path.basename(header.path)
-                if not reason and roles[header.path] != roles[sf.path]:
-                    reason = f"the header's role is {roles[header.path]}, this one's is {roles[sf.path]}"
+        if front_matter_end(sf.lines) == -1:
+            doubts.append(("front matter", None, "it opens with `---` and is not closed; fix it by hand"))
+        else:
+            if sf.role is None:
+                if unsure[sf.path]:
+                    doubts.append(("role", roles[sf.path], unsure[sf.path]))
+                else:
+                    sure.append(("role", roles[sf.path]))
+            header, reason = infer_unit(sf, files, deps) if "unit" not in sf.meta else (None, None)
+            if header is not None and roles[header.path] == roles[sf.path]:
+                rel = relpath_dot(header.path, os.path.dirname(sf.path))
+                if not reason and "unit" in header.meta:
+                    reason = f"{header.base} is itself part of a unit; name that unit's primary instead"
+                if not reason and unsure[sf.path]:
+                    reason = "its own role is not settled yet"
                 if reason:
                     doubts.append(("unit", rel, reason))
                 else:
@@ -990,7 +1057,7 @@ def cmd_infer_roles(args):
         for key, value in sure:
             print(f"  + {key}: {value}")
         for key, value, reason in doubts:
-            print(f"  ? {key}: {value}  (unsure: {reason})")
+            print(f"  ? {key}{': ' + value if value else ''}  (unsure: {reason})")
         n_write += len(sure)
         n_unsure += len(doubts)
         if args.write and sure:

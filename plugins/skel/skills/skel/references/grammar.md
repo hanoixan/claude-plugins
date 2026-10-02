@@ -37,7 +37,7 @@ The kind is inferred from the implementation extension:
 | iac | tf tfvars hcl bicep sql, Dockerfile … and `.iac` | `# infrastructure: <name>` |
 | resource | anything else (png, svg, css, html, md, fonts …) | `# resource: <name>` |
 
-You can override the inference with YAML front matter as the very first lines of the file:
+You can override the inference in the front matter, the very first lines of the file:
 
 ```yaml
 ---
@@ -52,7 +52,7 @@ Each file has exactly one level-1 heading, and it must match the kind. **(checke
 
 ### Front matter
 
-Every stand-in begins with front matter. **(checked)**
+Every stand-in begins with front matter: bare `key: value` lines between two `---` lines. It is not parsed as YAML. Quotes around a value and a trailing ` # comment` are dropped, and an unknown or repeated key is a warning. **(checked)**
 
 ```yaml
 ---
@@ -73,9 +73,11 @@ unit: ./file_map.hpp.skel.md
 - **manifest** is a build or project file that lists or configures other files (`CMakeLists.txt`, `package.json`, a `Makefile`). Manifests are created with the first batch and extended with each later one.
 - **unit** joins stand-ins that are built together, as a source file is with its header. The stand-in it names is the unit's primary. It must exist in the tree, have the same role, and have no `unit:` of its own. **(checked)**
 
-Roles are stated, never guessed by the checker. `skel_check.py infer-roles skel/ --write` proposes them from file names and folders and writes the ones it is sure of. It lists the rest as unsure and leaves them for you to set; ask the user about any you cannot settle.
+Roles are stated, never guessed by the checker. `skel_check.py infer-roles skel/ --write` proposes them from file names and folders and writes the ones it is sure of. It lists the rest as unsure and leaves them for you to set; ask the user about any you cannot settle. It pairs a source with a header of the same name in its folder. A header whose name the source's only begins with, or a same-name header in another folder, is paired once the source has a `Depends on:` link to it.
 
-The checker warns when no `role: test` stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count. Either link a test to the unit or record the gap with `untested: <reason>`. Abstract units are exempt until they are adapted.
+The checker warns when no `role: test` code stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count, and test data does not: a fixture that names its generator is not a test of it. Either link a test to the unit or record the gap with `untested: <reason>`. Abstract units are exempt until they are adapted.
+
+The checker also warns when a `role: product` stand-in depends on a `role: test` one, because one of the two roles is then probably wrong. **(checked, warning)**
 
 A test stand-in may demand only what the units it depends on expose. If a test needs a seam, such as a clock it can set or a write it can make fail, declare the seam on the unit.
 
