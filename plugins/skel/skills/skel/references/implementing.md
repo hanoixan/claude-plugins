@@ -24,9 +24,9 @@ For each file in order:
    - Make `Inputs` and `Returns` the signature. `State changes` say which side effects are allowed; perform no others. `Access` decides visibility (public or private, exported or not).
    - Handle each listed failure mode explicitly.
    - Treat prose guidance as implementation instructions.
-3. Add a one-line header comment pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
+3. Add a one-line header comment within the first ten lines pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. When the file matches its stand-in, run `skel_check.py stamp skel/ --root . a/b.py`, which adds a short hash of the stand-in to that header. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
 4. Write tests from the stand-in. Every failure mode and every `State changes` statement is a test case, and data `## Schema` blocks become validation fixtures.
-5. Run `skel_check.py status skel/ --root .` to track progress.
+5. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Unstamped, or Names not found in code.
 
 ## When implementation reveals something
 
@@ -42,13 +42,13 @@ Rerun `check` after every batch of skel edits.
 
 ## When the plan changes under existing code
 
-A new feature or a late decision changes stand-ins whose files are already implemented. `status` still lists those files as implemented, because it only checks that they exist. The record of what now trails the plan is the diff of the tree:
+A new feature or a late decision changes stand-ins whose files are already implemented. `status` lists those files under **Stale**: the stand-in no longer matches the hash stamped in the code's `Spec:` header. A new backlink or a reflow does not make a file stale; any other edit to its stand-in does.
+
+The Stale group is the work order. Bring each file back in step with its stand-in, then stamp it again. To see what changed in a stand-in:
 
 ```bash
 git diff <last commit where code and skel agreed> -- skel
 ```
-
-Treat that diff as the work order: every changed stand-in names a file to bring back in step.
 
 ## Existing code
 
@@ -60,7 +60,7 @@ After each implementation batch, report in this shape:
 
 1. **Decisions needed:** blocking unknowns that remain or that this batch raised, and what each blocks.
 2. **Proposals to accept or change:** local unknowns, each with its proposal, saying which ones this batch was built to.
-3. **What was built:** which batches and files were realized, the test results, and any cycles that `batches` flagged.
+3. **What was built:** which batches and files were realized, the test results, any cycles that `batches` flagged, and anything `status` still lists under Stale, Unstamped, or Names not found in code.
 4. **Changes to the plan:** every stand-in you changed and why, including contract changes that rippled to referrers.
 
 The report lists no choice that is not in the tree. If you made a choice the stand-ins did not dictate, it is in the tree as an unknown with a `Proposed:` before it appears in the report.

@@ -9,7 +9,7 @@ Skel can describe a subsystem before any host project, language, or platform is 
 3. **Draw the host boundary explicitly.** Give the system a small interface stand-in that the host implements (in the example, `document_target`) and an integration stand-in that describes the glue the host writes (`host_binding`). Everything host-specific sits behind those two. Their unknowns are the adaptation questions.
 4. **Describe signatures by meaning.** Write "`limit`: max steps or bytes retained", not `limit: int`. When the type matters to the design, record it as an unknown instead of picking one.
 5. **Put persistence behind an `.iac` stand-in.** Even "maybe store it in a file" becomes a `# infrastructure:` with `## resource:` data requirements, so adapters see retention, size, and privacy requirements.
-6. **Mark conditional parts.** Optional features (persistence, coalescing) get `Required: conditional — ...` and a named unknown asking whether they are wanted. Every other stand-in that would go if the answer is no carries a follower of it (`*UNKNOWN*: Follows [name]. Consequence: ...`), so the `unknowns` list shows everything the answer removes.
+6. **Mark conditional parts.** Optional features (persistence, coalescing) get `Required: conditional — ...` and a named unknown asking whether they are wanted. Every other place that would go if the answer is no, whether a stand-in, a function or a resource, carries a follower of it (`*UNKNOWN*: Follows [name]. Consequence: ...`), so the `unknowns` list shows everything the answer removes.
 7. **Check it.** Run `skel_check.py check skel/`. Abstract trees must pass the full grammar; the checker only reports placeholders, it doesn't excuse them.
 
 ## Adapting to a project

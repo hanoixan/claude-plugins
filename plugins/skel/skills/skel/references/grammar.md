@@ -130,7 +130,7 @@ Fields belong to the nearest typed heading above them (`module:`, `class:`, `fun
 
 ## 5. Unknowns
 
-Only describe what is known. Anything that isn't known is declared as a formal unknown, never guessed. An unknown is one line, in one of two forms.
+Only describe what is known. Anything that isn't known is declared as a formal unknown, never guessed. An unknown is one line, and a line holds one unknown. It takes one of two forms.
 
 A **declaration** states a decision that is still open:
 
@@ -144,13 +144,15 @@ A **follower** marks another place that the same decision affects:
 *UNKNOWN*: Follows [short-name]. Consequence: <what the open decision means here>.
 ```
 
-- The marker `*UNKNOWN*:` is exact. The checker also accepts `**UNKNOWN**:`.
+- The marker `*UNKNOWN*:` is exact. The checker also accepts `**UNKNOWN**:` and `**UNKNOWN:**`.
 - An unknown can stand on its own line, inside a bullet, or as a field value (`- **Returns:** *UNKNOWN*: ...`).
 - `[short-name]` is optional: lower-case letters, digits and hyphens, directly after the marker. A decision needs a name once a follower refers to it. Names are unique across the tree, `SYSTEM.md` included. **(checked)**
 - `Kind:` is required. **(checked)** `blocking` means the answer changes an interface, a schema, or whether a file exists. `local` means it affects only a function body, a constant, or a default.
 - `Proposed:` is required when the kind is `local`. **(checked)** On a blocking unknown it is optional and reads as a recommendation.
 - Clause labels are capitalised and begin a sentence, as in `... with Windows. Kind: blocking. Consequence: ...`. The same words inside a sentence are read as prose, so a description may mention `kind: Deployment` safely.
-- Declare a decision once. Where it affects other stand-ins, write a follower there instead of repeating it. A follower must name a declared unknown. **(checked)**
+- Declare a decision once. In every other place it affects, whether another stand-in or another heading in the same one, write a follower instead of repeating it. A follower must name a declared unknown. **(checked)**
+- A follower carries only `Consequence:`. `Kind:`, `Proposed:` and `Unlocks:` belong to the declaration. **(checked, warning)**
+- A label with nothing after it states nothing: `Proposed: .` counts as no proposal. **(checked)**
 - The checker warns when a declaration has no `Consequence:` or `Unlocks:` clause, or a follower has no `Consequence:`, because an unknown without consequences can't be prioritized.
 - The checker warns about informal markers (`TBD`, `TODO`, `FIXME`, `???`, or a bare `UNKNOWN`) outside code fences. Convert them to formal unknowns.
 - Place an unknown at the level it affects. A wire-format unknown belongs on the function that encodes it, not on the module.
@@ -164,7 +166,7 @@ A blocking unknown may carry a proposal too. The tree may be written to that pro
 
 Resolving a decision means replacing it with the decided text and deleting the declaration and every follower of it.
 
-`skel_check.py unknowns skel/` prints the decisions grouped into blocking and local, each once, with its followers beneath it. That list is the agenda for the next conversation with the user. `check` and `unknowns` count decisions; followers are not counted.
+`skel_check.py unknowns skel/` prints the decisions grouped by kind, each once, with its followers beneath it. A draft can show two more groups: decisions with no valid kind, and followers whose name nothing declares. That list is the agenda for the next conversation with the user. `check` and `unknowns` count decisions; followers are not counted.
 
 ## 6. Links and bidirectionality
 
@@ -218,6 +220,8 @@ A `Referred by:` with no matching `Depends on:` is an error that is not auto-fix
 
 Deeper typed nesting (for example a function inside a function) is not allowed. Describe closures and inner helpers in prose under their owner. Untyped headings (`#### Algorithm`, `## Notes`) may appear anywhere for organization.
 
+A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `skel_check.py status` lists every heading whose name it cannot find in the implemented file. A code stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks.
+
 ### Prose
 
 Any level may contain any prose that explains what it does and why. Treat prose as the place for intent, rationale, rejected alternatives, and the agent prompts that should guide implementation (for example, "Prefer clarity over cleverness here; this runs once per session."). The fields below are the minimum, not the whole spec.
@@ -235,11 +239,11 @@ These fields may also appear where they are not required, for example `Owns:` on
 
 The fields mean:
 
-- **Inputs** are the parameters (name, meaning, type if known, constraints), plus any ambient input read (environment variables, global config, the clock). For a class, they are the construction inputs.
+- **Inputs** are the parameters (name, meaning, type if known, constraints), plus any ambient input read (environment variables, global config, the clock) and anything supplied later: callbacks, listeners, and hooks injected for tests. For a class, they are the construction inputs.
 - **Returns** is the result and what it means, including error or empty results. Write `nothing` when there is no result.
 - **State changes** are mutations visible outside the call: fields, files, network, caches, events emitted. Write `none` for pure functions. For a class, state the invariants that hold between calls.
 - **Owns** is what this unit is the single source of truth for, or is responsible for releasing: data, resources, lifecycles.
-- **Access** is how other code is expected to reach it: public or internal, singleton or injected, thread or async context, and call ordering constraints.
+- **Access** is how other code is expected to reach it: public or internal, singleton or injected, which thread or async context may call it, call ordering constraints, how long the references it holds or hands out stay valid, and whether it needs mutable access to what it depends on.
 
 `Inputs` and `Returns` describe meaning and constraints first and types second. Give types when they are known, and use an `*UNKNOWN*:` when the type depends on an open decision.
 

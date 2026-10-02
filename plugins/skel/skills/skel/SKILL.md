@@ -51,22 +51,24 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 
    It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
 4. **Fill each stand-in top-down** from the templates in `assets/templates/`, keeping the front matter step 3 wrote. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
-5. **Generate the backlinks** and review them:
+5. **Walk each dependency as its caller.** For every `Depends on:` link, read the target and confirm that it declares each function, type and callback this unit's prose says it uses, that the mutability and lifetime it offers fit, and that every type named in prose has its own `symbol:` heading. Add what is missing to the target now. Each gap found here is one an implementer would otherwise fill by changing the plan.
+6. **Generate the backlinks** and review them:
 
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks skel --write
    ```
 
    Then go through the inserted lines and fix the symbol text where a better name exists.
-6. **Validate** until the tree is clean:
+7. **Validate** until the tree is clean:
 
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
-7. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py batches skel`, and report in this shape:
-   1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence and what it unlocks.
+8. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py batches skel`, and report in this shape:
+   1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence, what it unlocks, and its proposal if it has one.
    2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
    3. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
+   4. **Code that now trails the plan:** the Stale group from `skel_check.py status skel --root .`. Leave this out when nothing is implemented yet.
 
    The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
 
@@ -77,6 +79,8 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 - **Prefer the narrowest level.** A dependency used by one method is linked from that method, so the backlink names the method and change impact stays precise.
 - **Make failure modes concrete:** say what triggers each one and what the expected handling is. They become the test list.
 - **Frame persistence as infrastructure.** If a function reads or writes state that outlives the process, it links to an iac resource.
+- **Use names the language allows.** A heading's name becomes an identifier, so it cannot be a keyword of the target language (`delete`, `class`, `namespace`), and it follows that language's naming style.
+- **Give tests their seams.** If a test must set the clock or make a write fail, declare that hook on the unit, in its `Inputs:`.
 - **Keep unknowns honest.** An unknown with a clear consequence and unlock is more useful than a confident guess, because it tells the user exactly which decision to make. The same goes for your own choices: a proposal the user can veto is worth more than a decision they never saw.
 
 ## Tools
@@ -87,7 +91,8 @@ All scripts use only the Python standard library.
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / pending / abstract / code with no stand-in
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
+python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record that code matches its stand-in
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
 python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside

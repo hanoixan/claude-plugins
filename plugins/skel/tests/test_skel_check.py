@@ -423,6 +423,12 @@ class UnknownRules(TreeCase):
         self.assertIn("    followed at infra/history_store.iac.skel.md:", out)
         self.assertIn("9 unknowns", out)
 
+    def test_example_marks_a_function_that_follows_a_decision(self):
+        _, out = self.run_script(CHECK, "unknowns", "skel")
+        self.assertIn("    followed at undo/history.code.skel.md:", out)
+        self.assertIn("function: serialize): this function is deleted if cross-session undo is not required.", out)
+        self.assertIn("9 unknowns", out)
+
     def test_system_file_decision_is_labelled_without_doubled_brackets(self):
         _, out = self.run_script(CHECK, "unknowns", "skel")
         self.assertIn("- [language] SYSTEM.md:21 (system): Implementation language and runtime.", out)

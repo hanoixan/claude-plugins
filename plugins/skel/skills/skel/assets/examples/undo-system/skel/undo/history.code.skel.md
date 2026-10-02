@@ -79,3 +79,5 @@ Writes history to the persisted snapshot format, if persistence is enabled.
 - **Depends on:** [history_store](../infra/history_store.iac.skel.md#resource-history_store)
 
 *UNKNOWN*: Whether commands can be serialized at all (some may hold host object references). Kind: blocking. Consequence: persistence may only be partial; non-serializable commands truncate the saved history at that point. Unlocks: deciding the snapshot schema's `payload` contract.
+
+*UNKNOWN*: Follows [cross-session-undo]. Consequence: this function is deleted if cross-session undo is not required.
