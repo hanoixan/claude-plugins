@@ -6,7 +6,7 @@ Subcommands
   unknowns SKEL_DIR [--json]          list open decisions by kind, each once, with its followers
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
   batches SKEL_DIR [--json]           buildable batches of units; manifests are set aside
-  status SKEL_DIR --root PROJECT      which stand-ins are implemented, pending, abstract, or missing
+  status SKEL_DIR --root PROJECT      implemented, stale, unstamped, pending, abstract; names missing from code
   stamp SKEL_DIR --root PROJECT PATH... | --all   record in each file's Spec: header that it matches its stand-in
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
   infer-roles SKEL_DIR [--write]      propose role: and unit: front matter (dry-run by default)
@@ -903,6 +903,31 @@ def read_spec_header(path):
     return None
 
 
+def stamp_state(sf, impl, root):
+    """('implemented' | 'stale' | 'unstamped', reason or None) for an implemented code file."""
+    header = read_spec_header(impl)
+    if header is None:
+        return "unstamped", "no Spec: header"
+    if header[0] != spec_path(sf, root):
+        return "unstamped", f"Spec: header names {header[0]}"
+    if header[1] is None:
+        return "unstamped", "no hash; run stamp"
+    return ("implemented" if header[1] == stand_in_hash(sf) else "stale"), None
+
+
+def missing_names(sf, impl):
+    """Every class, function and symbol the stand-in names that is not a whole word in the code."""
+    with open(impl, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    out = []
+    for s in sf.sections:
+        if s.level > 1 and s.kind in ("class", "function", "symbol"):
+            name = re.split(r"[\s(<]", s.name.strip("`"), maxsplit=1)[0]
+            if name and not re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", text):
+                out.append(f"{s.kind} {name}")
+    return out
+
+
 def cmd_stamp(args):
     skel_root, files = load_tree(args.skel_dir)
     root = os.path.abspath(args.root)
@@ -1005,12 +1030,20 @@ IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target
 def cmd_status(args):
     skel_root, files = load_tree(args.skel_dir)
     root = os.path.abspath(args.root)
-    implemented, pending, abstract = [], [], []
-    specified = set()
+    groups = {"implemented": [], "stale": [], "unstamped": [], "pending": [], "abstract": []}
+    missing, specified = [], set()
     for sf in sorted(files.values(), key=lambda f: f.rel):
         impl = os.path.join(root, sf.impl_rel)
         specified.add(os.path.normpath(impl))
-        (implemented if os.path.exists(impl) else abstract if sf.abstract else pending).append(sf)
+        if not os.path.exists(impl):
+            unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
+            groups["abstract" if sf.abstract else "pending"].append(f"{sf.impl_rel}{unk}")
+        elif not drift_checked(sf):
+            groups["implemented"].append(sf.impl_rel)
+        else:
+            group, reason = stamp_state(sf, impl, root)
+            groups[group].append(f"{sf.impl_rel}  ({reason})" if reason else sf.impl_rel)
+            missing.extend(f"{sf.impl_rel}: {name}" for name in missing_names(sf, impl))
     unspecified = []
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in IGNORE_DIRS and not d.startswith(".")
@@ -1021,17 +1054,17 @@ def cmd_status(args):
                 p = os.path.normpath(os.path.join(dp, fn))
                 if p not in specified:
                     unspecified.append(os.path.relpath(p, root))
-    print(f"Implemented ({len(implemented)}):")
-    for sf in implemented:
-        print(f"  {sf.impl_rel}")
-    for title, group in (("Pending", pending), ("Abstract, adapt before implementing", abstract)):
-        print(f"{title} ({len(group)}):")
-        for sf in group:
-            unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
-            print(f"  {sf.impl_rel}{unk}")
-    print(f"Code/IaC files with no stand-in ({len(unspecified)}):")
-    for p in sorted(unspecified):
-        print(f"  {p}")
+    listing = [("Implemented", groups["implemented"]),
+               ("Stale, stand-in changed since stamped", groups["stale"]),
+               ("Unstamped", groups["unstamped"]),
+               ("Pending", groups["pending"]),
+               ("Abstract, adapt before implementing", groups["abstract"]),
+               ("Code/IaC files with no stand-in", sorted(unspecified)),
+               ("Names not found in code", missing)]
+    for title, lines in listing:
+        print(f"{title} ({len(lines)}):")
+        for line in lines:
+            print(f"  {line}")
     return 0
 
 

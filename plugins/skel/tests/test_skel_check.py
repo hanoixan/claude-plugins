@@ -1335,19 +1335,17 @@ class Stamp(CodeCase):
         self.assertNotEqual(self.read_code(), before)
 
 
-class Status(TreeCase):
+class Status(CodeCase):
+    """`command` is implemented and stamped; `transaction` is concrete but not implemented."""
+
     def setUp(self):
         super().setUp()
-        self.run_script(MV, "skel", COMMAND, "skel/src/command.py.skel.md")
         self.run_script(MV, "skel", TRANSACTION, "skel/src/transaction.py.skel.md")
-        os.makedirs(self.path("src"))
-        for name in ("command.py", "orphan.py"):
-            with open(self.path(f"src/{name}"), "w", encoding="utf-8") as fh:
-                fh.write("# placeholder\n")
-        _, self.out = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.write_code("# placeholder\n", rel="src/orphan.py")
+        self.stamp(self.CODE)
 
     def section(self, title):
-        lines = self.out.splitlines()
+        lines = self.run_script(CHECK, "status", "skel", "--root", ".")[1].splitlines()
         start = next(i for i, l in enumerate(lines) if l.startswith(title))
         body = []
         for line in lines[start + 1:]:
@@ -1356,15 +1354,13 @@ class Status(TreeCase):
             body.append(line.strip())
         return lines[start], body
 
-    def test_existing_file_is_implemented(self):
-        head, body = self.section("Implemented")
-        self.assertEqual(head, "Implemented (1):")
-        self.assertEqual(body, ["src/command.py"])
+    def test_stamped_file_is_implemented(self):
+        self.assertEqual(self.section("Implemented"), ("Implemented (1):", ["src/command.py"]))
+        self.assertEqual(self.section("Stale")[1], [])
+        self.assertEqual(self.section("Unstamped")[1], [])
 
     def test_missing_concrete_file_is_pending(self):
-        head, body = self.section("Pending")
-        self.assertEqual(head, "Pending (1):")
-        self.assertEqual(body, ["src/transaction.py"])
+        self.assertEqual(self.section("Pending"), ("Pending (1):", ["src/transaction.py"]))
 
     def test_abstract_stand_ins_are_listed_apart_from_pending(self):
         head, body = self.section("Abstract")
@@ -1372,8 +1368,65 @@ class Status(TreeCase):
         self.assertIn("infra/history_store.iac  [2 UNKNOWN]", body)
 
     def test_code_with_no_stand_in_is_reported(self):
-        head, body = self.section("Code/IaC files with no stand-in")
-        self.assertEqual(body, ["src/orphan.py"])
+        self.assertEqual(self.section("Code/IaC files with no stand-in")[1], ["src/orphan.py"])
+
+    def test_changed_stand_in_makes_its_code_stale(self):
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        self.assertEqual(self.section("Stale"),
+                         ("Stale, stand-in changed since stamped (1):", ["src/command.py"]))
+        self.assertEqual(self.section("Implemented")[1], [])
+
+    def test_new_backlink_does_not_make_code_stale(self):
+        self.append(self.UNIT, "- **Referred by:** none known\n")
+        self.assertEqual(self.section("Stale")[1], [])
+
+    def test_reflowed_stand_in_does_not_make_code_stale(self):
+        self.replace(self.UNIT, "## class: Command\n", "## class: Command   \n\n\n")
+        self.assertEqual(self.section("Stale")[1], [])
+
+    def test_file_without_a_header_is_unstamped(self):
+        self.write_code(self.BODY)
+        self.assertEqual(self.section("Unstamped"), ("Unstamped (1):", ["src/command.py  (no Spec: header)"]))
+
+    def test_header_without_a_hash_is_unstamped(self):
+        self.write_code(self.HEADER + self.BODY)
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no hash; run stamp)"])
+
+    def test_header_naming_another_stand_in_is_unstamped(self):
+        self.write_code("# Spec: skel/src/other.py.skel.md @ 00000000\n" + self.BODY)
+        self.assertEqual(self.section("Unstamped")[1],
+                         ["src/command.py  (Spec: header names skel/src/other.py.skel.md)"])
+
+    def test_all_names_present_lists_nothing(self):
+        self.assertEqual(self.section("Names not found in code"), ("Names not found in code (0):", []))
+
+    def test_names_missing_from_the_code_are_listed(self):
+        self.write_code(self.HEADER + "class Command:\n    def apply(self): ...\n")
+        self.assertEqual(self.section("Names not found in code"),
+                         ("Names not found in code (3):",
+                          ["src/command.py: function revert", "src/command.py: function merge_with",
+                           "src/command.py: function describe"]))
+
+    def test_a_name_inside_a_longer_identifier_does_not_count(self):
+        self.write_code(self.HEADER + "class Command:\n    def reapply(self): ...\n    def revert(self): ...\n"
+                        "    def merge_with(self, o): ...\n    def describe_all(self): ...\n")
+        self.assertEqual(self.section("Names not found in code")[1],
+                         ["src/command.py: function apply", "src/command.py: function describe"])
+
+    def test_generated_code_needs_no_stamp_and_no_names(self):
+        self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
+                     "- **Owns:** the `Command` contract.\n- **Source:** generated by a tool\n")
+        self.write_code("X = 1\n")
+        self.assertEqual(self.section("Implemented")[1], ["src/command.py"])
+        self.assertEqual(self.section("Names not found in code")[1], [])
+
+    def test_data_file_is_implemented_without_a_stamp(self):
+        self.run_script(MV, "skel", SNAPSHOT, "skel/data/history.json.skel.md")
+        os.makedirs(self.path("data"))
+        self.write_code("{}\n", rel="data/history.json")
+        self.assertIn("data/history.json", self.section("Implemented")[1])
+
+
 
 
 if __name__ == "__main__":
