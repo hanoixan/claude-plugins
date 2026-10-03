@@ -223,6 +223,22 @@ class NovelBuild(NovelCase):
         self.assertIn("A &amp; B #1", text)
         self.assertIn("café", text)
 
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_front_matter_is_typeset_like_the_book(self):
+        self.replace("wrist/PREMISE.md", "copyright: \u00a9 2026 Ada Example. All rights reserved.",
+                     'copyright: (c) 2026 Ada Example. "All" rights reserved.')
+        self.replace("wrist/PREMISE.md", "dedication: For the carters.", "dedication: 1999. For the carters.")
+        code, out = self.run_wrist("publish", "wrist")
+        self.assertEqual(code, 0, out)
+        with zipfile.ZipFile(self.path("output/salt-road.epub")) as z:
+            pages = [z.read(n).decode("utf-8") for n in z.namelist() if n.endswith(".xhtml")]
+        text = "\n".join(pages)
+        front = next(p for p in pages if 'class="dedication"' in p)
+        self.assertIn("\u201cAll\u201d rights reserved", text)         # curly quotes, as in the story text
+        self.assertIn("(c) 2026 Ada Example", text)                       # not turned into a list
+        self.assertIn("1999. For the carters.", text)                     # a number is not eaten as a list marker
+        self.assertNotIn("<ol", front)                                    # the contents page has its own list
+
 
 class InstallHelp(unittest.TestCase):
     def test_help_names_each_missing_tool(self):
