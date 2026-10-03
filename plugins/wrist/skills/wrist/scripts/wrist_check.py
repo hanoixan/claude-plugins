@@ -29,6 +29,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wrist_lint
 import wrist_profile
+import wrist_publish
 
 WRIST_SUFFIX = ".wrist.md"
 PREMISE_FILE = "PREMISE.md"
@@ -1056,6 +1057,36 @@ def cmd_lint(args):
     print(f"\n{hits} hits in {n_files} files")
     print(f"Lint finds only the searchable items. Work through the judgment checklist in "
           f"{os.path.join(profile.directory, 'quality.md')} as well.")
+    return 0
+
+
+PUBLISH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "publish"))
+
+
+@command("publish", lambda p: p.add_argument("--root"))
+def cmd_publish(args):
+    blockers = gate_blockers(args, "publishing")
+    if blockers:
+        print("publish blocked:")
+        for b in blockers:
+            print(f"  - {b}")
+        return 1
+    missing = wrist_publish.missing_tools()
+    if missing:
+        print(wrist_publish.install_help(missing))
+        return 1
+    wrist_root, files, profile, pm, slug = load_all(args)
+    root = project_root(args)
+    sources = [path for path, function in profile.expected_files(slug) if profile.functions[function]["prose"]]
+    meta = {"title": pm.front["title"][1], "author": pm.front["author"][1],
+            "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
+            "font": pm.front.get("font", (0, ""))[1]}
+    try:
+        wrist_publish.run_commands(wrist_publish.plan_commands(sources, meta, "output", slug, PUBLISH_DIR), root)
+    except wrist_publish.PublishError as exc:
+        print(f"publish failed: {exc}")
+        return 1
+    print(f"published output/{slug}.epub and output/{slug}.pdf")
     return 0
 
 
