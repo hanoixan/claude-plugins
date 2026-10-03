@@ -239,3 +239,9 @@ Choices made without an explicit instruction, to confirm during review:
    forward is stale-tracked like any file, so it can be realized again.
 6. The novel's `lint.json` is a copy of the short story's plus additions.
 7. The visible contents page is built from level-1 headings only.
+8. The premise is bound to the profile once, in `load_all`, with `Profile.set_premise`; `expected_files` and `function_for` keep their `slug` argument and take an optional `options` override. The file set is the same as the design describes, with far fewer call-site changes.
+9. Front matter is built by a Lua filter (`publish/frontmatter.lua`) from `PREMISE.md` metadata, per output format, not by a generated front-matter file. A first prototype of the generated-file route rendered text in both formats and read "(c) 2026" as a list. The numbering switch uses a marker file the publisher writes into `output/` and deletes afterward.
+10. Front matter text is typeset like the book (curly quotes, dashes); a value that does not read as a single paragraph is kept literally.
+11. The running head is hidden on the first body page (a story's heading page, or a book's first chapter), and shows from the second.
+12. `chapters`, `forward`, `prologue`, `afterward` and `index` answered in the front matter count as answering their questions; no body line is needed.
+
