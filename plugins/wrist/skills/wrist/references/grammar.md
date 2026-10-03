@@ -1,321 +1,65 @@
-# Wrist grammar (normative)
+# wrist grammar (normative)
 
-This is the full grammar for `.wrist.md` files. `wrist_check.py check` enforces every rule marked **(checked)**.
-
-## Contents
-1. Layout and naming
-2. File kinds
-3. Common traits: the five basic questions
-4. Field syntax
-5. Unknowns
-6. Links and bidirectionality
-7. Code files
-8. Data files
-9. Persistent storage and infrastructure-as-code
-10. Resource files
-11. Sample code and fences
-12. SYSTEM.md
-
----
+`wrist_check.py check` enforces every rule marked **(checked)**.
 
 ## 1. Layout and naming
 
-- Every file the project will contain gets a stand-in at `wrist/<path>/<file>.<ext>.wrist.md`. **(checked)**
-- `wrist/` mirrors the project root. `wrist/src/net/client.py.wrist.md` stands in for `src/net/client.py`, and that file is generated in that place during development.
-- The extension is part of the stand-in name, because the extension decides the file kind and tells the implementer what to produce. **(checked)** Conventional extensionless files such as `Dockerfile`, `Makefile`, or `Procfile` are allowed as `wrist/Dockerfile.wrist.md`.
-- Language-neutral specifications use the placeholder extensions `.code`, `.data`, and `.iac` until a language and platform are chosen; see `abstract-systems.md`. The checker reports these as abstract.
-- Plain `.md` files in `wrist/` that are not `.wrist.md` (normally just `SYSTEM.md`) are context, not stand-ins. Apart from the unknowns and links in `SYSTEM.md`, they are not checked.
+- Every file the work will contain has a stand-in at `wrist/<path>.wrist.md`, mirroring the project root. **(checked)** `wrist/work/the-lamp.md.wrist.md` stands in for `work/the-lamp.md`.
+- The profile fixes the file shape. A required file with no stand-in, or a stand-in outside the shape, is an error. **(checked)** The story file is named from the slug in `PREMISE.md`.
+- `wrist/PREMISE.md` is the one file that is not a stand-in. `wrist/.stamps` is written by `stamp`; do not edit it.
+- Stand-ins take no front matter. A function (synopsis, outline, characters, misc, story) comes from the profile's file shape, not from the file. **(checked, warning)**
 
-## 2. File kinds
+## 2. Headings and fields
 
-The kind is inferred from the implementation extension:
+- Each stand-in has exactly one level-1 heading, typed for its function: `# synopsis: <name>`, `# outline:`, `# characters:`, `# misc:`, `# story:`. **(checked)**
+- Children are level-2 headings of the types the function declares (outline: `beat`; characters: `character`; misc: `place`, `object`, `concept`; story: `scene`). No deeper typed headings. **(checked)**
+- Untyped headings may be used anywhere for organization.
+- A field is a line `- **Label:** value` (the bold, the bullet and the colon placement are flexible). Fields belong to the nearest typed heading.
+- Required fields per heading come from `profiles/<name>/profile.json`. **(checked)** For the short story: synopsis (Logline, Ending, Theme); outline (Structure) with beat (Purpose, Change); character (Wants, Flaw, Voice); place, object and concept (Facts); story (Point of view, Length) with scene (Purpose, Length, Must include, Must avoid).
+- Every stand-in answers, anywhere in the file: `Required:` (`always`, `conditional: <when>` or `optional: <what is lost>`), `Rules:` (what the realization must follow), `Depends on:`, `Referred by:`, and unknowns (`*UNKNOWN*:` entries or `Unknowns: none`). Write `none` explicitly. **(checked)**
+- Free prose under a heading is notes only; more than the profile's `max_prose_words` is a warning. **(checked, warning)** Fenced text does not count.
 
-| Kind | Extensions (non-exhaustive) | Level-1 heading |
-|---|---|---|
-| code | py ts tsx js go rs java kt cs cpp c h swift rb php dart … and `.code` | `# module: <name>` |
-| data | json jsonl yaml yml toml csv tsv xml parquet avro proto … and `.data` | `# data: <name>` |
-| iac | tf tfvars hcl bicep sql, Dockerfile … and `.iac` | `# infrastructure: <name>` |
-| resource | anything else (png, svg, css, html, md, fonts …) | `# resource: <name>` |
-
-You can override the inference in the front matter, the very first lines of the file:
-
-```yaml
----
-role: product
-kind: iac
----
-```
-
-Use the override for files whose extension is ambiguous, for example `docker-compose.yml` or `k8s/deployment.yaml` (which would otherwise be data), or a `.sql` file that is seed data rather than schema.
-
-Each file has exactly one level-1 heading, and it must match the kind. **(checked)**
-
-### Front matter
-
-Every stand-in begins with front matter: bare `key: value` lines between two `---` lines. It is not parsed as YAML. Quotes around a value and a trailing ` # comment` are dropped, and an unknown or repeated key is a warning. **(checked)**
-
-```yaml
----
-role: test
-unit: ./file_map.hpp.wrist.md
----
-```
-
-| Key | Required | Meaning |
-|---|---|---|
-| `role` | yes | `product`, `test` or `manifest` |
-| `unit` | no | relative path to the stand-in this one is built together with |
-| `untested` | no | why no test stand-in links to this unit; goes on the unit's primary, `role: product` only |
-| `kind` | no | overrides the kind inferred from the extension, as above |
-
-- **product** is anything delivered: code, data, infrastructure, resources, documents.
-- **test** is test code and whatever only tests use: fixtures, test data, helper programs.
-- **manifest** is a build or project file that lists or configures other files (`CMakeLists.txt`, `package.json`, a `Makefile`). Manifests are created with the first batch and extended with each later one.
-- **unit** joins stand-ins that are built together, as a source file is with its header. The stand-in it names is the unit's primary. It must exist in the tree, have the same role, and have no `unit:` of its own. **(checked)**
-
-Roles are stated, never guessed by the checker. `wrist_check.py infer-roles wrist/ --write` proposes them from file names and folders and writes the ones it is sure of. It lists the rest as unsure and leaves them for you to set; ask the user about any you cannot settle. It pairs a source with a header of the same name in its folder. A header whose name the source's only begins with, or a same-name header in another folder, is paired once the source has a `Depends on:` link to it.
-
-The checker warns when no `role: test` code stand-in has a `Depends on:` link to any member of a `role: product` code unit that declares a class or a function. **(checked, warning)** Only direct links count, and test data does not: a fixture that names its generator is not a test of it. Either link a test to the unit or record the gap with `untested: <reason>` on the unit's primary. **(checked)** The field says why no separate test stand-in links here, not that the code has no tests: where a language keeps tests in the same file as the code (Rust's `#[cfg(test)]` modules, Python doctests), write `untested: tests are inline in this file`. Abstract units are exempt until they are adapted.
-
-The checker also warns when a `role: product` stand-in depends on a `role: test` one, because one of the two roles is then probably wrong. **(checked, warning)**
-
-A test stand-in may demand only what the units it depends on expose. If a test needs a seam, such as a clock it can set or a write it can make fail, declare the seam on the unit.
-
-## 3. Common traits: the five basic questions
-
-Every stand-in, whatever its kind, answers these five questions somewhere in the file. **(checked)**
-
-| Question | Field(s) |
-|---|---|
-| What depends on this? | `Referred by:` (one or more) |
-| What does this depend on? | `Depends on:` (one or more) |
-| Is this always required? | `Required:` |
-| Known failure modes | `Failure modes:` |
-| Known unknowns that must be answered | one or more `*UNKNOWN*:` entries, or `Unknowns: none` |
-
-Put `Required:` and `Failure modes:` under the level-1 heading so they describe the whole file. You can also add `Failure modes:` to individual functions or resources, and you are encouraged to.
-
-`Depends on:` and `Referred by:` attach to the heading they appear under. Place them at the most specific level that is true. If only `save()` touches the store, the link belongs under `### function: save`, not under the module. The file-level answer is the union of all of them.
-
-Explicit "nothing" values are allowed and preferred to omission, because they record that the question was considered:
+## 3. Links
 
 ```markdown
-- **Depends on:** none
-- **Referred by:** none known
-- **Unknowns:** none
+- **Depends on:** [Ines Vale](../character.md.wrist.md#character-ines-vale) (appears)
+- **Referred by:** [scene: The mark](./work/the-lamp.md.wrist.md#scene-the-mark)
 ```
 
-Write `Required:` as one of these:
+- Paths are relative to the file holding the link; a `#fragment` is the GitHub-style slug of a heading (`## character: Ines Vale` is `#character-ines-vale`). **(checked)**
+- A dependency on another stand-in needs the matching `Referred by:` in the target, and the reverse. **(checked)** Write `Depends on:`, then run `fix-backlinks --write`.
+- An optional relation word in parentheses after the link names the relation: for the short story `appears`, `mentions`, `sets up`, `pays off`, `realizes`. An unlisted word is a warning. **(checked, warning)**
+- `Depends on:` may point at an external URL; `Referred by:` may not.
 
-- `always`
-- `conditional — <condition>`
-- `optional — <what is lost without it>`
+## 4. Unknowns
 
-## 4. Field syntax
-
-A field is a line that begins (optionally after a list bullet) with a label and a colon. All of these forms are accepted:
-
-```markdown
-Inputs: a path and a read mode
-- Inputs: a path and a read mode
-- **Inputs:** a path and a read mode
-- **Inputs**: a path and a read mode
-```
-
-The canonical form is `- **Label:** value`. Values can continue in prose or sub-bullets on the lines that follow.
-
-The recognized labels are `Depends on`, `Referred by`, `Inputs`, `Returns`, `State changes`, `Owns`, `Access`, `Required`, `Failure modes`, `Unknowns`, `Source`, and `Data requirements`.
-
-Fields belong to the nearest typed heading above them (`module:`, `class:`, `function:`, `symbol:`, `data:`, `infrastructure:`, `resource:`). Untyped sub-headings such as `#### Notes` or `## Schema` do not change ownership, so fields under `#### Edge cases` inside a function still belong to that function.
-
-## 5. Unknowns
-
-Only describe what is known. Anything that isn't known is declared as a formal unknown, never guessed. An unknown is one line, and a line holds one unknown. It takes one of two forms.
-
-A **declaration** states a decision that is still open:
+One line per unknown.
 
 ```markdown
-*UNKNOWN*: [short-name] <what is unknown>. Kind: blocking | local. Proposed: <the default you would choose>. Consequence: <what goes wrong or stays blocked while it is unknown>. Unlocks: <what can be specified or built once it is known>.
-```
-
-A **follower** marks another place that the same decision affects:
-
-```markdown
+*UNKNOWN*: [short-name] <what is unknown>. Kind: blocking | local. Proposed: <default>. Consequence: <what stays blocked>. Unlocks: <what becomes writable>.
 *UNKNOWN*: Follows [short-name]. Consequence: <what the open decision means here>.
 ```
 
-- The marker `*UNKNOWN*:` is exact. The checker also accepts `**UNKNOWN**:` and `**UNKNOWN:**`.
-- An unknown can stand on its own line, inside a bullet, or as a field value (`- **Returns:** *UNKNOWN*: ...`).
-- `[short-name]` is optional: lower-case letters, digits and hyphens, directly after the marker. A decision needs a name once a follower refers to it. Names are unique across the tree, `SYSTEM.md` included. **(checked)**
-- `Kind:` is required. **(checked)** `blocking` means the answer changes an interface, a schema, or whether a file exists. `local` means it affects only a function body, a constant, or a default.
-- `Proposed:` is required when the kind is `local`. **(checked)** On a blocking unknown it is optional and reads as a recommendation.
-- Clause labels are capitalised and begin a sentence, as in `... with Windows. Kind: blocking. Consequence: ...`. The same words inside a sentence are read as prose, so a description may mention `kind: Deployment` safely.
-- Declare a decision once. In every other place it affects, whether another stand-in or another heading in the same one, write a follower instead of repeating it. A follower must name a declared unknown. **(checked)**
-- A follower carries only `Consequence:`. `Kind:`, `Proposed:` and `Unlocks:` belong to the declaration. **(checked, warning)**
-- A label with nothing after it states nothing: `Proposed: .` counts as no proposal. **(checked)**
-- The checker warns when a declaration has no `Consequence:` or `Unlocks:` clause, or a follower has no `Consequence:`, because an unknown without consequences can't be prioritized.
-- The checker warns about informal markers (`TBD`, `TODO`, `FIXME`, `???`, or a bare `UNKNOWN`) outside code fences. Convert them to formal unknowns.
-- Place an unknown at the level it affects. A wire-format unknown belongs on the function that encodes it, not on the module.
-- Never add detail that contradicts an open unknown or goes beyond its `Proposed:`. If the database engine is unknown and nothing is proposed, don't write PostgreSQL-specific SQL in a sample; write the unknown instead.
+- `Kind:` is required; `Proposed:` is required for `local`. Names are unique across the tree and `PREMISE.md`. A follower must name a declared unknown. **(checked)**
+- A **blocking** unknown changes what a file contains or whether it exists; a **local** one affects only a detail and carries a proposal.
+- Anything you chose that the user did not state is an unknown with a `Proposed:`.
+- Informal markers (TBD, TODO, FIXME, ???) outside fences are warned about. **(checked, warning)**
 
-### Your own choices are unknowns too
+## 5. PREMISE.md
 
-Anything you settle that the user did not state is an unknown with a `Proposed:`. Write the stand-in as if the proposal holds, so the tree stays coherent, and leave the marker in place. Remove it only when the user agrees. A tree whose unknowns list is empty claims that the user has decided everything in it.
+Front matter between `---` lines; one `- **<question-id>:** answer` line per profile question.
 
-A blocking unknown may carry a proposal too. The tree may be written to that proposal, and every place that depends on the answer carries a follower.
+| Key | Meaning |
+|---|---|
+| `profile` | the profile in use **(checked)** |
+| `title`, `slug` | required; the slug is lower-case words joined by hyphens **(checked)** |
+| `author`, `language` | title page and metadata; `author` is needed to publish; `language` defaults to `en` |
+| `trim`, `font` | optional PDF trim size (a Typst paper name) and font family |
+| `questions_generation`, `questions_realization`, `questions_publishing` | `done` once that phase's questions were asked |
+| `review_done` | `yes` once the review pass is finished |
 
-Resolving a decision means replacing it with the decided text and deleting the declaration and every follower of it.
+A required question with no answer is an error; a deferrable one is a warning. An `*UNKNOWN*:` in the answer counts as an answer. **(checked)**
 
-`wrist_check.py unknowns wrist/` prints the decisions grouped by kind, each once, with its followers beneath it. A draft can show two more groups: decisions with no valid kind, and followers whose name nothing declares. That list is the agenda for the next conversation with the user. `check` and `unknowns` count decisions; followers are not counted.
+## 6. Fences
 
-## 6. Links and bidirectionality
-
-### Syntax
-
-```markdown
-Depends on: [<symbol depended upon>](<relative path to dependency's .wrist.md>)
-Referred by: [<symbol or item that refers to this>](<relative path to referring .wrist.md>)
-```
-
-- Paths are relative to the file containing the link. **(checked: target exists)**
-- To point at a specific symbol, append a heading fragment. Fragments are GitHub-style slugs of the heading text: lowercase, with punctuation other than `-` and `_` removed, and spaces turned into `-`. So `### function: save_all` becomes `#function-save_all`. **(checked: a fragment must match a heading in the target)**
-- Name the symbol in the link text using dotted qualification where it helps, for example `[UndoHistory.push](./history.code.wrist.md#function-push)`. A dotted name must agree with the heading the fragment points at: `UndoHistory.push` has to land on a `function: push` under `class: UndoHistory`, not on a free function of the same name. A module-qualified name (`history.push` for a free function in `module: history`) is also accepted. **(checked, warning)**
-- Use one link per line. A block form is also accepted:
-
-  ```markdown
-  - **Depends on:**
-    - [Command](./command.code.wrist.md#class-command)
-    - [Transaction](./transaction.code.wrist.md#class-transaction)
-  ```
-
-### What a link may target
-
-| Target | Allowed? | Backlink required? |
-|---|---|---|
-| another `.wrist.md` in `wrist/` | yes | **yes** |
-| same file (`#fragment`) | yes | no |
-| `http(s)://` URL, for an external library or service | `Depends on` only | no |
-| an existing project file outside `wrist/` (code that already exists) | `Depends on` only | no |
-| a non-`.wrist.md` file inside `wrist/` | no (warning) | no |
-
-### The bidirectionality rule **(checked)**
-
-If A has `Depends on: [x](B)`, then B must have a `Referred by:` linking to A. Likewise, if B has `Referred by: [y](A)`, then A must have a `Depends on:` linking to B. The pair is checked at file granularity: the symbol text and fragments may differ, but both ends must exist.
-
-This is what lets an implementer change B and immediately see every contract that might break. Write the `Depends on:` side as you author. Then run `wrist_check.py fix-backlinks wrist/ --write` to insert the missing `Referred by:` lines, and review the inserted symbol names.
-
-A `Referred by:` with no matching `Depends on:` is an error that is not auto-fixed. It claims something about another file, so decide which side is wrong.
-
-## 7. Code files
-
-### Hierarchy **(checked)**
-
-```text
-# module: <module name>              exactly one, level 1
-## class: <class name>               level 2, under the module
-### function: <method name>          level 3, under a class
-## function: <function name>         level 2, a free function under the module
-## symbol: <name>                    level 2 or 3: a constant, type alias, enum, or global
-```
-
-Deeper typed nesting (for example a function inside a function) is not allowed. Describe closures and inner helpers in prose under their owner. Untyped headings (`#### Algorithm`, `## Notes`) may appear anywhere for organization.
-
-A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `wrist_check.py status` lists every heading whose name it cannot find in the implemented file. A code stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks. The stamp is the short hash of the stand-in that `wrist_check.py stamp` writes into a code file's `Spec:` header; `implementing.md` says when to write it.
-
-### Prose
-
-Any level may contain any prose that explains what it does and why. Treat prose as the place for intent, rationale, rejected alternatives, and the agent prompts that should guide implementation (for example, "Prefer clarity over cleverness here; this runs once per session."). The fields below are the minimum, not the whole spec.
-
-### Required fields per level **(checked)**
-
-| Level | Inputs | Returns | State changes | Owns | Access |
-|---|---|---|---|---|---|
-| module | | | | ✔ | ✔ |
-| class | ✔ (construction) | | ✔ (instance state and invariants) | ✔ | ✔ |
-| function | ✔ | ✔ | ✔ | | ✔ |
-| symbol | | | | | ✔ |
-
-These fields may also appear where they are not required, for example `Owns:` on a function that allocates a resource.
-
-The fields mean:
-
-- **Inputs** are the parameters (name, meaning, type if known, constraints), plus any ambient input read (environment variables, global config, the clock) and anything supplied later: callbacks, listeners, and hooks injected for tests. For a class, they are the construction inputs.
-- **Returns** is the result and what it means, including error or empty results. Write `nothing` when there is no result.
-- **State changes** are mutations visible outside the call: fields, files, network, caches, events emitted. Write `none` for pure functions. For a class, state the invariants that hold between calls.
-- **Owns** is what this unit is the single source of truth for, or is responsible for releasing: data, resources, lifecycles.
-- **Access** is how other code is expected to reach it: public or internal, singleton or injected, which thread or async context may call it, call ordering constraints, how long the references it holds or hands out stay valid, and whether it needs mutable access to what it depends on.
-
-`Inputs` and `Returns` describe meaning and constraints first and types second. Give types when they are known, and use an `*UNKNOWN*:` when the type depends on an open decision.
-
-## 8. Data files
-
-```markdown
-# data: <name>
-
-<prose: what this data is for>
-
-- **Source:** hand-authored | generated | external — <detail>
-- **Required:** ...
-- **Failure modes:** ...
-- **Depends on:** ...
-- **Referred by:** ...
-
-## Schema
-<fenced block in the most convenient notation for the format>
-
-## Generation        (required if Source says generated)
-<the full pipeline, links to tools, and development usage in a fenced block>
-```
-
-- `## Schema` **(checked)** must contain at least one fence. Use the most convenient notation: JSON Schema or annotated JSONC for JSON, a header row plus a column table for CSV, a `.proto` excerpt, a YAML example with comments, or a DDL fragment.
-- `## Generation` **(checked when generated)** must contain at least one link to the tool or code that produces the data and at least one fence showing development usage (the command to regenerate, fixture flags, sample sizes). Describe every stage from source to file, including where the inputs come from, how often it runs, and how it is validated.
-- Readers of the data link to it with `Depends on:`, and the data file lists them with `Referred by:`.
-
-## 9. Persistent storage and infrastructure-as-code
-
-Frame all storage as infrastructure-as-code. Databases, buckets, queues, caches, and even "a JSON file in the user's app-data directory" are resources that some IaC-kind stand-in declares.
-
-- Code that reads or writes storage has a `Depends on:` link to the IaC stand-in's resource heading.
-- When the IaC tool isn't decided, use a placeholder `.iac` file and record the choice as an unknown.
-- For purely local storage with no real IaC tool, an `.iac` stand-in still records the requirements, so the decision is visible and reviewable.
-
-IaC files use this structure:
-
-```markdown
-# infrastructure: <name>
-
-- **Required:** ...
-- **Failure modes:** ...
-- **Depends on:** ...          (providers, accounts, other stacks)
-- **Referred by:** ...         (optional at file level; required per resource)
-
-## resource: <name>
-<prose>
-- **Data requirements:** shape, volume, retention, consistency, latency, access pattern, and security/PII class
-- **Referred by:** [<consumer symbol>](<path>)     (every consumer, at least one)
-```
-
-Each `## resource:` **(checked)** needs `Data requirements:` and at least one `Referred by:`. The data requirements are the contract. A resource with no consumers is either dead or a missing link, and the checker warns when it sees `Referred by: none known`.
-
-## 10. Resource files
-
-Images, fonts, stylesheets, templates, and similar assets use `# resource: <name>` plus the five traits. Describe format, dimensions or variants, provenance and licensing, and how the resource is produced. If it is generated, follow the data-file `## Generation` convention.
-
-## 11. Sample code and fences
-
-- Every fence opens with three or more backticks (or tildes) followed by a language tag. **(checked)** Use `text` for plain text.
-- Include sample code only when code is the clearest way to state a contract, such as a signature, a wire format, a tricky algorithm, or an API usage example. A wrist file is a specification, not a draft implementation.
-- Fenced content is ignored for headings, fields, links, and unknowns, so examples can show wrist syntax safely.
-
-## 12. SYSTEM.md
-
-`wrist/SYSTEM.md` is the one non-stand-in file. It holds context that belongs to no single file:
-
-- purpose and scope
-- glossary
-- global decisions (language, platform, frameworks), each either stated or recorded as an unknown
-- cross-cutting concerns (logging, error policy, concurrency model)
-- a test strategy: which levels of test the plan contains, what each covers, and any level left out on purpose with the reason
-- an entry-point index linking to the main stand-ins
-
-Use the same `*UNKNOWN*:` convention in it. The checker holds its unknowns to the rules in section 5 and checks that its links resolve **(checked)**; it does not apply the rest of the stand-in grammar to it. `wrist_mv.py` keeps its links up to date.
+Every fence opens with three or more backticks (or tildes) and a language tag; use `text` for plain text. **(checked)** Fenced content is ignored for headings, fields, links and unknowns.

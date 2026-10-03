@@ -1,104 +1,103 @@
 ---
 name: wrist
-description: Author, validate, and implement Wrist specifications. Wrist is a code-shaped, prose-only design format where every project file gets a stand-in at wrist/PATH/FILE.EXT.wrist.md describing its modules, classes, functions, data schemas, or infrastructure, with bidirectional `Depends on:`/`Referred by:` links and formal `*UNKNOWN*:` markers. Use this skill whenever the user mentions Wrist, .wrist.md files, or a wrist/ folder. Also use it when the user wants to plan or architect a codebase before coding, turn a design, PRD, or spec into an implementation plan shaped like the code, describe a reusable subsystem (undo, auth, sync, plugins, job queues) independent of language or platform, or implement or update code from an existing wrist/ tree. Prefer it over writing a linear spec or task list whenever the user wants architecture-first planning that an agent will implement.
+description: Write a prose work (short story, with novel, screenplay and poem to follow) in four phases - premise, generation, realization, publishing. A tree of prose stand-ins under wrist/ holds the notes, facts, rules and unknowns for every file before any final text exists; a checker validates links and structure; then the files are realized and published as PDF and EPUB. Use this whenever the user wants to write, plan or outline a short story, novel, screenplay or poem, mentions wrist, .wrist.md files or a wrist/ folder, or wants a long work built from a checked outline instead of drafted freehand.
 ---
 
-# Wrist specifications
+# wrist: writing in four phases
 
-A Wrist tree is an intermediate design that has the **shape of the final code** but is written entirely in prose. `wrist/` mirrors the project root, and each file in it is a stand-in for one file that will be generated in its place:
+A wrist tree is a set of **stand-ins**: one note file per file the work will contain, under `wrist/`, each ending in `.wrist.md`. A stand-in says what its file must contain (facts, beats, rules, dependencies, unknowns). It never holds the final text. The stand-ins are checked mechanically, and only then is each file written from its stand-in. The target is a work that would stand up to an editor or a prize jury for its intended audience.
 
 ```text
-wrist/src/net/client.py.wrist.md   ->  src/net/client.py
-wrist/data/regions.json.wrist.md   ->  data/regions.json
-wrist/infra/main.tf.wrist.md       ->  infra/main.tf
+wrist/synopsis.md.wrist.md      ->  synopsis.md
+wrist/work/the-lamp.md.wrist.md ->  work/the-lamp.md
 ```
 
-Inside a code stand-in, headings follow the code (`# module:` > `## class:` > `### function:`). Every unit states its inputs, returns, state changes, ownership, and access. Every dependency is a link, and every link has a backlink, so an implementer can see both what a unit needs and who relies on it. Anything not yet known is a formal `*UNKNOWN*:` rather than a guess. The tree then works as an implementation plan an agent can follow file by file with little ambiguity.
+The `references/`, `profiles/`, `assets/` and `scripts/` paths here are relative to this skill's directory, `${CLAUDE_SKILL_DIR}`, not to the user's project.
 
-## When you are doing which job
+Read `references/grammar.md` before writing or editing any `.wrist.md`. The checker enforces it. Only the `shortstory` profile exists so far; if the user wants a novel, screenplay or poem, say it is not built yet.
 
-| Job | Read |
-|---|---|
-| Author a wrist tree for a concrete project | `references/grammar.md` (always), then the workflow below |
-| Describe a language- and platform-neutral system | `references/grammar.md`, `references/abstract-systems.md`, `assets/examples/undo-system/` |
-| Implement code from an existing wrist tree, or keep code and wrist in sync | `references/implementing.md` |
+## The four phases
 
-Read `references/grammar.md` before writing or editing any `.wrist.md`. It is the normative grammar, and the checker enforces it.
+Each phase starts with a **question phase**: ask the user whatever you need so that nothing in the phase is a guess. Ask a few questions at a time in plain language, and offer your recommendation with each. Record the result, then run the phase's gate:
 
-The `references/`, `assets/`, and `scripts/` paths in this skill are relative to the skill's own directory, `${CLAUDE_SKILL_DIR}`, not to the project you are working in.
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" gate wrist generation   # or realization, publishing
+```
 
-## Core rules (summary)
+A gate prints what blocks the phase. It stays blocked until `PREMISE.md` records that you asked: set `questions_<phase>: done` in its front matter after the questions are answered, never before.
 
-- **Naming:** use `wrist/<mirrored path>/<file>.<ext>.wrist.md`. The extension sets the kind: code, data, iac, or resource. Abstract systems use the placeholders `.code`, `.data`, and `.iac`.
-- **Front matter:** every stand-in starts with `role: product | test | manifest`. `unit:` names the stand-in this one is built with, as a source file names its header. `untested: <reason>` records why a product unit has no test.
-- **Five basic questions in every file:** `Referred by:` (what depends on this), `Depends on:` (what this depends on), `Required:`, `Failure modes:`, and unknowns (`*UNKNOWN*:` entries or `Unknowns: none`). Write `none` explicitly rather than omitting a field.
-- **Code hierarchy and fields:** a module needs Owns and Access. A class needs Inputs, State changes, Owns, and Access. A function needs Inputs, Returns, State changes, and Access. Prose of any kind is welcome at every level.
-- **Links:** `Depends on: [Symbol](./rel/path.ext.wrist.md#class-symbol)` must be matched by `Referred by: [Symbol](./back/path.ext.wrist.md)` in the target, and vice versa.
-- **Data:** state `Source:`, give a `## Schema` with a fenced block, and if the data is generated, add a `## Generation` section with the pipeline, tool links, and a development usage fence.
-- **Storage is infrastructure-as-code:** each store is a `## resource:` in an iac stand-in, with `Data requirements:` and its consumers listed as `Referred by:`.
-- **Unknowns:** use `*UNKNOWN*: [name] <what>. Kind: blocking | local. Proposed: <...>. Consequence: <...>. Unlocks: <...>.` Declare a decision once and mark the other places it affects with `*UNKNOWN*: Follows [name]. Consequence: <...>.` Anything you choose that the user did not state is an unknown with a `Proposed:`. Never present your own choice as settled.
-- **Fences** always carry a language tag. Include sample code only when code is the clearest way to state a contract.
+### 1. Premise
 
-## Authoring workflow
+1. Ask which profile (`shortstory`). Read `profiles/shortstory/questions.md`.
+2. Ask the questions: `required` ones must be answered or become an `*UNKNOWN*:`; `deferrable` ones may be left out. Never invent an answer.
+3. Write `wrist/PREMISE.md` from `assets/templates/PREMISE.md`: front matter (`profile`, `title`, `slug`, `author`, `language`) and one `- **<id>:** <answer>` line per question. The slug is a file-friendly form of the title (lower-case words joined by hyphens).
 
-1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions. Don't resolve open questions yourself; they become unknowns. A choice you make to keep the design moving is an unknown too, with your choice as its `Proposed:`.
-2. **Write `wrist/SYSTEM.md`** from `assets/templates/SYSTEM.md`. Include scope, glossary, global decisions, and entry points.
-3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix. Then give every stand-in its role, and pair each source file with its header:
+### 2. Generation
 
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" infer-roles wrist --write
-   ```
+1. Question phase, then `questions_generation: done`.
+2. Read `profiles/shortstory/structures.md` and `quality.md`. Choose a structure that fits the premise. If the user did not name one, record the choice as an `*UNKNOWN*:` with `Proposed:`; do not present your own choice as settled.
+3. Write every stand-in in the profile's shape (five files for a short story), using `assets/templates/`. Create the empty files first so links have targets. Fill in the notes; copy the quality rules that apply into each stand-in's `Rules:`. No stand-in contains final prose: a scene says what it must do, include and avoid, not the sentences.
+4. Add `Depends on:` links with a relation word where it helps, for example `(appears)` or `(realizes)`. Do not hand-write `Referred by:` yet. Then:
 
-   It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
-4. **Fill each stand-in top-down** from the templates in `assets/templates/`, keeping the front matter step 3 wrote. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
-5. **Walk each dependency as its caller.** For every `Depends on:` link, read the target and confirm that it declares each function, type and callback this unit's prose says it uses, that the mutability and lifetime it offers fit, and that every type the tree defines and the prose names has its own `class:` or `symbol:` heading. Add what is missing to the target now. Each gap found here is one an implementer would otherwise fill by changing the plan.
-6. **Generate the backlinks** and review them:
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" fix-backlinks wrist --write
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
+```
 
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" fix-backlinks wrist --write
-   ```
+   Repeat until `check` is clean. A missing file is an error: the tree must name every file that will exist.
+5. Hand back the agenda from `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns wrist` (blocking decisions need the user before realization; local ones come with a proposal to accept) and `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order wrist` (the realization order). List nothing as decided that is not in the tree.
 
-   Then go through the inserted lines and fix the symbol text where a better name exists.
-7. **Validate** until the tree is clean:
+### 3. Realization
 
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist            # --lenient while drafting
-   ```
-8. **Hand back the agenda.** Run `wrist_check.py unknowns wrist` and `wrist_check.py batches wrist`, and report in this shape:
-   1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence, what it unlocks, and its proposal if it has one.
-   2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
-   3. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
-   4. **Code that now trails the plan:** the Stale group from `wrist_check.py status wrist --root .`. Leave this out when nothing is implemented yet.
+1. Question phase (confirm the unknowns are resolved), then `questions_realization: done`. Run `gate wrist realization`.
+2. Realize the files in the order `order` prints. For each: read its stand-in and the stand-ins it depends on, write the file at the mirrored path, then stamp it:
 
-   The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.md
+```
+
+   Follow every `Rules:`, `Must include:` and `Must avoid:`. If the work needs something the stand-in does not say, change the stand-in first, run `check`, then realize; never let the text drift from its notes.
+3. Craft rules for every file: write for the intended reader; prefer the specific to the general; let action and detail carry feeling; give each speaker a distinct voice; vary sentence length and shape; cut anything the story survives losing; read as the audience would.
+4. Run `lint`, fix each hit that is not deliberate, and re-stamp:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
+```
+
+5. Do the review pass: work through the `## Judgment checklist` in `quality.md` against the text. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
+6. `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status wrist` must show every file realized. A stand-in changed after its file was realized shows as stale: realize the file again.
+
+### 4. Publishing
+
+1. Question phase: ask the author line, the title page text, the trim size (`trim:` a Typst paper name such as `a5` or `us-trade`) and the font if not the default. Record them in `PREMISE.md`, then set `questions_publishing: done`.
+2. Run `gate wrist publishing`, then:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" publish wrist
+```
+
+   It needs `pandoc` and `typst`; if either is missing it prints the install steps and stops. Output is `output/<slug>.epub` and `output/<slug>.pdf`. See `references/publishing.md`.
 
 ## Writing good stand-ins
 
-- **Specify contracts, not code.** The test is whether two competent implementers working from this stand-in would produce code that is interchangeable at every boundary the links describe. If they wouldn't, the stand-in is underspecified. If the stand-in dictates loop structure, it is overspecified.
-- **Put intent where it's used.** Rationale, rejected alternatives, and guidance for the implementing agent ("keep this allocation-free; it's on the render path") go in prose at the level they apply to, not in a separate document.
-- **Prefer the narrowest level.** A dependency used by one method is linked from that method, so the backlink names the method and change impact stays precise.
-- **Make failure modes concrete:** say what triggers each one and what the expected handling is. They become the test list.
-- **Frame persistence as infrastructure.** If a function reads or writes state that outlives the process, it links to an iac resource.
-- **Use names the language allows.** A heading's name becomes an identifier, so it cannot be a keyword of the target language (`delete`, `class`, `namespace`), and it follows that language's naming style.
-- **Give tests their seams.** If a test must set the clock or make a write fail, declare that hook on the unit, in its `Inputs:`.
-- **Keep unknowns honest.** An unknown with a clear consequence and unlock is more useful than a confident guess, because it tells the user exactly which decision to make. The same goes for your own choices: a proposal the user can veto is worth more than a decision they never saw.
+- **Notes, not text.** If a stand-in could be pasted into the book, it is too long. The checker warns when free prose under a heading passes the profile's word limit.
+- **Put intent where it is used.** Rationale and rules go at the level they apply to.
+- **No ambiguity about files.** Every file the work will contain has a stand-in before realization starts; the profile fixes the shape.
+- **Your choices are unknowns.** Anything the user did not state is an `*UNKNOWN*:` with your choice as `Proposed:`.
 
 ## Tools
 
-All scripts use only the Python standard library.
-
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check WRIST_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns WRIST_DIR [--json]   # open decisions by kind, each once, with followers
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order WRIST_DIR [--json]      # dependency sort (not a build plan), cycles grouped
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status WRIST_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp WRIST_DIR --root . PATH... | --all   # record your claim that code matches its stand-in; checks nothing
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check WRIST_DIR [--lenient] [--profile NAME]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns WRIST_DIR [--json]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order WRIST_DIR [--json]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status WRIST_DIR [--root .]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp WRIST_DIR PATH... | --all [--root .]
 python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" fix-backlinks WRIST_DIR [--write]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" infer-roles WRIST_DIR [--write]   # propose role: and unit: front matter
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" batches WRIST_DIR [--json]    # buildable batches of units; manifests set aside
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_mv.py" WRIST_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" gate WRIST_DIR generation|realization|publishing
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint WRIST_DIR [--root .]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" publish WRIST_DIR [--root .]
+python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_mv.py" WRIST_DIR OLD NEW | --map map.txt [--dry-run]
 ```
 
-The reference files and templates name the scripts by filename alone (`wrist_check.py check wrist/`). Run them by the full paths shown here.
-
-`check` exits non-zero on errors, so it can run in CI or pre-commit to keep the tree consistent. It never reads code: `status` is what reports code that has drifted from the tree, and it always exits 0. `--lenient` reports missing fields as warnings, so a draft can be checked for structure and links before every field is filled in. Broken links and bad names still fail.
+All scripts use only the Python standard library. `check` exits non-zero on errors. `--root` defaults to the folder that holds `wrist/`.

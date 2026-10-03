@@ -83,8 +83,7 @@ The following describe code and have no prose meaning:
 ### Kept
 
 Parsing of sections and fields, link resolution and fragments, the bidirectionality check,
-unknown declaration and follower rules, `unknowns`, `fix-backlinks`, `wrist_mv`, and the SCC
-helper.
+unknown declaration and follower rules, `unknowns`, `fix-backlinks` and `wrist_mv`.
 
 ## Stand-ins
 
@@ -236,6 +235,7 @@ matter, with `--profile` as an override.
 | `status` | per stand-in: pending, realized, stale (stand-in changed since stamp), edited (realized file changed since stamp) |
 | `stamp` | records stand-in hash, realized-file hash and date in the sidecar for the given files or `--all` |
 | `fix-backlinks` | inserts missing `Referred by:` lines |
+| `gate` | lists what blocks the generation, realization or publishing phase; exit 1 when blocked |
 | `lint` | scans realized files against `lint.json`; reports hits with file, line and label; advisory, exit 0 |
 | `publish` | see Publishing |
 | `wrist_mv.py` | moves or renames stand-ins and rewrites links |
@@ -252,7 +252,7 @@ The "no ambiguity about files realized later" requirement becomes these errors:
 
 ### `PREMISE.md`
 
-Front matter: `profile:`, `title:`, `slug:`, and `question_phase:` flags per phase. The body
+Front matter: `profile:`, `title:`, `slug:`, `author:`, `language:`, optional `trim:` and `font:`, `questions_generation`, `questions_realization` and `questions_publishing` (each `done` once that phase's questions were asked), and `review_done: yes`. The body
 lists each profile question with the user's answer or an `*UNKNOWN*:`. The slug must be a
 file-friendly form of the title. `check` validates that every `required` question has an answer
 or an unknown. Its unknowns join the tree agenda and `unknowns` output.
@@ -345,3 +345,5 @@ user instruction, to confirm during review:
 4. The relation-word list is per profile and an unlisted word is a warning.
 5. The review pass is recorded as a `review_done:` flag in `PREMISE.md` front matter.
 6. The `max_prose_words` cap is a warning, not an error.
+7. `order` does not group dependency cycles; it reports only dependencies that contradict the profile order.
+8. The kept skel tests were not carried over verbatim: they were fused to the undo-system code fixture, so the behavior they covered was re-tested against the-lamp example.

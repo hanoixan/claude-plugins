@@ -1,6 +1,6 @@
 # hanoixan-claude-plugins
 
-A Claude Code plugin marketplace. Five plugins.
+A Claude Code plugin marketplace. Six plugins.
 
 Four are small and built around the same observation: **a skill body reaches the model
 once, when it is invoked, and then sits at a fixed point in the conversation while
@@ -30,6 +30,7 @@ Then install whichever plugins you want:
 /plugin install plan-batch-execution@hanoixan-claude-plugins
 /plugin install ask-questions@hanoixan-claude-plugins
 /plugin install skel@hanoixan-claude-plugins
+/plugin install wrist@hanoixan-claude-plugins
 ```
 
 ### Requirements
@@ -51,6 +52,7 @@ standard library.
 | [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
 | [skel](#skel) | Designing a codebase before writing it | none | yes | none |
+| [wrist](#wrist) | Writing a short story from a checked outline | none | yes | none |
 
 ---
 
@@ -288,3 +290,28 @@ plugins/<name>/
 ## License
 
 MIT
+
+## wrist
+
+Writes a prose work in four phases, using the same idea as skel. A `wrist/` folder mirrors the
+files the work will contain, each as a `.wrist.md` stand-in that holds notes, facts, rules and
+open questions, never the final text:
+
+```
+wrist/synopsis.md.wrist.md       ->  synopsis.md
+wrist/work/the-lamp.md.wrist.md  ->  work/the-lamp.md
+```
+
+The phases are premise (the profile's questions, recorded in `wrist/PREMISE.md`), generation (the
+stand-in tree, checked for structure, links and unknowns), realization (each file written from its
+stand-in, linted for clichés, reviewed against a checklist) and publishing (`output/<slug>.pdf`
+and `output/<slug>.epub` through pandoc and typst). Each phase is preceded by a question phase and
+a gate.
+
+A profile is data: the file shape, the headings and required fields, the questions, the reference
+structures and a list of clichés to avoid. Only `shortstory` exists so far; novel, screenplay and
+poem profiles are planned.
+
+wrist needs `python3` for its scripts (standard library only) and, to publish, `pandoc` 3.2+ and
+`typst` 0.12+. A complete worked example is in
+`plugins/wrist/skills/wrist/assets/examples/the-lamp/`.
