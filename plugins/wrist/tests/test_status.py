@@ -105,6 +105,8 @@ class Order(TreeCase):
         names = [l.split()[1] for l in out.splitlines() if l[:1].isdigit()]
         self.assertEqual(names, ["synopsis.md", "outline.md", "character.md", "misc.md", "work/the-lamp.md"])
         self.assertNotIn("contradict", out)
+        self.assertIn("1. synopsis.md  (synopsis)", out)
+        self.assertIn("5. work/the-lamp.md  (story)", out)
 
     def test_a_dependency_on_a_later_file_is_reported_but_is_not_an_error(self):
         self.append(SYNOPSIS, "- **Depends on:** [story](./work/the-lamp.md.wrist.md) (mentions)\n")

@@ -899,7 +899,8 @@ def cmd_order(args):
     deps, _ = build_edges(wrist_root, files, report=False)
     rank = {path: i for i, (path, _) in enumerate(profile.expected_files(slug))}
     ordered = sorted_files(files, profile, slug)
-    order = [{"step": i, "stand_in": sf.rel, "realizes": sf.impl_rel, "function": sf.function,
+    order = [{"step": i, "stand_in": sf.rel, "realizes": sf.impl_rel,
+              "function": profile.function_for(sf.impl_rel, slug),
               "unknowns": len(sf.unknowns)} for i, sf in enumerate(ordered, 1)]
     conflicts = []
     for (a, b) in sorted(deps, key=lambda e: (files[e[0]].rel, files[e[1]].rel)):
