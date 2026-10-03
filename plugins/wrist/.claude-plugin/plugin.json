@@ -1,0 +1,8 @@
+{
+  "name": "wrist",
+  "description": "Design a codebase as a prose skeleton before writing it: one stand-in per project file under wrist/, with bidirectional dependency links, formal unknowns, and a checker that validates the tree",
+  "version": "2.0.0",
+  "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "license": "MIT",
+  "keywords": ["specification", "architecture", "design", "planning", "scaffolding"]
+}

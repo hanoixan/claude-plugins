@@ -1,0 +1,36 @@
+# System: <name>
+
+<Purpose and one-paragraph overview.>
+
+## Scope
+
+In scope: ...
+Out of scope: ...
+
+## Glossary
+
+- **<Term>**: <definition>
+
+## Global decisions
+
+- Language/runtime: <decided value> or *UNKNOWN*: [language] ... Kind: blocking. Consequence: ... Unlocks: ...
+- Platform/deployment: ...
+- Concurrency model: ...
+- Error-handling policy: ...
+- Logging/observability: ...
+
+## Test strategy
+
+- Levels in this plan: <unit | integration | end-to-end>, and what each covers.
+- Left out on purpose: <level or kind of test, and why>.
+
+## Entry points
+
+- [<Main symbol>](<./path.ext.wrist.md#class-name>): <role>
+
+## Adaptation checklist (abstract systems only)
+
+1. Answer the unknowns (`wrist_check.py unknowns wrist/`).
+2. Map placeholder paths to real paths and run `wrist_mv.py wrist --map map.txt`.
+3. Make signatures concrete; delete resolved unknowns.
+4. Run `wrist_check.py check wrist/`, then `batches`.
