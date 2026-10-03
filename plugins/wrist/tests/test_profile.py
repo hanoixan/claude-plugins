@@ -57,6 +57,9 @@ class ShortstoryProfile(unittest.TestCase):
     def test_relations_are_lower_case(self):
         self.assertIn("appears", self.p.relations)
 
+    def test_a_short_story_has_no_title_page(self):
+        self.assertIs(self.p.title_page, False)
+
 
 class Validation(unittest.TestCase):
     def assertRejected(self, data, fragment, questions=""):
@@ -69,6 +72,14 @@ class Validation(unittest.TestCase):
         self.assertEqual(p.functions["beta"]["children"], {})
         self.assertEqual(p.functions["beta"]["fields"], [])
         self.assertEqual(p.relations, ["uses"])
+
+    def test_title_page_defaults_to_true(self):
+        self.assertIs(wp.parse_profile(base()).title_page, True)
+
+    def test_title_page_must_be_true_or_false(self):
+        data = base()
+        data["title_page"] = "yes"
+        self.assertRejected(data, "'title_page' must be true or false")
 
     def test_missing_key(self):
         data = base()

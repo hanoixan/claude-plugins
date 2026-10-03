@@ -13,9 +13,13 @@ Only files whose profile function is marked `prose` (the story, for a short stor
 
 ## Layout
 
-- **EPUB:** pandoc, with `publish/epub.css` (justified text, hyphenation, indented paragraphs, `* * *` scene breaks) and a generated title page from the title, author and language in `PREMISE.md`.
-- **PDF:** pandoc into `publish/book.typ` via Typst: a title page, justified and hyphenated text, first-line indents, widow and orphan control, mirrored running heads, page numbers, and chapter or section openers. The default font is Libertinus Serif, which Typst embeds.
+- **EPUB:** pandoc, with `publish/epub.css` (justified text, hyphenation, indented paragraphs, `* * *` scene breaks). The title, author and language come from `PREMISE.md`.
+- **PDF:** pandoc into `publish/book.typ` via Typst: justified and hyphenated text, first-line indents, widow and orphan control, mirrored running heads, page numbers, and chapter or section openers. The default font is Libertinus Serif, which Typst embeds.
 - **Trim size** is `trim:` in `PREMISE.md`, a Typst paper name (`a5` by default, `us-trade`, `iso-b5`, `a4`). **Font** is `font:`.
+
+## Title page
+
+Whether a work gets a separate title page is the profile's `title_page` setting. A short story has none: its own heading is the title, and an italic byline (the `author:` from `PREMISE.md`) follows it in both formats. A profile that sets `title_page` to true, as a novel's will, gets a title page with the title and author, and no byline under the first heading.
 
 ## When the build fails
 

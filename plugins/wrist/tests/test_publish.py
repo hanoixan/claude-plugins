@@ -54,6 +54,33 @@ class PlanCommands(unittest.TestCase):
         self.assertNotIn("papersize=us-trade", plan["epub"])
 
 
+class TitlePage(unittest.TestCase):
+    META = {"title": "The Lamp", "author": "Ada Example", "language": "en"}
+
+    def plan(self, **meta):
+        return dict(wrist_publish.plan_commands(["work/the-lamp.md"], dict(self.META, **meta),
+                                                "output", "the-lamp", PUBLISH_DIR))
+
+    def test_a_title_page_is_the_default(self):
+        plan = self.plan()
+        self.assertNotIn("--epub-title-page=false", plan["epub"])
+        self.assertNotIn("no-title-page=true", plan["pdf"])
+        self.assertNotIn("--lua-filter", plan["epub"] + plan["pdf"])
+
+    def test_without_a_title_page_both_formats_drop_it_and_add_a_byline(self):
+        plan = self.plan(title_page=False)
+        self.assertIn("--epub-title-page=false", plan["epub"])
+        self.assertIn("no-title-page=true", plan["pdf"])
+        byline = os.path.join(PUBLISH_DIR, "byline.lua")
+        for argv in plan.values():
+            self.assertEqual(argv[argv.index("--lua-filter") + 1], byline)
+        self.assertTrue(os.path.isfile(byline))
+
+    def test_the_template_can_leave_the_title_page_out(self):
+        with open(os.path.join(PUBLISH_DIR, "book.typ"), encoding="utf-8") as fh:
+            self.assertIn("$if(no-title-page)$", fh.read())
+
+
 class TemplateHelpers(unittest.TestCase):
     """Pandoc emits `#divider()` for a scene break (3.12; `#horizontalrule` in older versions)."""
 
@@ -131,6 +158,25 @@ class PublishCommand(TreeCase):
         self.assertIn("The sign in the window said closed", text)
         self.assertNotIn("Referred by", text)
         self.assertNotIn("PREMISE", text)
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_a_short_story_epub_has_its_heading_and_a_byline_but_no_title_page(self):
+        self.publish()
+        with zipfile.ZipFile(self.path("output/the-lamp.epub")) as z:
+            names = z.namelist()
+            chapter = z.read("EPUB/text/ch001.xhtml").decode("utf-8")
+        self.assertFalse([n for n in names if "title_page" in n], names)
+        self.assertIn("<h1>The Lamp</h1>", chapter)
+        self.assertRegex(chapter, r'<div class="byline">\s*<p>Ada Example</p>')
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_a_title_page_is_still_built_when_asked_for(self):
+        plan = wrist_publish.plan_commands(["work/the-lamp.md"],
+                                           {"title": "The Lamp", "author": "Ada Example", "title_page": True},
+                                           "output", "the-lamp", PUBLISH_DIR)
+        wrist_publish.run_commands(plan, self.dir)
+        with zipfile.ZipFile(self.path("output/the-lamp.epub")) as z:
+            self.assertTrue([n for n in z.namelist() if "title_page" in n])
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUESTION_RE = re.compile(r"^-\s+\[(required|deferrable)\]\s+([a-z0-9]+(?:-[a-z0-9]+)*):\s+(\S.*)$")
 TOP_KEYS = {"name", "files", "functions", "relations", "limits"}
+OPTIONAL_KEYS = {"title_page"}      # title_page: a separate title page when published; default true
 FUNCTION_KEYS = {"heading", "fields", "children", "prose"}
 SCOPES = ("narration", "anywhere")
 LINT_KEYS = ("id", "pattern", "label", "note", "scope", "positive", "negative")
@@ -40,9 +41,11 @@ def validate(data):
     missing = sorted(TOP_KEYS - set(data))
     if missing:
         raise ProfileError("profile.json is missing " + ", ".join(repr(k) for k in missing))
-    extra = sorted(set(data) - TOP_KEYS)
+    extra = sorted(set(data) - TOP_KEYS - OPTIONAL_KEYS)
     if extra:
         raise ProfileError(f"profile.json has unknown key {extra[0]!r}")
+    if not isinstance(data.get("title_page", True), bool):
+        raise ProfileError("'title_page' must be true or false")
     if not (isinstance(data["name"], str) and NAME_RE.match(data["name"])):
         raise ProfileError("'name' must be lower-case letters, digits and hyphens")
     functions = data["functions"]
@@ -108,6 +111,7 @@ class Profile:
         self.functions = data["functions"]
         self.relations = [r.lower() for r in data["relations"]]
         self.limits = data["limits"]
+        self.title_page = data.get("title_page", True)
         self.questions = questions
         self.directory = directory
 

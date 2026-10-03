@@ -70,7 +70,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
 
 ### 4. Publishing
 
-1. Question phase: ask the author line, the title page text, the trim size (`trim:` a Typst paper name such as `a5` or `us-trade`) and the font if not the default. Record them in `PREMISE.md`, then set `questions_publishing: done`.
+1. Question phase: ask the author line (it appears as the byline under a short story's heading, or on a novel's title page), the trim size (`trim:` a Typst paper name such as `a5` or `us-trade`) and the font if not the default. Record them in `PREMISE.md`, then set `questions_publishing: done`.
 2. Run `gate wrist publishing`, then:
 
 ```bash

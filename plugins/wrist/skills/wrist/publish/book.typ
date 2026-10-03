@@ -19,6 +19,9 @@ $endif$
 )
 #set par(justify: true, leading: 0.62em, spacing: 0.62em, first-line-indent: 1.2em)
 
+$if(no-title-page)$
+// No title page: the work's own heading is its title and a byline follows it.
+$else$
 // Title page: no number, no running head.
 #page(paper: "$if(papersize)$$papersize$$else$a5$endif$", margin: 22mm, header: none, footer: none)[
   #align(center + horizon)[
@@ -27,6 +30,7 @@ $endif$
     #text(size: 1.15em)[$for(author)$$author$$sep$, $endfor$]
   ]
 ]
+$endif$
 
 #set page(
   paper: "$if(papersize)$$papersize$$else$a5$endif$",

@@ -32,7 +32,8 @@ def install_help(missing):
 
 
 def plan_commands(sources, meta, out_dir, slug, publish_dir):
-    """[(kind, argv)] for the EPUB and the PDF. `meta` has title, author, optional language, trim, font."""
+    """[(kind, argv)] for the EPUB and the PDF. `meta` has title, author, optional language, trim, font,
+    and title_page (default True; False drops the title page and adds a byline under the first heading)."""
     common = ["pandoc", "--from", "markdown+smart", *sources,
               "--metadata", f"title={meta['title']}",
               "--metadata", f"author={meta['author']}",
@@ -40,6 +41,11 @@ def plan_commands(sources, meta, out_dir, slug, publish_dir):
     epub = common + ["--to", "epub3", "--css", os.path.join(publish_dir, "epub.css"),
                      "-o", f"{out_dir}/{slug}.epub"]
     pdf = common + ["--pdf-engine=typst", "--template", os.path.join(publish_dir, "book.typ")]
+    if not meta.get("title_page", True):
+        # The work's own heading is its title; a byline under it replaces the title page.
+        byline = ["--lua-filter", os.path.join(publish_dir, "byline.lua")]
+        epub = epub[:-2] + ["--epub-title-page=false"] + byline + epub[-2:]
+        pdf += ["-V", "no-title-page=true"] + byline
     if meta.get("trim"):
         pdf += ["-V", f"papersize={meta['trim']}"]
     if meta.get("font"):

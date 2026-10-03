@@ -33,5 +33,6 @@
     }
   },
   "relations": ["appears", "mentions", "sets up", "pays off", "realizes"],
-  "limits": {"max_prose_words": 120}
+  "limits": {"max_prose_words": 120},
+  "title_page": false
 }

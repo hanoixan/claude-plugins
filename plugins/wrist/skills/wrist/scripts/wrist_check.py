@@ -1110,7 +1110,7 @@ def cmd_publish(args):
     sources = [path for path, function in profile.expected_files(slug) if profile.functions[function]["prose"]]
     meta = {"title": pm.front["title"][1], "author": pm.front["author"][1],
             "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
-            "font": pm.front.get("font", (0, ""))[1]}
+            "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page}
     try:
         wrist_publish.run_commands(wrist_publish.plan_commands(sources, meta, "output", slug, PUBLISH_DIR), root)
     except wrist_publish.PublishError as exc:
