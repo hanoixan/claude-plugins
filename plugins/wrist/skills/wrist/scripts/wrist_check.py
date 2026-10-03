@@ -841,6 +841,202 @@ def section_end(sf, sec):
     return end
 
 
+def project_root(args):
+    root = getattr(args, "root", None)
+    return os.path.abspath(root) if root else os.path.dirname(os.path.abspath(args.wrist_dir))
+
+
+def file_hash(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:8]
+
+
+def load_stamps(wrist_root):
+    path = os.path.join(wrist_root, STAMPS_FILE)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"{path}: cannot read the stamps ({exc})")
+    if not isinstance(data, dict):
+        sys.exit(f"{path}: cannot read the stamps (not a JSON object)")
+    return data
+
+
+def save_stamps(wrist_root, stamps):
+    with open(os.path.join(wrist_root, STAMPS_FILE), "w", encoding="utf-8") as fh:
+        json.dump(stamps, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def realized_state(sf, root, stamps):
+    """pending (no realized file), unstamped, stale (stand-in changed), edited (file changed) or realized."""
+    impl = os.path.join(root, sf.impl_rel)
+    if not os.path.isfile(impl):
+        return "pending"
+    entry = stamps.get(sf.impl_rel)
+    if not isinstance(entry, dict):
+        return "unstamped"
+    if entry.get("stand_in") != stand_in_hash(sf):
+        return "stale"
+    if entry.get("realized") != file_hash(impl):
+        return "edited"
+    return "realized"
+
+
+def sorted_files(files, profile, slug):
+    rank = {path: i for i, (path, _) in enumerate(profile.expected_files(slug))}
+    return sorted(files.values(), key=lambda sf: (rank.get(sf.impl_rel, len(rank)), sf.rel))
+
+
+@command("order", lambda p: p.add_argument("--json", action="store_true"))
+def cmd_order(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    deps, _ = build_edges(wrist_root, files, report=False)
+    rank = {path: i for i, (path, _) in enumerate(profile.expected_files(slug))}
+    ordered = sorted_files(files, profile, slug)
+    order = [{"step": i, "stand_in": sf.rel, "realizes": sf.impl_rel, "function": sf.function,
+              "unknowns": len(sf.unknowns)} for i, sf in enumerate(ordered, 1)]
+    conflicts = []
+    for (a, b) in sorted(deps, key=lambda e: (files[e[0]].rel, files[e[1]].rel)):
+        ra, rb = rank.get(files[a].impl_rel), rank.get(files[b].impl_rel)
+        if ra is not None and rb is not None and rb > ra:
+            conflicts.append({"file": files[a].impl_rel, "depends_on": files[b].impl_rel})
+    if args.json:
+        print(json.dumps({"order": order, "conflicts": conflicts}, indent=2))
+        return 0
+    for item in order:
+        flag = f"  [{item['unknowns']} UNKNOWN]" if item["unknowns"] else ""
+        print(f"{item['step']}. {item['realizes']}  ({item['function']}){flag}")
+    for c in conflicts:
+        print(f"note: {c['file']} depends on {c['depends_on']}, which is realized later; "
+              "the profile's order wins")
+    return 0
+
+
+@command("status", lambda p: p.add_argument("--root"))
+def cmd_status(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    root, stamps = project_root(args), load_stamps(wrist_root)
+    groups = {"realized": [], "stale": [], "edited": [], "unstamped": [], "pending": []}
+    for sf in sorted_files(files, profile, slug):
+        unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
+        groups[realized_state(sf, root, stamps)].append(f"{sf.impl_rel}{unk}")
+    for title, key in [("Realized", "realized"), ("Stale, stand-in changed since realized", "stale"),
+                       ("Edited, realized file changed since stamped", "edited"),
+                       ("Unstamped, realized but never stamped", "unstamped"), ("Pending", "pending")]:
+        print(f"{title} ({len(groups[key])}):")
+        for line in groups[key]:
+            print(f"  {line}")
+    return 0
+
+
+def setup_stamp(p):
+    p.add_argument("--root")
+    p.add_argument("paths", nargs="*")
+    p.add_argument("--all", action="store_true")
+
+
+@command("stamp", setup_stamp)
+def cmd_stamp(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    root = project_root(args)
+    if not args.paths and not args.all:
+        sys.exit("stamp needs the realized files to stamp, or --all")
+    if args.paths and args.all:
+        sys.exit("give the files to stamp or --all, not both")
+    by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
+    targets = sorted(by_impl) if args.all else [os.path.normpath(os.path.abspath(p)) for p in args.paths]
+    stamps = load_stamps(wrist_root)
+    stamped = failed = 0
+    for impl in targets:
+        shown = os.path.relpath(impl, root).replace(os.sep, "/")
+        sf = by_impl.get(impl)
+        if sf is None:
+            print(f"{shown}: no stand-in in this tree")
+            failed += 1
+            continue
+        if not os.path.isfile(impl):
+            if not args.all:
+                print(f"{shown}: not realized yet")
+                failed += 1
+            continue
+        entry = {"stand_in": stand_in_hash(sf), "realized": file_hash(impl),
+                 "date": datetime.date.today().isoformat()}
+        old = stamps.get(sf.impl_rel) or {}
+        if old.get("stand_in") == entry["stand_in"] and old.get("realized") == entry["realized"]:
+            continue
+        stamps[sf.impl_rel] = entry
+        print(f"stamped {shown} @ {entry['stand_in']}")
+        stamped += 1
+    if stamped:
+        save_stamps(wrist_root, stamps)
+    print(f"\n{stamped} stamped")
+    return 1 if failed else 0
+
+
+PHASES = ("generation", "realization", "publishing")
+
+
+def gate_blockers(args, phase):
+    """What stops the phase from starting: a list of messages, empty when the gate is open."""
+    wrist_root, files, profile, pm, slug = load_all(args)
+    override = bool(args.profile)
+    blockers = []
+    flag = f"questions_{phase}"
+    if pm.front.get(flag, (0, ""))[1].lower() != "done":
+        blockers.append(f"the question phase before {phase} is not recorded; ask the questions, "
+                        f"then set `{flag}: done` in {PREMISE_FILE}")
+    if phase == "generation":
+        blockers.extend(f"premise: {msg}" for sev, _, msg in premise_problems(pm, profile, override)
+                        if sev == "error")
+        return blockers
+    diags, deps, pairs = collect_diags(args.wrist_dir, wrist_root, files, profile, pm, slug, False, override)
+    errors, _ = count_diags(diags)
+    if errors:
+        blockers.append(f"`check` reports {errors} error(s); run it and fix them")
+    for rel, u, _ in decisions(pairs)[0]:
+        if u.kind == "blocking":
+            blockers.append(f"blocking unknown at {rel}:{u.line}: {u.text[:80]}")
+    if phase == "realization":
+        return blockers
+    root, stamps = project_root(args), load_stamps(wrist_root)
+    for sf in sorted_files(files, profile, slug):
+        state = realized_state(sf, root, stamps)
+        if state != "realized":
+            blockers.append(f"{sf.impl_rel} is {state}; realize it and run `stamp`")
+    for path, function in profile.expected_files(slug):
+        impl = os.path.join(root, path)
+        if profile.functions[function]["prose"] and os.path.isfile(impl):
+            with open(impl, encoding="utf-8", errors="replace") as fh:
+                if not fh.read().split():
+                    blockers.append(f"{path} is empty; there is nothing to publish")
+    if pm.front.get("review_done", (0, ""))[1].lower() != "yes":
+        blockers.append(f"the review pass is not recorded; do it, then set `review_done: yes` in {PREMISE_FILE}")
+    if not pm.front.get("author", (0, ""))[1]:
+        blockers.append(f"{PREMISE_FILE} front matter needs `author:` for the title page")
+    return blockers
+
+
+def setup_gate(p):
+    p.add_argument("phase", choices=PHASES)
+    p.add_argument("--root")
+
+
+@command("gate", setup_gate)
+def cmd_gate(args):
+    blockers = gate_blockers(args, args.phase)
+    if not blockers:
+        print(f"gate {args.phase}: open")
+        return 0
+    print(f"gate {args.phase}: blocked")
+    for b in blockers:
+        print(f"  - {b}")
+    return 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
