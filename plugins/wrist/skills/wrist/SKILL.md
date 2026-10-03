@@ -65,7 +65,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.m
 python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
 ```
 
-5. Do the review pass as its own step, after the text is finished. Reread the story from the first line to the last, then work through the `## Judgment checklist` in `quality.md` and write down what fails. Also check continuity: every number, name, time and fact the story states must agree everywhere it appears, and the text must not contradict itself about what a character sees or says. List each concrete detail in the text that no stand-in holds, and add it to a stand-in or cut it. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
+5. Do the review pass as its own step, after the text is finished. Reread the story from the first line to the last, then work through the `## Judgment checklist` in `quality.md` and write down what fails. Also check continuity: every number, name, time and fact the story states must agree everywhere it appears, and the text must not contradict itself about what a character sees or says, unless a stand-in names the discrepancy as deliberate (a haunting, an unreliable narrator, a lie). Check each apparent contradiction against the stand-ins and the premise before calling it an error. List each concrete detail in the text that no stand-in holds, and add it to a stand-in or cut it. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
 6. `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status wrist` must show every file realized. A stand-in changed after its file was realized shows as stale: realize the file again.
 
 ### 4. Publishing

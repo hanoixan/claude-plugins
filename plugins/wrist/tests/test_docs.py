@@ -43,7 +43,7 @@ class SkillText(unittest.TestCase):
         skill = text(SKILL, "SKILL.md")
         for phrase in ("none (skipped on purpose)", "A choice that appears only in your chat message",
                        "containing only `* * *`", "Do not add a fact the stand-ins do not hold",
-                       "check continuity"):
+                       "check continuity", "unless a stand-in names the discrepancy as deliberate"):
             self.assertIn(phrase, skill, phrase)
 
 
