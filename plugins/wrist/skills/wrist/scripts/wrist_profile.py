@@ -141,7 +141,29 @@ class Profile:
         return dict(self.expected_files(slug)).get(rel)
 
     def lint_items(self):
-        return []      # replaced in the lint task
+        """The searchable items of lint.json, validated; an empty list when the profile has none."""
+        path = os.path.join(self.directory or "", "lint.json")
+        if not self.directory or not os.path.isfile(path):
+            return []
+        try:
+            with open(path, encoding="utf-8") as fh:
+                items = json.load(fh)["items"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ProfileError(f"lint.json must be an object with an 'items' list ({exc})")
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict) or any(not isinstance(item.get(k), str) or not item[k] for k in LINT_KEYS):
+                raise ProfileError(f"a lint item needs non-empty string {', '.join(LINT_KEYS)}: {item!r}")
+            if not NAME_RE.match(item["id"]) or item["id"] in seen:
+                raise ProfileError(f"lint item id '{item['id']}' must be unique lower-case words")
+            seen.add(item["id"])
+            if item["scope"] not in SCOPES:
+                raise ProfileError(f"lint item '{item['id']}': scope must be one of {', '.join(SCOPES)}")
+            try:
+                re.compile(item["pattern"])
+            except re.error as exc:
+                raise ProfileError(f"lint item '{item['id']}': bad pattern ({exc})")
+        return items
 
 
 def parse_profile(data, questions_text="", directory=None):

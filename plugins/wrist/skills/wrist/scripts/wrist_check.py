@@ -27,6 +27,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wrist_lint
 import wrist_profile
 
 WRIST_SUFFIX = ".wrist.md"
@@ -1035,6 +1036,27 @@ def cmd_gate(args):
     for b in blockers:
         print(f"  - {b}")
     return 1
+
+
+@command("lint", lambda p: p.add_argument("--root"))
+def cmd_lint(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    root, items = project_root(args), profile.lint_items()
+    hits = n_files = 0
+    for path, function in profile.expected_files(slug):
+        impl = os.path.join(root, path)
+        if not profile.functions[function]["prose"] or not os.path.isfile(impl):
+            continue
+        with open(impl, encoding="utf-8", errors="replace") as fh:
+            found = wrist_lint.lint_text(fh.read(), items)
+        for h in found:
+            print(f"{path}:{h['line']}: [{h['id']}] {h['label']}: \"{h['text']}\" ({h['note']})")
+        hits += len(found)
+        n_files += bool(found)
+    print(f"\n{hits} hits in {n_files} files")
+    print(f"Lint finds only the searchable items. Work through the judgment checklist in "
+          f"{os.path.join(profile.directory, 'quality.md')} as well.")
+    return 0
 
 
 def main():
