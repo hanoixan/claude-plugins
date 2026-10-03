@@ -28,14 +28,22 @@ OUTLINE = "wrist/outline.md.wrist.md"
 CHARACTERS = "wrist/character.md.wrist.md"
 MISC = "wrist/misc.md.wrist.md"
 STORY = "wrist/work/the-lamp.md.wrist.md"
+NOVEL = os.path.join(SKILL, "assets", "examples", "salt-road")
+N_PREMISE = "wrist/PREMISE.md"
+N_OUTLINE = "wrist/outline.md.wrist.md"
+N_CHAPTER1 = "wrist/work/chapter-1.md.wrist.md"
+N_CHAPTER2 = "wrist/work/chapter-2.md.wrist.md"
+N_CHAPTER3 = "wrist/work/chapter-3.md.wrist.md"
 NO_UNKNOWNS = "- **Unknowns:** none\n"
 
 
 class TreeCase(unittest.TestCase):
+    example = EXAMPLE
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="wrist-test-")
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        shutil.copytree(EXAMPLE, self.dir, dirs_exist_ok=True)
+        shutil.copytree(self.example, self.dir, dirs_exist_ok=True)
 
     def path(self, rel):
         return os.path.join(self.dir, rel)
@@ -74,3 +82,7 @@ class TreeCase(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("error", out)
         self.assertIn(fragment, out)
+
+
+class NovelCase(TreeCase):
+    example = NOVEL

@@ -1,0 +1,73 @@
+{
+  "name": "novel",
+  "title_page": true,
+  "premise_keys": {
+    "chapters": {"type": "int", "min": 1, "max": 200, "required": true},
+    "forward": {"type": "bool"},
+    "prologue": {"type": "bool"},
+    "afterward": {"type": "bool"},
+    "index": {"type": "bool"}
+  },
+  "files": [
+    {"path": "synopsis.md", "function": "synopsis", "order": 1},
+    {"path": "outline.md", "function": "outline", "order": 2},
+    {"path": "character.md", "function": "characters", "order": 3},
+    {"path": "misc.md", "function": "misc", "order": 4},
+    {"path": "work/forward.md", "function": "forward", "order": 5, "when": "forward"},
+    {"path": "work/prologue.md", "function": "prologue", "order": 6, "when": "prologue"},
+    {"path": "work/chapter-{n}.md", "function": "chapter", "order": 7, "family": "chapters"},
+    {"path": "work/afterward.md", "function": "afterward", "order": 8, "when": "afterward"},
+    {"path": "work/index.md", "function": "index", "order": 9, "when": "index"}
+  ],
+  "functions": {
+    "synopsis": {"heading": "synopsis", "fields": ["Logline", "Ending", "Theme"]},
+    "outline": {
+      "heading": "outline",
+      "fields": ["Structure"],
+      "children": {"beat": ["Purpose", "Change"]}
+    },
+    "characters": {
+      "heading": "characters",
+      "children": {"character": ["Wants", "Flaw", "Voice", "Arc"]}
+    },
+    "misc": {
+      "heading": "misc",
+      "children": {"place": ["Facts"], "object": ["Facts"], "concept": ["Facts"], "timeline": ["Facts"]}
+    },
+    "forward": {
+      "heading": "forward",
+      "fields": ["Heading", "Purpose", "Voice", "Must include", "Must avoid"],
+      "heading_field": "Heading",
+      "prose": true
+    },
+    "prologue": {
+      "heading": "prologue",
+      "fields": ["Heading", "Purpose", "Voice", "Must include", "Must avoid"],
+      "heading_field": "Heading",
+      "prose": true
+    },
+    "chapter": {
+      "heading": "chapter",
+      "fields": ["Heading", "Point of view", "Length"],
+      "heading_field": "Heading",
+      "required_when_realized": ["Established"],
+      "sequence": true,
+      "children": {"scene": ["Purpose", "Length", "Must include", "Must avoid"]},
+      "prose": true
+    },
+    "afterward": {
+      "heading": "afterward",
+      "fields": ["Heading", "Purpose", "Voice", "Must include", "Must avoid"],
+      "heading_field": "Heading",
+      "prose": true
+    },
+    "index": {
+      "heading": "index",
+      "fields": ["Heading"],
+      "heading_field": "Heading",
+      "prose": true
+    }
+  },
+  "relations": ["appears", "mentions", "sets up", "pays off", "realizes", "continues"],
+  "limits": {"max_prose_words": 120}
+}

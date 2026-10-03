@@ -1,13 +1,17 @@
 // wrist book template for `pandoc --pdf-engine=typst`.
 // Needs typst 0.12 or later. Fonts: Libertinus Serif ships inside typst, so a PDF embeds it
 // without anything installed; pass `font` in PREMISE.md for another family.
-#let horizontalrule = align(center)[#v(0.9em) #text(tracking: 0.7em)[\*\*\*] #v(0.9em)]
+// Scene break. Pandoc 3.12 emits `#divider()`; older versions emit `#horizontalrule`.
+#let divider() = align(center)[#v(0.9em) #text(tracking: 0.7em)[\*\*\*] #v(0.9em)]
+#let horizontalRule = divider()
+#let horizontalrule = divider()
 #show terms: it => it.children.map(child => [#strong[#child.term]\ #pad(left: 1.2em)[#child.description]]).join(parbreak())
 $if(highlighting-definitions)$
 $highlighting-definitions$
 $endif$
 
 #set document(title: [$title$])
+#let in-body = state("in-body", $if(front-matter)$false$else$true$endif$)
 #set text(
   font: "$if(mainfont)$$mainfont$$else$Libertinus Serif$endif$",
   size: 10.5pt,
@@ -16,6 +20,9 @@ $endif$
 )
 #set par(justify: true, leading: 0.62em, spacing: 0.62em, first-line-indent: 1.2em)
 
+$if(no-title-page)$
+// No title page: the work's own heading is its title and a byline follows it.
+$else$
 // Title page: no number, no running head.
 #page(paper: "$if(papersize)$$papersize$$else$a5$endif$", margin: 22mm, header: none, footer: none)[
   #align(center + horizon)[
@@ -24,12 +31,15 @@ $endif$
     #text(size: 1.15em)[$for(author)$$author$$sep$, $endfor$]
   ]
 ]
+$endif$
 
 #set page(
+  // Front matter is numbered in roman numerals; the marker switches to arabic at the first chapter.
+  numbering: "$if(front-matter)$i$else$1$endif$",
   paper: "$if(papersize)$$papersize$$else$a5$endif$",
   margin: (inside: 22mm, outside: 18mm, top: 22mm, bottom: 24mm),
   header: context {
-    if counter(page).get().first() > 1 {
+    if in-body.get() and counter(page).get().first() > 1 {
       if calc.odd(here().page()) {
         align(right, text(size: 0.85em, style: "italic")[$title$])
       } else {

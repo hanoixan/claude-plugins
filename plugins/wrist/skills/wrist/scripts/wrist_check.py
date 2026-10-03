@@ -543,7 +543,11 @@ def premise_problems(pm, profile, override):
                                          f"'{title}' (expected '{expected}')"))
     if not override and "profile" not in pm.front:
         out.append(("error", 1, f"{PREMISE_FILE} front matter needs `profile:`"))
+    for key, message in profile.option_problems:
+        out.append(("error", pm.front.get(key, (1, ""))[0], message))
     for q in profile.questions:
+        if q.id in profile.premise_keys and pm.front.get(q.id, (0, ""))[1]:
+            continue                # answered in the front matter, where the file set is decided
         answer = pm.answers.get(q.id)
         if answer is None or not answer[1]:
             out.append(("error" if q.required else "warning", 1,
@@ -584,6 +588,7 @@ def load_all(args):
     except wrist_profile.ProfileError as exc:
         sys.exit(f"profile error: {exc}")
     configure(profile)
+    profile.set_premise({key: value for key, (_, value) in pm.front.items()})
     wrist_root, files = load_tree(args.wrist_dir)
     return wrist_root, files, profile, pm, pm.front.get("slug", (0, ""))[1]
 
@@ -631,6 +636,12 @@ def validate_file(sf, lenient, slug):
             allowed = ", ".join(f"## {k}:" for k in spec["children"]) or "none"
             sf.err(s.line, f"`{'#' * s.level} {s.kind}:` not allowed here; this file allows "
                            f"{allowed} under `# {spec['heading']}:`")
+    field = spec["heading_field"]
+    if field and l1:
+        shown = field_text(sf, l1[0], field).strip("` ").strip()
+        if shown and not shown.startswith("#"):
+            sf.err(l1[0].line, f"`{field}:` must be the exact first line of the realized file and start with `# ` "
+                               f"(got '{shown}')")
     limit = PROFILE.limits["max_prose_words"]
     for s in sf.sections:
         if s.kind is None:
@@ -671,10 +682,19 @@ def collect_diags(wrist_dir, wrist_root, files, profile, pm, slug, lenient, over
         if path not in present:
             diags[PREMISE_FILE].append(
                 ("error", 1, f"required stand-in missing: {os.path.join(wrist_dir, path + WRIST_SUFFIX)}"))
-    names = ", ".join(p for p, _ in expected)
+    names = ", ".join(p for p, _ in expected[:12]) + (", ..." if len(expected) > 12 else "")
     for sf in files.values():
         if sf.function is None:
             sf.err(1, f"this stand-in is outside the {profile.name} shape; the stand-ins are {names}")
+    by_impl = {sf.impl_rel: sf for sf in files.values()}
+    for rel, previous in profile.sequence_prev(slug).items():
+        sf, before = by_impl.get(rel), by_impl.get(previous)
+        if sf is None or before is None:
+            continue
+        linked = any(lk.label == "Depends on" and (lk.relation or "").lower() == "continues"
+                     and resolve(sf, lk.target)[0] == before.path for lk in sf.all_links())
+        if not linked:
+            sf.warn(1, f"no `Depends on:` link to {previous}'s stand-in with the relation `continues`")
     pairs = tree_unknowns(files, pm.unknowns)
     for rel, u in pairs:
         diags[rel].extend((sev, u.line, msg) for sev, msg in unknown_problems(u, lenient))
@@ -867,6 +887,60 @@ def section_end(sf, sec):
     return end
 
 
+def field_text(sf, sec, label):
+    """A field's text: its value on the label's line, else the lines that follow it up to a blank line,
+    the next field or the next heading. An empty string when there is none."""
+    for ln, value in own_fields(sec).get(label, []):
+        if value.strip():
+            # a template's <placeholder> is a prompt, not an answer
+            return "" if re.fullmatch(r"<[^<>]*>", value.strip()) else value.strip()
+        parts = []
+        for line in sf.lines[ln:]:
+            if not line.strip() or FIELD_RE.match(line) or HEADING_RE.match(line):
+                break
+            parts.append(line.strip())
+        if parts:
+            return " ".join(parts)
+    return ""
+
+
+def first_line(path):
+    """The first non-blank line of a file, without trailing space."""
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        for line in fh:
+            if line.strip():
+                return line.rstrip()
+    return ""
+
+
+def top_section(sf):
+    return next((s for s in sf.sections if s.level == 1), None)
+
+
+def missing_when_realized(sf, profile, slug):
+    """Labels the stand-in must hold now that its file exists and does not."""
+    function = profile.function_for(sf.impl_rel, slug)
+    top = top_section(sf)
+    if function is None or top is None:
+        return []
+    return [label for label in profile.functions[function]["required_when_realized"]
+            if not field_text(sf, top, label)]
+
+
+def heading_problem(sf, profile, slug, impl):
+    """A message when the realized file does not start with the line its stand-in's heading field states."""
+    function = profile.function_for(sf.impl_rel, slug)
+    top = top_section(sf)
+    field = profile.functions[function]["heading_field"] if function else None
+    if not field or top is None or not os.path.isfile(impl):
+        return None
+    want = field_text(sf, top, field).strip("` ").strip()
+    first = first_line(impl)
+    if want and first != want:
+        return f"{sf.impl_rel} starts with '{first}' but its stand-in's `{field}:` says '{want}'"
+    return None
+
+
 def project_root(args):
     root = getattr(args, "root", None)
     return os.path.abspath(root) if root else os.path.dirname(os.path.abspath(args.wrist_dir))
@@ -990,6 +1064,15 @@ def cmd_stamp(args):
                 print(f"{shown}: not realized yet")
                 failed += 1
             continue
+        if profile.function_for(sf.impl_rel, slug) is None:
+            print(f"{shown}: its stand-in is outside the {profile.name} shape; fix the tree first")
+            failed += 1
+            continue
+        owed = missing_when_realized(sf, profile, slug)
+        if owed:
+            print(f"{shown}: its stand-in has no `{owed[0]}:` text; fill it in first")
+            failed += 1
+            continue
         entry = {"stand_in": stand_in_hash(sf), "realized": file_hash(impl),
                  "date": datetime.date.today().isoformat()}
         old = stamps.get(sf.impl_rel)
@@ -1035,6 +1118,15 @@ def gate_blockers(args, phase):
         state = realized_state(sf, root, stamps)
         if state != "realized":
             blockers.append(f"{sf.impl_rel} is {state}; realize it and run `stamp`")
+    for sf in sorted_files(files, profile, slug):
+        impl = os.path.join(root, sf.impl_rel)
+        if not os.path.isfile(impl):
+            continue
+        for label in missing_when_realized(sf, profile, slug):
+            blockers.append(f"{sf.impl_rel}: its stand-in has no `{label}:` text; fill it in, then stamp")
+        problem = heading_problem(sf, profile, slug, impl)
+        if problem:
+            blockers.append(problem)
     for path, function in profile.expected_files(slug):
         impl = os.path.join(root, path)
         if profile.functions[function]["prose"] and os.path.isfile(impl):
@@ -1107,15 +1199,23 @@ def cmd_publish(args):
         return 1
     wrist_root, files, profile, pm, slug = load_all(args)
     root = project_root(args)
-    sources = [path for path, function in profile.expected_files(slug) if profile.functions[function]["prose"]]
+    expected = profile.expected_files(slug)
+    sources = [path for path, function in expected if profile.functions[function]["prose"]]
+    first_body = next((path for path, function in expected if profile.functions[function]["sequence"]), None)
     meta = {"title": pm.front["title"][1], "author": pm.front["author"][1],
             "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
-            "font": pm.front.get("font", (0, ""))[1]}
+            "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page,
+            "front_matter": first_body is not None}
+    for key in wrist_publish.FRONT_KEYS:
+        meta[key] = pm.front.get(key, (0, ""))[1]
+    inputs, marker = wrist_publish.with_marker(sources, first_body, "output", root)
     try:
-        wrist_publish.run_commands(wrist_publish.plan_commands(sources, meta, "output", slug, PUBLISH_DIR), root)
+        wrist_publish.run_commands(wrist_publish.plan_commands(inputs, meta, "output", slug, PUBLISH_DIR), root)
     except wrist_publish.PublishError as exc:
         print(f"publish failed: {exc}")
         return 1
+    finally:
+        wrist_publish.remove_marker(marker, root)
     print(f"published output/{slug}.epub and output/{slug}.pdf")
     return 0
 

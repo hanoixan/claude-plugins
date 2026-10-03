@@ -39,6 +39,37 @@ class SkillText(unittest.TestCase):
                      "misc.wrist.md", "story.wrist.md"):
             self.assertTrue(os.path.isfile(os.path.join(SKILL, "assets", "templates", name)), name)
 
+    def test_skill_carries_the_lessons_of_the_trial(self):
+        skill = text(SKILL, "SKILL.md")
+        for phrase in ("none (skipped on purpose)", "A choice that appears only in your chat message",
+                       "containing only `* * *`", "Do not add a fact the stand-ins do not hold",
+                       "check continuity", "unless a stand-in names the discrepancy as deliberate"):
+            self.assertIn(phrase, skill, phrase)
+
+    def test_skill_covers_the_novel(self):
+        skill = text(SKILL, "SKILL.md")
+        for phrase in ("`novel`", "chapters:", "Established:", "assets/templates/novel/",
+                       "realize the chapter, fill in `Established:`, stamp it"):
+            self.assertIn(phrase, skill, phrase)
+
+    def test_every_novel_template_exists(self):
+        for name in ("PREMISE.md", "synopsis.wrist.md", "outline.wrist.md", "characters.wrist.md", "misc.wrist.md",
+                     "forward.wrist.md", "chapter.wrist.md", "afterward.wrist.md", "index.wrist.md"):
+            self.assertTrue(os.path.isfile(os.path.join(SKILL, "assets", "templates", "novel", name)), name)
+
+    def test_the_grammar_reference_explains_the_new_profile_features(self):
+        grammar = text(SKILL, "references", "grammar.md")
+        for phrase in ("premise_keys", "family", "when", "Established", "continues", "Heading"):
+            self.assertIn(phrase, grammar, phrase)
+
+    def test_the_readme_lists_the_novel(self):
+        readme = text(ROOT, "README.md")
+        self.assertIn("`shortstory` and `novel`", readme)
+
+    def test_the_chapter_template_leaves_established_bare(self):
+        template = text(SKILL, "assets", "templates", "novel", "chapter.wrist.md")
+        self.assertIn("\n- **Established:**\n", template)
+
 
 class Manifests(unittest.TestCase):
     def test_plugin_manifest(self):
