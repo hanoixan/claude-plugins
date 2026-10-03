@@ -149,5 +149,23 @@ class Loading(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "tiny", out.stderr)
 
 
+class ReferenceContent(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(SKILL, "profiles", "shortstory", name), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_structures_cover_the_planned_forms(self):
+        text = self.read("structures.md")
+        for name in ("Freytag", "three-act", "In medias res", "Kishōtenketsu", "Story spine", "Vignette"):
+            self.assertIn(name, text)
+        self.assertEqual(text.count("**Best for:**"), text.count("\n## "))
+
+    def test_quality_has_the_three_parts(self):
+        text = self.read("quality.md")
+        for heading in ("## Clichés and stock moves", "## Marks of low quality", "## Judgment checklist"):
+            self.assertIn(heading, text)
+        self.assertGreaterEqual(text.count("- [ ] "), 10)
+
+
 if __name__ == "__main__":
     unittest.main()
