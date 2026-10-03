@@ -1,3 +1,4 @@
+import os
 import re
 import unittest
 
@@ -91,6 +92,27 @@ class LintCommand(TreeCase):
     def test_pointer_to_the_judgment_checklist(self):
         _, out = self.lint()
         self.assertIn("quality.md", out)
+
+
+class BadLintFile(TreeCase):
+    def with_lint_file(self, content):
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp(prefix="wrist-profs-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        src = os.path.join(wrist_profile.PROFILES_DIR, "shortstory")
+        shutil.copytree(src, os.path.join(d, "shortstory"))
+        with open(os.path.join(d, "shortstory", "lint.json"), "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return dict(os.environ, WRIST_PROFILES_DIR=d)
+
+    def test_each_kind_of_bad_lint_file_is_a_clear_message(self):
+        for content in ('{"items": 5}', '{"items": [null]}', "{not json", "[]"):
+            with self.subTest(content=content):
+                code, out = self.run_wrist("lint", "wrist", env=self.with_lint_file(content))
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("profile error", out)
 
 
 class LintItemValidation(unittest.TestCase):

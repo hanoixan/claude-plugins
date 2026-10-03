@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -138,11 +139,20 @@ def front_matter_end(lines):
 
 
 def meta_value(raw):
-    """A front matter value without a trailing ` # comment` or surrounding quotes."""
-    value = re.sub(r"\s+#.*$", "", raw.strip())
-    if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+    """A front matter value as written. Quotes are dropped only when one pair wraps the whole value,
+    and `#` is ordinary text: a title like `Room #9` must reach the publisher intact."""
+    value = raw.strip()
+    if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'" and value[0] not in value[1:-1]:
         value = value[1:-1].strip()
     return value
+
+
+def read_text(path, encoding="utf-8"):
+    try:
+        with open(path, encoding=encoding) as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"{path}: cannot read ({exc})")
 
 
 class Unknown:
@@ -211,8 +221,7 @@ class WristFile:
 
 def parse(path, wrist_root):
     sf = WristFile(path, wrist_root)
-    with open(path, encoding="utf-8-sig") as fh:    # a byte-order mark is not content
-        sf.lines = fh.read().split("\n")
+    sf.lines = read_text(path, "utf-8-sig").split("\n")    # a byte-order mark is not content
     lines = sf.lines
     start = 0
     end = front_matter_end(lines)
@@ -476,8 +485,7 @@ def read_premise(wrist_root):
     if not os.path.exists(path):
         return pm
     pm.exists = True
-    with open(path, encoding="utf-8-sig") as fh:
-        lines = fh.read().split("\n")
+    lines = read_text(path, "utf-8-sig").split("\n")
     end = front_matter_end(lines)
     start = 0
     if end > 0:
@@ -510,6 +518,12 @@ def read_premise(wrist_root):
     return pm
 
 
+def slug_of(title):
+    """The file-friendly form of a title: accents folded to ASCII, lower case, words joined by hyphens."""
+    folded = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
+
+
 def premise_problems(pm, profile, override):
     """(severity, line, message) for PREMISE.md itself: front matter and the profile's questions."""
     if not pm.exists:
@@ -521,6 +535,12 @@ def premise_problems(pm, profile, override):
     line, slug = pm.front.get("slug", (1, ""))
     if slug and not wrist_profile.SLUG_RE.match(slug):
         out.append(("error", line, f"slug '{slug}' must be lower-case words joined by hyphens"))
+    title = pm.front.get("title", (0, ""))[1]
+    if title and slug and wrist_profile.SLUG_RE.match(slug):
+        expected = slug_of(title)
+        if expected and slug != expected:
+            out.append(("warning", line, f"slug '{slug}' is not the file-friendly form of the title "
+                                         f"'{title}' (expected '{expected}')"))
     if not override and "profile" not in pm.front:
         out.append(("error", 1, f"{PREMISE_FILE} front matter needs `profile:`"))
     for q in profile.questions:
@@ -551,9 +571,13 @@ def check_premise_links(wrist_root, files, pm):
 
 def load_all(args):
     """(wrist_root, files, profile, premise, slug) for a command; exits when there is no usable profile."""
+    if not os.path.isdir(args.wrist_dir):
+        sys.exit(f"not a directory: {args.wrist_dir}")
     pm = read_premise(os.path.abspath(args.wrist_dir))
     name = args.profile or pm.front.get("profile", (0, ""))[1]
     if not name:
+        for sev, ln, msg in pm.diags:
+            sys.exit(f"{os.path.join(args.wrist_dir, PREMISE_FILE)}:{ln}: {msg}")
         sys.exit(f"no profile: give --profile or set `profile:` in {os.path.join(args.wrist_dir, PREMISE_FILE)}")
     try:
         profile = wrist_profile.load_profile(name)
@@ -968,7 +992,8 @@ def cmd_stamp(args):
             continue
         entry = {"stand_in": stand_in_hash(sf), "realized": file_hash(impl),
                  "date": datetime.date.today().isoformat()}
-        old = stamps.get(sf.impl_rel) or {}
+        old = stamps.get(sf.impl_rel)
+        old = old if isinstance(old, dict) else {}
         if old.get("stand_in") == entry["stand_in"] and old.get("realized") == entry["realized"]:
             continue
         stamps[sf.impl_rel] = entry
@@ -1043,7 +1068,11 @@ def cmd_gate(args):
 @command("lint", lambda p: p.add_argument("--root"))
 def cmd_lint(args):
     wrist_root, files, profile, pm, slug = load_all(args)
-    root, items = project_root(args), profile.lint_items()
+    root = project_root(args)
+    try:
+        items = profile.lint_items()
+    except wrist_profile.ProfileError as exc:
+        sys.exit(f"profile error: {exc}")
     hits = n_files = 0
     for path, function in profile.expected_files(slug):
         impl = os.path.join(root, path)

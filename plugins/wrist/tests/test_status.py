@@ -122,5 +122,21 @@ class Order(TreeCase):
         self.assertEqual(data["conflicts"], [])
 
 
+class DamagedStamps(TreeCase):
+    def test_stamp_repairs_an_entry_that_is_not_an_object(self):
+        self.write("wrist/.stamps", json.dumps({"work/the-lamp.md": "abc", "outline.md": ["x"]}))
+        code, out = self.run_wrist("stamp", "wrist", "--all")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("Traceback", out)
+        _, status = self.run_wrist("status", "wrist")
+        self.assertIn("Realized (5):", status)
+
+    def test_an_unreadable_realized_file_is_reported_not_a_traceback(self):
+        os.remove(self.path(STORY_REAL))
+        os.mkdir(self.path(STORY_REAL))
+        code, out = self.run_wrist("status", "wrist")
+        self.assertNotIn("Traceback", out)
+
+
 if __name__ == "__main__":
     unittest.main()

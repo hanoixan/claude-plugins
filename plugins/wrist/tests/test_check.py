@@ -209,5 +209,70 @@ class PremiseRules(TreeCase):
         self.assertEqual(code, 0, out)
 
 
+class TitleAndSlug(TreeCase):
+    def test_a_slug_that_is_not_the_form_of_the_title_is_a_warning(self):
+        self.replace(PREMISE, "title: The Lamp", "title: The Lantern")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: slug 'the-lamp' is not the file-friendly form of the title 'The Lantern'", out)
+
+    def test_a_title_with_accents_can_have_a_matching_slug(self):
+        self.replace(PREMISE, "title: The Lamp", "title: Caf\u00e9 \u00c9t\u00e9")
+        self.replace(PREMISE, "slug: the-lamp", "slug: cafe-ete")
+        os.rename(self.path(STORY), self.path("wrist/work/cafe-ete.md.wrist.md"))
+        self.replace("wrist/work/cafe-ete.md.wrist.md", "# story: The Lamp", "# story: Cafe Ete")
+        for rel in (OUTLINE, CHARACTERS, MISC):
+            self.write(rel, self.read(rel).replace("work/the-lamp.md.wrist.md", "work/cafe-ete.md.wrist.md"))
+        code, out = self.check()
+        self.assertNotIn("file-friendly form", out)
+
+
+class FrontMatterValues(unittest.TestCase):
+    def test_values_reach_the_tool_as_written(self):
+        import wrist_check
+        for raw, want in [("Room #9", "Room #9"), ('"Room #9"', "Room #9"), ("'x'", "x"),
+                          ('"Lamp" and "Wick"', '"Lamp" and "Wick"'), ("Ines #2: Return", "Ines #2: Return"),
+                          ("  plain  ", "plain")]:
+            self.assertEqual(wrist_check.meta_value(raw), want, raw)
+
+
+class ReadFailures(TreeCase):
+    def assertClean(self, code, out, fragment):
+        self.assertNotEqual(code, 0, out)
+        self.assertNotIn("Traceback", out)
+        self.assertIn(fragment, out)
+
+    def test_a_stand_in_that_is_not_utf8_names_the_file(self):
+        with open(self.path(MISC), "wb") as fh:
+            fh.write(b"# misc: \xff\xfe\n")
+        code, out = self.check()
+        self.assertClean(code, out, "misc.md.wrist.md")
+        self.assertIn("cannot read", out)
+
+    def test_a_premise_that_is_not_utf8(self):
+        with open(self.path(PREMISE), "wb") as fh:
+            fh.write(b"---\nprofile: \xff\n---\n")
+        code, out = self.check()
+        self.assertClean(code, out, "cannot read")
+
+    def test_a_premise_that_is_a_directory(self):
+        os.remove(self.path(PREMISE))
+        os.mkdir(self.path(PREMISE))
+        code, out = self.check()
+        self.assertClean(code, out, "cannot read")
+
+    def test_unclosed_premise_front_matter_gets_its_own_message(self):
+        self.replace(PREMISE, "review_done: yes\n---\n", "review_done: yes\n")
+        code, out = self.check()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("front matter is not closed", out)
+        self.assertNotIn("no profile: give", out)
+
+    def test_a_missing_wrist_folder_says_so(self):
+        code, out = self.run_wrist("check", "nowhere")
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("not a directory: nowhere", out)
+
+
 if __name__ == "__main__":
     unittest.main()

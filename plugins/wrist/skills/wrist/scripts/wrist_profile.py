@@ -150,6 +150,8 @@ class Profile:
                 items = json.load(fh)["items"]
         except (ValueError, KeyError, TypeError) as exc:
             raise ProfileError(f"lint.json must be an object with an 'items' list ({exc})")
+        if not isinstance(items, list):
+            raise ProfileError("lint.json 'items' must be a list")
         seen = set()
         for item in items:
             if not isinstance(item, dict) or any(not isinstance(item.get(k), str) or not item[k] for k in LINT_KEYS):

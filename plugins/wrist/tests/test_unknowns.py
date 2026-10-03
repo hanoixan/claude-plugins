@@ -141,5 +141,72 @@ class UnknownRules(TreeCase):
         self.assertIn("should state `Consequence:` and `Unlocks:`", out)
 
 
+class UnknownText(TreeCase):
+    """Text-level behavior of the unknown parser, kept from the earlier format."""
+
+    def put(self, text):
+        self.replace(MISC, NO_UNKNOWNS, text)
+
+    def decisions(self):
+        _, out = self.run_wrist("unknowns", "wrist", "--json")
+        return json.loads(out)
+
+    def test_marker_with_the_colon_inside_the_bold(self):
+        self.put("**UNKNOWN:** [venue] Which venue. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        self.assertEqual([d["name"] for d in self.decisions()], ["venue"])
+
+    def test_double_star_marker(self):
+        self.put("**UNKNOWN**: [venue] Which venue. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        self.assertEqual([d["name"] for d in self.decisions()], ["venue"])
+
+    def test_clauses_may_come_in_any_order(self):
+        self.put("*UNKNOWN*: [venue] Which venue. Unlocks: u. Consequence: c. Kind: blocking.\n")
+        item = self.decisions()[0]
+        self.assertEqual((item["kind"], item["consequence"], item["unlocks"]), ("blocking", "c.", "u."))
+        self.assertEqual(self.check()[0], 0)
+
+    def test_an_unknown_inside_a_fence_is_ignored(self):
+        self.put("- **Unknowns:** none\n\n```text\n*UNKNOWN*: [venue] shown as syntax. Kind: blocking.\n```\n")
+        self.assertEqual(self.decisions(), [])
+
+    def test_an_empty_proposed_counts_as_missing(self):
+        self.put("*UNKNOWN*: [venue] Which venue. Kind: local. Proposed: . Consequence: c. Unlocks: u.\n")
+        self.assertCheckFails("needs `Proposed:`")
+
+    def test_two_markers_on_one_line_warn(self):
+        self.put("*UNKNOWN*: [a-one] First. Kind: blocking. Consequence: c. Unlocks: u. "
+                 "*UNKNOWN*: [b-two] Second. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        code, out = self.check()
+        self.assertIn("more than one *UNKNOWN* on this line", out)
+
+    def test_a_marker_quoted_in_backticks_is_not_a_second_unknown(self):
+        self.put("*UNKNOWN*: [venue] Write `*UNKNOWN*:` for open items. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        code, out = self.check()
+        self.assertNotIn("more than one", out)
+        self.assertEqual(len(self.decisions()), 1)
+
+    def test_a_single_star_marker_with_the_colon_inside_is_not_a_marker(self):
+        self.put("*UNKNOWN:* [venue] Which venue. Kind: blocking.\n")
+        self.assertEqual(self.decisions(), [])
+
+    def test_follows_may_be_lower_case(self):
+        self.put("*UNKNOWN*: [venue] Which venue. Kind: blocking. Consequence: c. Unlocks: u.\n")
+        self.replace(STORY, NO_UNKNOWNS, "*UNKNOWN*: follows [venue]. Consequence: register.\n")
+        _, out = self.run_wrist("unknowns", "wrist")
+        self.assertIn("followed at work/the-lamp.md.wrist.md:", out)
+
+    def test_kind_with_markup_is_still_read(self):
+        self.put("*UNKNOWN*: [venue] Which venue. Kind: **blocking**. Consequence: c. Unlocks: u.\n")
+        self.assertEqual(self.check()[0], 0)
+
+    def test_a_kind_copied_unchosen_from_the_template_is_an_error(self):
+        self.put("*UNKNOWN*: [venue] Which venue. Kind: blocking | local. Consequence: c. Unlocks: u.\n")
+        self.assertCheckFails("has `Kind: blocking | local`")
+
+    def test_an_unknown_as_a_field_value_is_validated(self):
+        self.put("- **Facts:** *UNKNOWN*: [venue] Which venue. Consequence: c. Unlocks: u.\n")
+        self.assertCheckFails("*UNKNOWN* is missing `Kind:`")
+
+
 if __name__ == "__main__":
     unittest.main()
