@@ -1,11 +1,11 @@
 # chapter: <Chapter name>
 
-<What this chapter must do.>
+<What this chapter must do. Leave `Established:` empty until the chapter is realized; then list every new fact, date, injury, object moved, who knows what and promise the text fixed.>
 
 - **Heading:** `# <n>. <Chapter name>`
 - **Point of view:** <person, whose, tense>
 - **Length:** <target words>
-- **Established:** <left empty until the chapter is realized; then every new fact, date, injury, object moved, who knows what and promise the text fixed>
+- **Established:**
 - **Required:** always
 - **Rules:** <voice, forbidden moves, quality rules copied from quality.md>
 - **Depends on:** [<Previous chapter>](./chapter-<n-1>.md.wrist.md) (continues)

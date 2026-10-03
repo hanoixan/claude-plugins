@@ -8,7 +8,7 @@ local function text_of(meta, key)
   if v == nil then return nil end
   local text = pandoc.utils.stringify(v)
   if text == "" then return nil end
-  local blocks = pandoc.read(text, "markdown+smart-fancy_lists").blocks
+  local blocks = pandoc.read(text, "markdown+smart-fancy_lists-citations-raw_html-raw_tex-tex_math_dollars-autolink_bare_uris").blocks
   if #blocks == 1 and (blocks[1].t == "Para" or blocks[1].t == "Plain") then
     return pandoc.Para(blocks[1].content)
   end
@@ -50,6 +50,12 @@ function Pandoc(doc)
   end
 
   local out = {}
+  if #front > 0 and not is_typst then
+    -- Give the front matter a section of its own that the contents leave out; without a heading pandoc
+    -- would file it under the book's title and list that in the contents.
+    out[#out + 1] = pandoc.Header(1, {pandoc.Str("Front"), pandoc.Space(), pandoc.Str("matter")},
+                                  pandoc.Attr("front-matter", {"unlisted", "unnumbered"}))
+  end
   for _, b in ipairs(front) do out[#out + 1] = b end
   for _, b in ipairs(doc.blocks) do out[#out + 1] = b end
   doc.blocks = out

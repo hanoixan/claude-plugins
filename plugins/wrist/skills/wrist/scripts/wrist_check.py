@@ -636,6 +636,12 @@ def validate_file(sf, lenient, slug):
             allowed = ", ".join(f"## {k}:" for k in spec["children"]) or "none"
             sf.err(s.line, f"`{'#' * s.level} {s.kind}:` not allowed here; this file allows "
                            f"{allowed} under `# {spec['heading']}:`")
+    field = spec["heading_field"]
+    if field and l1:
+        shown = field_text(sf, l1[0], field).strip("` ").strip()
+        if shown and not shown.startswith("#"):
+            sf.err(l1[0].line, f"`{field}:` must be the exact first line of the realized file and start with `# ` "
+                               f"(got '{shown}')")
     limit = PROFILE.limits["max_prose_words"]
     for s in sf.sections:
         if s.kind is None:
@@ -886,7 +892,8 @@ def field_text(sf, sec, label):
     the next field or the next heading. An empty string when there is none."""
     for ln, value in own_fields(sec).get(label, []):
         if value.strip():
-            return value.strip()
+            # a template's <placeholder> is a prompt, not an answer
+            return "" if re.fullmatch(r"<[^<>]*>", value.strip()) else value.strip()
         parts = []
         for line in sf.lines[ln:]:
             if not line.strip() or FIELD_RE.match(line) or HEADING_RE.match(line):
@@ -1056,6 +1063,10 @@ def cmd_stamp(args):
             if not args.all:
                 print(f"{shown}: not realized yet")
                 failed += 1
+            continue
+        if profile.function_for(sf.impl_rel, slug) is None:
+            print(f"{shown}: its stand-in is outside the {profile.name} shape; fix the tree first")
+            failed += 1
             continue
         owed = missing_when_realized(sf, profile, slug)
         if owed:

@@ -66,6 +66,10 @@ class SkillText(unittest.TestCase):
         readme = text(ROOT, "README.md")
         self.assertIn("`shortstory` and `novel`", readme)
 
+    def test_the_chapter_template_leaves_established_bare(self):
+        template = text(SKILL, "assets", "templates", "novel", "chapter.wrist.md")
+        self.assertIn("\n- **Established:**\n", template)
+
 
 class Manifests(unittest.TestCase):
     def test_plugin_manifest(self):

@@ -40,13 +40,16 @@ def plan_commands(inputs, meta, out_dir, slug, publish_dir):
     """[(kind, argv)] for the EPUB and the PDF. `meta` has title, author, optional language, trim, font,
     title_page (default True; False drops the title page and adds a byline under the first heading) and
     front_matter (default False; True adds copyright, dedication, epigraph and a contents page)."""
-    common = ["pandoc", "--from", "markdown+smart", *inputs,
-              "--metadata", f"title={meta['title']}",
-              "--metadata", f"author={meta['author']}",
-              "--metadata", f"lang={meta.get('language') or 'en'}"]
-    epub = common + ["--to", "epub3", "--css", os.path.join(publish_dir, "epub.css"),
+    def common(files):
+        return ["pandoc", "--from", "markdown+smart", *files,
+                "--metadata", f"title={meta['title']}",
+                "--metadata", f"author={meta['author']}",
+                "--metadata", f"lang={meta.get('language') or 'en'}"]
+
+    # The marker only switches the PDF's page numbering; in an EPUB it would become a section of its own.
+    epub = common([i for i in inputs if not i.endswith(MARKER_NAME)]) + ["--to", "epub3", "--css", os.path.join(publish_dir, "epub.css"),
                      "-o", f"{out_dir}/{slug}.epub"]
-    pdf = common + ["--pdf-engine=typst", "--template", os.path.join(publish_dir, "book.typ")]
+    pdf = common(inputs) + ["--pdf-engine=typst", "--template", os.path.join(publish_dir, "book.typ")]
     if meta.get("trim"):
         pdf += ["-V", f"papersize={meta['trim']}"]
     if meta.get("font"):

@@ -18,3 +18,4 @@ blockquote { margin: 1em 2em; font-style: italic; }
 .byline p { text-align: center; text-indent: 0; font-style: italic; margin: 0 0 2em; }
 .copyright p { text-align: center; font-size: 0.8em; text-indent: 0; margin: 4em 0 0; }
 .dedication p, .epigraph p { text-align: center; font-style: italic; text-indent: 0; margin: 6em 1em 0; }
+#front-matter > h1 { display: none; }

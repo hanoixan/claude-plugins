@@ -150,6 +150,15 @@ class BookPlan(unittest.TestCase):
         filters = [plan["epub"][i + 1] for i, a in enumerate(plan["epub"]) if a == "--lua-filter"]
         self.assertEqual(len(filters), 2)
 
+    def test_the_marker_goes_to_the_pdf_only(self):
+        marker = "output/.wrist-body.md"
+        plan = dict(wrist_publish.plan_commands(["work/forward.md", marker, "work/chapter-1.md"],
+                                                dict(self.META, front_matter=True), "output", "salt-road",
+                                                PUBLISH_DIR))
+        self.assertIn(marker, plan["pdf"])
+        self.assertNotIn(marker, plan["epub"])
+        self.assertLess(plan["pdf"].index("work/forward.md"), plan["pdf"].index(marker))
+
 
 class Marker(unittest.TestCase):
     def setUp(self):
@@ -238,6 +247,55 @@ class NovelBuild(NovelCase):
         self.assertIn("(c) 2026 Ada Example", text)                       # not turned into a list
         self.assertIn("1999. For the carters.", text)                     # a number is not eaten as a list marker
         self.assertNotIn("<ol", front)                                    # the contents page has its own list
+
+    def epub_pages(self):
+        with zipfile.ZipFile(self.path("output/salt-road.epub")) as z:
+            names = z.namelist()
+            nav = z.read("EPUB/nav.xhtml").decode("utf-8")
+            pages = {n: z.read(n).decode("utf-8") for n in names if n.endswith(".xhtml")}
+        return nav, pages
+
+    def nav_entries(self, nav):
+        import re
+        return re.findall(r'<a href="[^"]*">([^<]*)</a>', nav)
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_the_contents_list_only_the_foreword_and_the_chapters(self):
+        code, out = self.run_wrist("publish", "wrist")
+        self.assertEqual(code, 0, out)
+        nav, pages = self.epub_pages()
+        self.assertEqual(self.nav_entries(nav), ["Foreword", "1. The Load", "2. The Toll", "3. The Gate"])
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_a_book_with_no_front_matter_text_has_clean_contents_too(self):
+        text = "\n".join(l for l in self.read("wrist/PREMISE.md").split("\n")
+                         if not l.startswith(("copyright:", "dedication:", "epigraph:")))
+        self.write("wrist/PREMISE.md", text)
+        code, out = self.run_wrist("publish", "wrist")
+        self.assertEqual(code, 0, out)
+        nav, pages = self.epub_pages()
+        self.assertEqual(self.nav_entries(nav), ["Foreword", "1. The Load", "2. The Toll", "3. The Gate"])
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_the_front_matter_has_its_own_page_that_is_not_a_contents_entry(self):
+        self.run_wrist("publish", "wrist")
+        nav, pages = self.epub_pages()
+        front = [t for t in pages.values() if 'class="dedication"' in t]
+        self.assertEqual(len(front), 1)
+        self.assertIn("All rights reserved.", front[0])
+        self.assertIn("Salt keeps what it is given.", front[0])
+        self.assertNotIn(">Salt Road<", "".join(self.nav_entries(nav)))
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_a_handle_or_brackets_in_the_front_matter_do_not_break_the_build(self):
+        self.replace("wrist/PREMISE.md", "dedication: For the carters.",
+                     "dedication: For @mara, who paid $5 and $6 <Ann> always")
+        code, out = self.run_wrist("publish", "wrist")
+        self.assertEqual(code, 0, out)
+        nav, pages = self.epub_pages()
+        text = "\n".join(pages.values())
+        self.assertIn("For @mara, who paid $5 and $6", text)
+        self.assertIn("&lt;Ann&gt;", text)
 
 
 class InstallHelp(unittest.TestCase):

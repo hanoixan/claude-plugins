@@ -94,5 +94,38 @@ class SaltRoadContinuity(NovelCase):
         self.assertIn("work/chapter-2.md is edited", out)
 
 
+class SaltRoadReviewFindings(NovelCase):
+    def test_the_template_placeholder_does_not_count_as_established(self):
+        text = self.read(N_CHAPTER2)
+        kept = "\n".join("- **Established:** <left empty until the chapter is realized>"
+                         if l.startswith("- **Established:**") else l for l in text.split("\n"))
+        self.write(N_CHAPTER2, kept)
+        code, out = self.run_wrist("stamp", "wrist", "work/chapter-2.md")
+        self.assertEqual(code, 1, out)
+        self.assertIn("no `Established:` text", out)
+
+    def test_stamp_refuses_a_chapter_outside_the_current_shape(self):
+        self.replace(N_PREMISE, "chapters: 3", "chapters: 2")
+        code, out = self.run_wrist("stamp", "wrist", "work/chapter-3.md")
+        self.assertEqual(code, 1, out)
+        self.assertIn("work/chapter-3.md: its stand-in is outside the novel shape; fix the tree first", out)
+
+    def test_stamp_all_also_refuses_a_stand_in_outside_the_shape(self):
+        self.replace(N_PREMISE, "forward: yes", "forward: no")
+        code, out = self.run_wrist("stamp", "wrist", "--all")
+        self.assertEqual(code, 1, out)
+        self.assertIn("work/forward.md: its stand-in is outside the novel shape", out)
+
+    def test_a_heading_value_must_start_with_a_hash(self):
+        self.replace(N_CHAPTER1, "- **Heading:** `# 1. The Load`", "- **Heading:** `1. The Load`")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("`Heading:` must be the exact first line of the realized file and start with `# `", out)
+
+    def test_a_heading_value_with_a_hash_is_fine(self):
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main()
