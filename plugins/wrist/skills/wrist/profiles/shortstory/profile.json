@@ -1,0 +1,37 @@
+{
+  "name": "shortstory",
+  "files": [
+    {"path": "synopsis.md", "function": "synopsis", "order": 1},
+    {"path": "outline.md", "function": "outline", "order": 2},
+    {"path": "character.md", "function": "characters", "order": 3},
+    {"path": "misc.md", "function": "misc", "order": 4},
+    {"path": "work/{slug}.md", "function": "story", "order": 5}
+  ],
+  "functions": {
+    "synopsis": {
+      "heading": "synopsis",
+      "fields": ["Logline", "Ending", "Theme"]
+    },
+    "outline": {
+      "heading": "outline",
+      "fields": ["Structure"],
+      "children": {"beat": ["Purpose", "Change"]}
+    },
+    "characters": {
+      "heading": "characters",
+      "children": {"character": ["Wants", "Flaw", "Voice"]}
+    },
+    "misc": {
+      "heading": "misc",
+      "children": {"place": ["Facts"], "object": ["Facts"], "concept": ["Facts"]}
+    },
+    "story": {
+      "heading": "story",
+      "fields": ["Point of view", "Length"],
+      "children": {"scene": ["Purpose", "Length", "Must include", "Must avoid"]},
+      "prose": true
+    }
+  },
+  "relations": ["appears", "mentions", "sets up", "pays off", "realizes"],
+  "limits": {"max_prose_words": 120}
+}

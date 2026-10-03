@@ -31,6 +31,11 @@
       "name": "skel",
       "source": "./plugins/skel",
       "description": "Code-shaped prose specs: one stand-in per file, checked links, formal unknowns"
+    },
+    {
+      "name": "wrist",
+      "source": "./plugins/wrist",
+      "description": "Write prose in four phases: premise, checked stand-in tree, realization, PDF/EPUB publishing"
     }
   ]
 }
