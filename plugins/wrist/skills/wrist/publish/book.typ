@@ -11,6 +11,7 @@ $highlighting-definitions$
 $endif$
 
 #set document(title: [$title$])
+#let in-body = state("in-body", $if(front-matter)$false$else$true$endif$)
 #set text(
   font: "$if(mainfont)$$mainfont$$else$Libertinus Serif$endif$",
   size: 10.5pt,
@@ -33,10 +34,12 @@ $else$
 $endif$
 
 #set page(
+  // Front matter is numbered in roman numerals; the marker switches to arabic at the first chapter.
+  numbering: "$if(front-matter)$i$else$1$endif$",
   paper: "$if(papersize)$$papersize$$else$a5$endif$",
   margin: (inside: 22mm, outside: 18mm, top: 22mm, bottom: 24mm),
   header: context {
-    if counter(page).get().first() > 1 {
+    if in-body.get() and counter(page).get().first() > 1 {
       if calc.odd(here().page()) {
         align(right, text(size: 0.85em, style: "italic")[$title$])
       } else {
