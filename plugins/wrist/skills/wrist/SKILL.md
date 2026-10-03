@@ -29,7 +29,7 @@ A gate prints what blocks the phase. It stays blocked until `PREMISE.md` records
 ### 1. Premise
 
 1. Ask which profile (`shortstory`). Read `profiles/shortstory/questions.md`.
-2. Ask the questions: `required` ones must be answered or become an `*UNKNOWN*:`; `deferrable` ones may be left out. Never invent an answer.
+2. Ask the questions: `required` ones must be answered or become an `*UNKNOWN*:`; `deferrable` ones may be left out. Never invent an answer. A question the user skips on purpose still gets its line, written `- **<id>:** none (skipped on purpose)`, so `check` stops warning about it.
 3. Write `wrist/PREMISE.md` from `assets/templates/PREMISE.md`: front matter (`profile`, `title`, `slug`, `author`, `language`) and one `- **<id>:** <answer>` line per question. The slug is a file-friendly form of the title (lower-case words joined by hyphens).
 
 ### 2. Generation
@@ -45,7 +45,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
 ```
 
    Repeat until `check` is clean. A missing file is an error: the tree must name every file that will exist.
-5. Hand back the agenda from `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns wrist` (blocking decisions need the user before realization; local ones come with a proposal to accept) and `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order wrist` (the realization order). List nothing as decided that is not in the tree.
+5. Before handing back, list every choice you made that the user did not state: the action an ending turns on, a name, a number, a setting detail. Each one must already be an `*UNKNOWN*:` in the tree with your choice as `Proposed:`. A choice that appears only in your chat message is a decision made in secret.
+6. Hand back the agenda from `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns wrist` (blocking decisions need the user before realization; local ones come with a proposal to accept) and `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order wrist` (the realization order). List nothing as decided that is not in the tree.
 
 ### 3. Realization
 
@@ -56,7 +57,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
 python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.md
 ```
 
-   Follow every `Rules:`, `Must include:` and `Must avoid:`. If the work needs something the stand-in does not say, change the stand-in first, run `check`, then realize; never let the text drift from its notes.
+   Follow every `Rules:`, `Must include:` and `Must avoid:`. Separate scenes with a line containing only `* * *`. Do not add a fact the stand-ins do not hold: no new name, object, event, number or backstory. If the text needs one, add it to the scene's `Must include:` first, run `check`, then write it. Never let the text drift from its notes.
 3. Craft rules for every file: write for the intended reader; prefer the specific to the general; let action and detail carry feeling; give each speaker a distinct voice; vary sentence length and shape; cut anything the story survives losing; read as the audience would.
 4. Run `lint`, fix each hit that is not deliberate, and re-stamp:
 
@@ -64,7 +65,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.m
 python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
 ```
 
-5. Do the review pass: work through the `## Judgment checklist` in `quality.md` against the text. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
+5. Do the review pass as its own step, after the text is finished. Reread the story from the first line to the last, then work through the `## Judgment checklist` in `quality.md` and write down what fails. Also check continuity: every number, name, time and fact the story states must agree everywhere it appears, and the text must not contradict itself about what a character sees or says. List each concrete detail in the text that no stand-in holds, and add it to a stand-in or cut it. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
 6. `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status wrist` must show every file realized. A stand-in changed after its file was realized shows as stale: realize the file again.
 
 ### 4. Publishing

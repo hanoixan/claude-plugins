@@ -39,6 +39,13 @@ class SkillText(unittest.TestCase):
                      "misc.wrist.md", "story.wrist.md"):
             self.assertTrue(os.path.isfile(os.path.join(SKILL, "assets", "templates", name)), name)
 
+    def test_skill_carries_the_lessons_of_the_trial(self):
+        skill = text(SKILL, "SKILL.md")
+        for phrase in ("none (skipped on purpose)", "A choice that appears only in your chat message",
+                       "containing only `* * *`", "Do not add a fact the stand-ins do not hold",
+                       "check continuity"):
+            self.assertIn(phrase, skill, phrase)
+
 
 class Manifests(unittest.TestCase):
     def test_plugin_manifest(self):
