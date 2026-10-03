@@ -54,6 +54,30 @@ class PlanCommands(unittest.TestCase):
         self.assertNotIn("papersize=us-trade", plan["epub"])
 
 
+class TemplateHelpers(unittest.TestCase):
+    """Pandoc emits `#divider()` for a scene break (3.12; `#horizontalrule` in older versions)."""
+
+    def test_the_template_defines_every_helper_pandoc_may_emit(self):
+        with open(os.path.join(PUBLISH_DIR, "book.typ"), encoding="utf-8") as fh:
+            template = fh.read()
+        for helper in ("#let divider()", "#let horizontalRule", "#let horizontalrule"):
+            self.assertIn(helper, template)
+
+    @unittest.skipUnless(HAVE_TOOLS, "pandoc and typst are not installed")
+    def test_a_scene_break_is_drawn_as_asterisks_not_a_rule(self):
+        d = tempfile.mkdtemp(prefix="wrist-typ-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        import subprocess
+        with open(os.path.join(d, "a.md"), "w", encoding="utf-8") as fh:
+            fh.write("One.\n\n* * *\n\nTwo.\n")
+        out = subprocess.run(["pandoc", "a.md", "-M", "title=T", "-M", "author=A", "--pdf-engine=typst",
+                              "--template", os.path.join(PUBLISH_DIR, "book.typ"), "-t", "typst"],
+                             cwd=d, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("#divider()", out.stdout)
+        self.assertIn("#let divider()", out.stdout)
+
+
 class InstallHelp(unittest.TestCase):
     def test_help_names_each_missing_tool(self):
         text = wrist_publish.install_help(["pandoc", "typst"])

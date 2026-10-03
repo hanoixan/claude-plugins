@@ -1,7 +1,10 @@
 // wrist book template for `pandoc --pdf-engine=typst`.
 // Needs typst 0.12 or later. Fonts: Libertinus Serif ships inside typst, so a PDF embeds it
 // without anything installed; pass `font` in PREMISE.md for another family.
-#let horizontalrule = align(center)[#v(0.9em) #text(tracking: 0.7em)[\*\*\*] #v(0.9em)]
+// Scene break. Pandoc 3.12 emits `#divider()`; older versions emit `#horizontalrule`.
+#let divider() = align(center)[#v(0.9em) #text(tracking: 0.7em)[\*\*\*] #v(0.9em)]
+#let horizontalRule = divider()
+#let horizontalrule = divider()
 #show terms: it => it.children.map(child => [#strong[#child.term]\ #pad(left: 1.2em)[#child.description]]).join(parbreak())
 $if(highlighting-definitions)$
 $highlighting-definitions$
