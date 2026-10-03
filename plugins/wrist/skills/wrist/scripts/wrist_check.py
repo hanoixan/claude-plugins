@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""wrist_check.py: validate and analyze a Wrist specification tree.
+"""wrist_check.py: validate and analyze a wrist stand-in tree.
+
+The grammar comes from a profile (profiles/<name>/), chosen by `profile:` in wrist/PREMISE.md or
+by --profile. Every command takes WRIST_DIR first.
 
 Subcommands
-  check WRIST_DIR [--lenient]          validate grammar, traits and bidirectional links (and SYSTEM.md links)
-  unknowns WRIST_DIR [--json]          list open decisions by kind, each once, with its followers
-  order WRIST_DIR [--json]             implementation order (dependencies first; cycles grouped)
-  batches WRIST_DIR [--json]           buildable batches of units; manifests are set aside
-  status WRIST_DIR --root PROJECT      implemented, stale, unstamped, pending, abstract; names missing from code
-  stamp WRIST_DIR --root PROJECT PATH... | --all   record in each file's Spec: header that it matches its stand-in
-  fix-backlinks WRIST_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
-  infer-roles WRIST_DIR [--write]      propose role: and unit: front matter (dry-run by default)
+  check            grammar, profile file shape, links, bidirectional backlinks, unknown rules, PREMISE.md
+  unknowns         open decisions by kind, each once, with its followers
+  order            realization order from the profile; reports dependencies that contradict it
+  status           pending, realized, stale, edited and unstamped files
+  stamp            record that a realized file was written from its stand-in (wrist/.stamps)
+  fix-backlinks    insert missing `Referred by:` lines (dry-run by default)
+  gate PHASE       list what blocks the generation, realization or publishing phase
+  lint             scan realized prose for the profile's clichés (advisory)
+  publish          build output/<slug>.epub and output/<slug>.pdf
 
 Standard library only. Exit code 1 if `check` finds errors.
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -21,37 +26,29 @@ import re
 import sys
 from collections import defaultdict
 
-WRIST_SUFFIX = ".wrist.md"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wrist_profile
 
-CODE_EXT = set("""py pyi js mjs cjs jsx ts tsx go rs java kt kts scala cs fs vb cpp cc cxx c h hpp hh hxx
-m mm swift rb php lua dart ex exs erl hrl hs ml mli clj cljs groovy sh bash zsh fish ps1 r jl
-vue svelte zig nim cr pl pm code""".split())
-DATA_EXT = set("""json jsonc jsonl ndjson yaml yml toml csv tsv xml parquet avro proto ini env
-graphql gql data""".split())
-IAC_EXT = set("tf tfvars hcl bicep sql nomad iac".split())
-EXTLESS = {"Dockerfile": "iac", "Containerfile": "iac", "Makefile": "code", "Procfile": "iac",
-           "Jenkinsfile": "code", "Vagrantfile": "iac", "Gemfile": "data", "Brewfile": "data",
-           "Justfile": "code", "Rakefile": "code"}
-PLACEHOLDER_EXT = {"code", "data", "iac"}
-LEVEL1 = {"code": "module", "data": "data", "iac": "infrastructure", "resource": "resource"}
+WRIST_SUFFIX = ".wrist.md"
+PREMISE_FILE = "PREMISE.md"
+STAMPS_FILE = ".stamps"
+COMMON_LABELS = ["Depends on", "Referred by", "Required", "Rules", "Unknowns"]
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-TYPED_RE = re.compile(r"^(module|class|function|symbol|data|infrastructure|resource)\s*:\s*(.+)$", re.I)
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 LINK_RE = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+\"[^\"]*\")?\s*\)")
-LABELS = ["Depends on", "Referred by", "Inputs", "Returns", "State changes", "Owns", "Access",
-          "Required", "Failure modes", "Unknowns", "Source", "Data requirements"]
-FIELD_RE = re.compile(
-    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?(" + "|".join(re.escape(l) for l in LABELS) +
-    r")(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$", re.I)
-CANON = {l.lower(): l for l in LABELS}
+# a link with an optional relation word after it: [Mara](path) (appears)
+LINK_REL_RE = re.compile(LINK_RE.pattern + r"(?:\s*\(([A-Za-z][A-Za-z -]*)\))?")
+# These three depend on the profile in use and are built by configure().
+TYPED_RE = FIELD_RE = None
+CANON = {}
+PROFILE = None
 UNKNOWN_RE = re.compile(r"(?:\*{1,2}UNKNOWN\*{1,2}\s*:|\*\*UNKNOWN:\*\*)\s*(.*)")
 INFORMAL_RE = re.compile(r"(\bTBD\b|\bTODO\b|\bFIXME\b|\?\?\?|(?<![*\w])UNKNOWN(?![*\w]))")
 NONE_RE = re.compile(r"^\s*(none|n/?a)\b", re.I)
 BULLET_LINK_RE = re.compile(r"^\s*[-*+]\s+.*\[[^\]]+\]\([^)]+\)")
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 DOTTED_RE = re.compile(r"^`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)`?$")
-SYSTEM_FILE = "SYSTEM.md"
 UNKNOWN_NAME_RE = re.compile(r"^\[([a-z0-9][a-z0-9-]*)\](?!\()\s*")
 BRACKET_RE = re.compile(r"^\[([^\]]*)\](?!\()\s*")      # a leading [..] that is not a markdown link
 FOLLOWS_RE = re.compile(r"^(?i:follows)\s+\[([^\]]*)\]\s*\.?\s*")
@@ -59,35 +56,30 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A clause label opens the text or follows the end of a sentence, so "kind:" inside prose is not one.
 CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unlocks)\**:\**\s*")
 KINDS = ("blocking", "local")
-ROLES = ("product", "test", "manifest")
 META_RE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*)$")
-FRONT_KEYS = ("kind", "role", "unit", "untested")
-MANIFEST_NAMES = {"CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json", "Makefile", "makefile",
-                  "GNUmakefile", "Justfile", "Rakefile", "Gemfile", "Gemfile.lock", "package.json",
-                  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json", "pyproject.toml",
-                  "setup.py", "setup.cfg", "MANIFEST.in", "Pipfile", "Pipfile.lock", "poetry.lock", "tox.ini",
-                  "pytest.ini", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "build.gradle",
-                  "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "pom.xml",
-                  "meson.build", "BUILD", "BUILD.bazel", "WORKSPACE", "conanfile.txt", "conanfile.py",
-                  "vcpkg.json"}
-MANIFEST_SUFFIXES = (".cmake", ".csproj", ".fsproj", ".vbproj", ".sln", ".gemspec", ".podspec")
-MANIFEST_NAME_RE = re.compile(r"^(requirements[\w.-]*\.txt|[\w.-]+\.config\.[cm]?[jt]s)$")
-TEST_DIRS = {"test", "tests", "__tests__", "testdata", "testutil", "__mocks__"}
-SPEC_DIRS = {"spec", "specs"}                      # these hold API and format specifications too
-STRONG_TEST_NAME_RE = re.compile(r"^(test_.+|.+_test\.[^.]+|.+_spec\.[^.]+|.+\.(test|spec|cy)\.[^.]+|conftest\.py)$")
-WEAK_TEST_NAME_RE = re.compile(r"^.+(Test|Tests|IT)\.[^.]+$")
-UNSURE_DIRS = {"tools", "scripts", "examples", "bench", "benches", "benchmarks"}
-SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
-HEADER_EXT = {"h", "hh", "hpp", "hxx"}
-SPEC_RE = re.compile(r"Spec:\s*(\S+?\.wrist\.md)(?:\s*@\s*([0-9A-Fa-f]+)\b)?")
-SPEC_LINES = 10
+ANSWER_RE = re.compile(r"^\s*[-*+]\s+\*\*([a-z0-9]+(?:-[a-z0-9]+)*):\*\*\s*(.*)$")
 
-LEVEL_FIELDS = {
-    "module": ["Owns", "Access"],
-    "class": ["Inputs", "State changes", "Owns", "Access"],
-    "function": ["Inputs", "Returns", "State changes", "Access"],
-    "symbol": ["Access"],
-}
+COMMANDS = {}      # name -> (function, function that adds the command's own arguments or None)
+
+
+def command(name, setup=None):
+    def register(fn):
+        COMMANDS[name] = (fn, setup)
+        return fn
+    return register
+
+
+def configure(profile):
+    """Build the heading and field patterns from the profile and keep it for the rest of the run."""
+    global TYPED_RE, FIELD_RE, CANON, PROFILE
+    labels = list(COMMON_LABELS) + [l for l in profile.labels() if l not in COMMON_LABELS]
+    labels.sort(key=len, reverse=True)
+    types = sorted(profile.heading_types(), key=len, reverse=True)
+    TYPED_RE = re.compile(r"^(" + "|".join(re.escape(t) for t in types) + r")\s*:\s*(.+)$", re.I)
+    FIELD_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?(" + "|".join(re.escape(l) for l in labels) +
+                          r")(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$", re.I)
+    CANON = {l.lower(): l for l in labels}
+    PROFILE = profile
 
 
 def slugify(text):
@@ -125,8 +117,9 @@ class Section:
 
 
 class Link:
-    def __init__(self, label, text, target, line, section):
+    def __init__(self, label, text, target, line, section, relation=None):
         self.label, self.text, self.target, self.line, self.section = label, text, target, line, section
+        self.relation = relation
 
 
 def front_matter_end(lines):
@@ -180,38 +173,26 @@ class Unknown:
 
     @property
     def where(self):
-        return heading_path(self.section) if self.section is not None else "(system)"
+        return heading_path(self.section) if self.section is not None else "(premise)"
 
     @property
     def label(self):
         """`where` as printed inside brackets in text output."""
-        return heading_path(self.section) if self.section is not None else "system"
+        return heading_path(self.section) if self.section is not None else "premise"
 
 
 class WristFile:
     def __init__(self, path, wrist_root):
         self.path = os.path.abspath(path)
         self.rel = os.path.relpath(self.path, wrist_root)
-        self.impl_rel = self.rel[: -len(WRIST_SUFFIX)]
-        base = os.path.basename(self.impl_rel)
-        self.ext = base.rsplit(".", 1)[1] if "." in base else ""
-        self.base = base
-        self.kind = None
-        self.kind_override = None
-        self.meta = {}          # front matter: key -> (line, value)
+        self.impl_rel = self.rel[: -len(WRIST_SUFFIX)].replace(os.sep, "/")
+        self.base = os.path.basename(self.impl_rel)
+        self.function = None    # the profile function this stand-in has, set by validate_file
         self.root = Section(0, None, "", "", 0)
         self.sections = []
         self.unknowns = []      # [Unknown]
         self.lines = []
         self.diags = []         # (severity, line, msg)
-
-    @property
-    def abstract(self):
-        return self.ext in PLACEHOLDER_EXT
-
-    @property
-    def role(self):
-        return self.meta["role"][1].lower() if "role" in self.meta else None
 
     def err(self, line, msg):
         self.diags.append(("error", line, msg))
@@ -226,21 +207,6 @@ class WristFile:
         return out
 
 
-def infer_kind(sf):
-    if sf.kind_override:
-        return sf.kind_override
-    if not sf.ext:
-        return EXTLESS.get(sf.base, "resource")
-    e = sf.ext.lower()
-    if e in CODE_EXT:
-        return "code"
-    if e in DATA_EXT:
-        return "data"
-    if e in IAC_EXT:
-        return "iac"
-    return "resource"
-
-
 def parse(path, wrist_root):
     sf = WristFile(path, wrist_root)
     with open(path, encoding="utf-8-sig") as fh:    # a byte-order mark is not content
@@ -250,27 +216,9 @@ def parse(path, wrist_root):
     end = front_matter_end(lines)
     if end == -1 and len(lines) > 1 and META_RE.match(lines[1]):
         sf.err(1, "front matter is not closed with `---`")
-    for i, l in enumerate(lines[1:max(end, 0)], 2):
-        m = META_RE.match(l)
-        if not m:
-            continue
-        key = m.group(1).lower()
-        if key not in FRONT_KEYS:
-            sf.warn(i, f"unknown front matter key '{key}' (known: {', '.join(FRONT_KEYS)})")
-        elif key in sf.meta:
-            sf.warn(i, f"front matter key '{key}' is given twice; the first is used")
-        else:
-            sf.meta[key] = (i, meta_value(m.group(2)))
     if end > 0:
         start = end + 1
-    if "kind" in sf.meta:
-        ln, value = sf.meta["kind"]
-        k = value.split()[0].lower() if value else ""
-        if k in LEVEL1:
-            sf.kind_override = k
-        else:
-            sf.err(ln, f"front matter kind '{k}' must be one of {sorted(LEVEL1)}")
-    sf.kind = infer_kind(sf)
+        sf.warn(1, "stand-ins take no front matter; the profile decides what each file is")
 
     stack = [sf.root]
     cur = sf.root
@@ -312,17 +260,17 @@ def parse(path, wrist_root):
             cur.fields[label].append((ln, value))
             pending = None
             if label in ("Depends on", "Referred by"):
-                found = LINK_RE.findall(value)
-                for text, target in found:
-                    cur.links.append(Link(label, text, target, ln, cur))
+                found = LINK_REL_RE.findall(value)
+                for text, target, rel in found:
+                    cur.links.append(Link(label, text, target, ln, cur, rel or None))
                 if not found:
                     if value.strip() == "":
                         pending = (label, ln)
                     elif not NONE_RE.match(value) and not UNKNOWN_RE.search(value):
                         sf.err(ln, f"`{label}:` has no markdown link; use [symbol](path) or 'none'")
         elif pending and BULLET_LINK_RE.match(line):
-            for text, target in LINK_RE.findall(line):
-                cur.links.append(Link(pending[0], text, target, ln, cur))
+            for text, target, rel in LINK_REL_RE.findall(line):
+                cur.links.append(Link(pending[0], text, target, ln, cur, rel or None))
         elif pending and line.strip():
             if not cur.links or cur.links[-1].line < pending[1]:
                 sf.err(pending[1], f"`{pending[0]}:` is empty and not followed by bulleted links")
@@ -372,106 +320,6 @@ def find_untyped(sf, title):
     return [s for s in sf.sections if s.kind is None and s.title.strip().lower() == title.lower()]
 
 
-def validate_file(sf, lenient):
-    miss = sf.warn if lenient else sf.err
-    # front matter
-    if sf.role is None:
-        miss(1, "missing `role:` in front matter (product, test or manifest); `infer-roles` can propose one")
-    elif sf.role not in ROLES:
-        miss(sf.meta["role"][0], f"front matter role '{sf.role}' must be one of {list(ROLES)}")
-    if "untested" in sf.meta:
-        ln, reason = sf.meta["untested"]
-        if sf.role != "product":
-            sf.err(ln, "`untested:` is only for `role: product` stand-ins")
-        elif not reason:
-            sf.err(ln, "`untested:` needs a reason")
-    # naming
-    if not sf.ext and sf.base not in EXTLESS:
-        sf.err(1, f"stand-in name must be <file>.<ext>{WRIST_SUFFIX} (got '{sf.base}{WRIST_SUFFIX}')")
-    # level-1 heading
-    l1 = [s for s in sf.sections if s.level == 1]
-    expected = LEVEL1[sf.kind]
-    if len(l1) != 1:
-        sf.err(l1[1].line if len(l1) > 1 else 1,
-               f"expected exactly one level-1 heading `# {expected}: <name>` (found {len(l1)})")
-    elif l1[0].kind != expected:
-        sf.err(l1[0].line, f"{sf.kind} file must start with `# {expected}: <name>`")
-    if sf.root.fields:
-        ln = min(v[0][0] for v in sf.root.fields.values())
-        sf.warn(ln, "fields before the first heading are not attached to any symbol")
-
-    for s in sf.sections:
-        if s.kind is None:
-            continue
-        if s.level == 1:
-            continue
-        par = s.parent.typed_owner() if s.parent else None
-        pk = par.kind if par else None
-        if sf.kind == "code":
-            ok = ((s.kind == "class" and s.level == 2 and pk == "module") or
-                  (s.kind == "function" and ((s.level == 2 and pk == "module") or (s.level == 3 and pk == "class"))) or
-                  (s.kind == "symbol" and ((s.level == 2 and pk == "module") or (s.level == 3 and pk == "class"))))
-            if not ok:
-                sf.err(s.line, f"`{'#' * s.level} {s.kind}:` not allowed here; hierarchy is "
-                               "# module > ## class|function|symbol > ### function|symbol (under class)")
-        elif sf.kind == "iac":
-            if not (s.kind == "resource" and s.level == 2 and pk == "infrastructure"):
-                sf.err(s.line, "iac files allow only `## resource: <name>` under `# infrastructure:`")
-        else:
-            sf.err(s.line, f"typed heading `{s.kind}:` not allowed in a {sf.kind} file")
-
-    # per-level code fields
-    if sf.kind == "code":
-        for s in sf.sections:
-            if s.kind in LEVEL_FIELDS:
-                f = own_fields(s)
-                for label in LEVEL_FIELDS[s.kind]:
-                    if label not in f:
-                        miss(s.line, f"{s.kind} '{s.name}' is missing `{label}:`")
-
-    # data specifics
-    ff = file_fields(sf)
-    if sf.kind == "data":
-        if "Source" not in ff:
-            sf.err(1, "data file is missing `Source:` (hand-authored | generated | external)")
-        schema = find_untyped(sf, "Schema")
-        if not schema:
-            sf.err(1, "data file is missing a `## Schema` section")
-        elif sum(own_count(s, "fences") for s in schema) == 0:
-            sf.err(schema[0].line, "`## Schema` must contain a fenced block")
-        if any("generat" in v.lower() for _, v in ff.get("Source", [])):
-            gen = find_untyped(sf, "Generation")
-            if not gen:
-                sf.err(ff["Source"][0][0], "generated data needs a `## Generation` section")
-            else:
-                if sum(own_count(s, "any_links") for s in gen) == 0:
-                    sf.err(gen[0].line, "`## Generation` must link to the generating tool(s)")
-                if sum(own_count(s, "fences") for s in gen) == 0:
-                    sf.err(gen[0].line, "`## Generation` must include a fenced development-usage example")
-
-    # iac specifics
-    if sf.kind == "iac":
-        res = [s for s in sf.sections if s.kind == "resource"]
-        if not res:
-            sf.err(1, "iac file must declare at least one `## resource: <name>`")
-        for r in res:
-            f = own_fields(r)
-            if "Data requirements" not in f:
-                miss(r.line, f"resource '{r.name}' is missing `Data requirements:`")
-            if "Referred by" not in f:
-                sf.err(r.line, f"resource '{r.name}' must list consumers with `Referred by:`")
-            elif all(NONE_RE.match(v) for _, v in f["Referred by"]):
-                sf.warn(r.line, f"resource '{r.name}' has no known consumers")
-
-    # five basic questions
-    for label, q in [("Required", "Is this always required?"), ("Failure modes", "Known failure modes"),
-                     ("Depends on", "What does this depend on?"), ("Referred by", "What depends on this?")]:
-        if label not in ff:
-            sf.err(1, f"missing `{label}:` (answers '{q}'); use 'none' if that is the answer")
-    if not sf.unknowns and "Unknowns" not in ff:
-        sf.err(1, "no *UNKNOWN* entries and no `Unknowns: none`")
-
-
 def load_tree(wrist_dir):
     wrist_root = os.path.abspath(wrist_dir)
     if not os.path.isdir(wrist_root):
@@ -504,7 +352,7 @@ def fragment_problems(text, frag, target, where):
     if not secs:
         return [("error", f"fragment '#{frag}' does not match any heading in {where}")]
     dotted = DOTTED_RE.match(text.strip())
-    symbols = [s for s in secs if s.level > 1 and s.kind in ("class", "function", "symbol")]
+    symbols = [s for s in secs if s.level > 1 and s.kind]
     if dotted and symbols:
         module = next((s.name for s in target.sections if s.level == 1), "")
         names = {s.qualified() for s in symbols}
@@ -563,98 +411,6 @@ def check_bidirectional(files, deps, refs):
                                       f"`Depends on:` link to {files[b].rel}")
 
 
-def read_system(wrist_root):
-    """Unknowns, links and heading slugs of SYSTEM.md, which is context rather than a stand-in."""
-    unknowns, links, slugs = [], [], set()
-    path = os.path.join(wrist_root, SYSTEM_FILE)
-    if not os.path.exists(path):
-        return unknowns, links, slugs
-    with open(path, encoding="utf-8-sig") as fh:
-        fence = False
-        for ln, line in enumerate(fh, 1):
-            if FENCE_RE.match(line):
-                fence = not fence
-                continue
-            if fence:
-                continue
-            hm = HEADING_RE.match(line.rstrip("\n"))
-            if hm:
-                slugs.add(slugify(hm.group(2)))
-                continue
-            um = UNKNOWN_RE.search(line)
-            if um:
-                unknowns.append(Unknown(ln, um.group(1).strip()))
-            links.extend((ln, text, target) for text, target in LINK_RE.findall(line))
-    return unknowns, links, slugs
-
-
-def check_system(wrist_root, files, links, slugs):
-    diags = []
-    for ln, text, target in links:
-        if EXTERNAL_RE.match(target):
-            continue
-        path, _, frag = target.partition("#")
-        if path == "":
-            if frag and frag not in slugs:
-                diags.append(("error", ln, f"fragment '#{frag}' does not match any heading in this file"))
-            continue
-        tgt = os.path.normpath(os.path.join(wrist_root, path))
-        if not os.path.exists(tgt):
-            diags.append(("error", ln, f"link target does not exist: {target}"))
-        elif frag and tgt in files:
-            diags.extend((sev, ln, msg) for sev, msg in fragment_problems(text, frag, files[tgt], path))
-    return diags
-
-
-def resolve_units(files, report=True):
-    """Map each stand-in path to its unit's primary path; a bad `unit:` is reported and ignored."""
-    primary = {}
-    for sf in files.values():
-        primary[sf.path] = sf.path
-        if "unit" not in sf.meta:
-            continue
-        ln, value = sf.meta["unit"]
-        tgt = os.path.normpath(os.path.join(os.path.dirname(sf.path), value))
-        if tgt == sf.path:
-            problem = "`unit:` names this stand-in itself"
-        elif tgt not in files:
-            problem = f"`unit:` target is not a stand-in in this tree: {value}"
-        elif "unit" in files[tgt].meta:
-            problem = f"`unit:` target {value} has a `unit:` of its own; name the primary stand-in"
-        elif files[tgt].role is None:
-            problem = f"`unit:` target {value} has no role"
-        elif files[tgt].role != sf.role:
-            problem = f"`unit:` target {value} has role '{files[tgt].role}', not '{sf.role}'"
-        else:
-            primary[sf.path] = tgt
-            continue
-        if report:
-            sf.err(ln, problem)
-    return primary
-
-
-def unit_members(files, primary):
-    """Primary path -> its member stand-ins, the primary first and the rest in path order."""
-    members = defaultdict(list)
-    for sf in sorted(files.values(), key=lambda f: (f.path != primary[f.path], f.rel)):
-        members[primary[sf.path]].append(sf)
-    return members
-
-
-def untested_units(files, deps, primary):
-    """Primaries of concrete product code units that no test stand-in depends on."""
-    tested = {primary[b] for (a, b) in deps if files[a].role == "test" and files[a].kind == "code"}
-    out = []
-    for head, group in unit_members(files, primary).items():
-        if files[head].role != "product" or head in tested:
-            continue
-        if "untested" in files[head].meta or any(m.abstract for m in group):
-            continue
-        if any(m.kind == "code" and any(s.kind in ("class", "function") for s in m.sections) for m in group):
-            out.append(files[head])
-    return out
-
-
 def unknown_problems(u, lenient):
     """(severity, message) pairs for one unknown, judged on its own text."""
     missing = "warning" if lenient else "error"
@@ -699,41 +455,226 @@ def name_problems(pairs):
     return out
 
 
-def cmd_check(args):
+class Premise:
+    """wrist/PREMISE.md: front matter, the answers to the profile's questions, unknowns and links."""
+
+    def __init__(self):
+        self.exists = False
+        self.front = {}         # key -> (line, value)
+        self.unknowns = []
+        self.links = []         # (line, text, target)
+        self.slugs = set()
+        self.answers = {}       # question id -> (line, value)
+        self.diags = []
+
+
+def read_premise(wrist_root):
+    pm = Premise()
+    path = os.path.join(wrist_root, PREMISE_FILE)
+    if not os.path.exists(path):
+        return pm
+    pm.exists = True
+    with open(path, encoding="utf-8-sig") as fh:
+        lines = fh.read().split("\n")
+    end = front_matter_end(lines)
+    start = 0
+    if end > 0:
+        for i, l in enumerate(lines[1:end], 2):
+            m = META_RE.match(l)
+            if m:
+                pm.front.setdefault(m.group(1).lower(), (i, meta_value(m.group(2))))
+        start = end + 1
+    elif end == -1:
+        pm.diags.append(("error", 1, "front matter is not closed with `---`"))
+    fence = False
+    for idx in range(start, len(lines)):
+        ln, line = idx + 1, lines[idx]
+        if FENCE_RE.match(line):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        hm = HEADING_RE.match(line)
+        if hm:
+            pm.slugs.add(slugify(hm.group(2)))
+            continue
+        am = ANSWER_RE.match(line)
+        if am:
+            pm.answers.setdefault(am.group(1), (ln, am.group(2).strip()))
+        um = UNKNOWN_RE.search(line)
+        if um:
+            pm.unknowns.append(Unknown(ln, um.group(1).strip()))
+        pm.links.extend((ln, text, target) for text, target in LINK_RE.findall(line))
+    return pm
+
+
+def premise_problems(pm, profile, override):
+    """(severity, line, message) for PREMISE.md itself: front matter and the profile's questions."""
+    if not pm.exists:
+        return [("error", 1, f"{PREMISE_FILE} is missing; the premise phase writes it")]
+    out = list(pm.diags)
+    for key in ("title", "slug"):
+        if not pm.front.get(key, (0, ""))[1]:
+            out.append(("error", 1, f"{PREMISE_FILE} front matter needs `{key}:`"))
+    line, slug = pm.front.get("slug", (1, ""))
+    if slug and not wrist_profile.SLUG_RE.match(slug):
+        out.append(("error", line, f"slug '{slug}' must be lower-case words joined by hyphens"))
+    if not override and "profile" not in pm.front:
+        out.append(("error", 1, f"{PREMISE_FILE} front matter needs `profile:`"))
+    for q in profile.questions:
+        answer = pm.answers.get(q.id)
+        if answer is None or not answer[1]:
+            out.append(("error" if q.required else "warning", 1,
+                        f"question '{q.id}' ({q.text}) has no answer; answer it or record an `*UNKNOWN*:`"))
+    return out
+
+
+def check_premise_links(wrist_root, files, pm):
+    diags = []
+    for ln, text, target in pm.links:
+        if EXTERNAL_RE.match(target):
+            continue
+        path, _, frag = target.partition("#")
+        if path == "":
+            if frag and frag not in pm.slugs:
+                diags.append(("error", ln, f"fragment '#{frag}' does not match any heading in this file"))
+            continue
+        tgt = os.path.normpath(os.path.join(wrist_root, path))
+        if not os.path.exists(tgt):
+            diags.append(("error", ln, f"link target does not exist: {target}"))
+        elif frag and tgt in files:
+            diags.extend((sev, ln, msg) for sev, msg in fragment_problems(text, frag, files[tgt], path))
+    return diags
+
+
+def load_all(args):
+    """(wrist_root, files, profile, premise, slug) for a command; exits when there is no usable profile."""
+    pm = read_premise(os.path.abspath(args.wrist_dir))
+    name = args.profile or pm.front.get("profile", (0, ""))[1]
+    if not name:
+        sys.exit(f"no profile: give --profile or set `profile:` in {os.path.join(args.wrist_dir, PREMISE_FILE)}")
+    try:
+        profile = wrist_profile.load_profile(name)
+    except wrist_profile.ProfileError as exc:
+        sys.exit(f"profile error: {exc}")
+    configure(profile)
     wrist_root, files = load_tree(args.wrist_dir)
+    return wrist_root, files, profile, pm, pm.front.get("slug", (0, ""))[1]
+
+
+def prose_words(sf, sec):
+    """Words of free prose directly under a heading: not fenced, not a field, not a link bullet."""
+    later = [s.line for s in sf.sections if s.line > sec.line]
+    end = min(later) - 1 if later else len(sf.lines)
+    words, fence = 0, None
+    for line in sf.lines[sec.line:end]:
+        fm = FENCE_RE.match(line)
+        if fence:
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence) and not fm.group(2).strip():
+                fence = None
+            continue
+        if fm:
+            fence = fm.group(1)
+            continue
+        if FIELD_RE.match(line) or BULLET_LINK_RE.match(line) or UNKNOWN_RE.search(line):
+            continue
+        words += len(line.split())
+    return words
+
+
+def validate_file(sf, lenient, slug):
+    """Check one stand-in against the profile function its path gives it."""
+    miss = sf.warn if lenient else sf.err
+    sf.function = PROFILE.function_for(sf.impl_rel, slug)
+    if sf.function is None:
+        return                      # outside the shape; collect_diags reports it
+    spec = PROFILE.functions[sf.function]
+    l1 = [s for s in sf.sections if s.level == 1]
+    if len(l1) != 1:
+        sf.err(l1[1].line if len(l1) > 1 else 1,
+               f"expected exactly one level-1 heading `# {spec['heading']}: <name>` (found {len(l1)})")
+    elif l1[0].kind != spec["heading"]:
+        sf.err(l1[0].line, f"this stand-in must start with `# {spec['heading']}: <name>`")
+    if sf.root.fields:
+        ln = min(v[0][0] for v in sf.root.fields.values())
+        sf.warn(ln, "fields before the first heading are not attached to any heading")
+    for s in sf.sections:
+        if s.kind is None or s.level == 1:
+            continue
+        if not (s.level == 2 and s.kind in spec["children"]):
+            allowed = ", ".join(f"## {k}:" for k in spec["children"]) or "none"
+            sf.err(s.line, f"`{'#' * s.level} {s.kind}:` not allowed here; this file allows "
+                           f"{allowed} under `# {spec['heading']}:`")
+    limit = PROFILE.limits["max_prose_words"]
+    for s in sf.sections:
+        if s.kind is None:
+            continue
+        required = spec["fields"] if s.level == 1 else spec["children"].get(s.kind)
+        if required is not None:
+            f = own_fields(s)
+            for label in required:
+                if label not in f:
+                    miss(s.line, f"{s.kind} '{s.name}' is missing `{label}:`")
+        words = prose_words(sf, s)
+        if words > limit:
+            sf.warn(s.line, f"{s.kind} '{s.name}' has {words} words of free prose; stand-ins hold notes, "
+                            f"not the text (limit {limit})")
+    for lk in sf.all_links():
+        if lk.relation and lk.relation.lower() not in PROFILE.relations:
+            sf.warn(lk.line, f"relation word '{lk.relation}' is not one of: {', '.join(PROFILE.relations)}")
+    ff = file_fields(sf)
+    for label, q in [("Required", "Is this always required?"), ("Rules", "What must the realization follow?"),
+                     ("Depends on", "What does this depend on?"), ("Referred by", "What depends on this?")]:
+        if label not in ff:
+            sf.err(1, f"missing `{label}:` (answers '{q}'); use 'none' if that is the answer")
+    if not sf.unknowns and "Unknowns" not in ff:
+        sf.err(1, "no *UNKNOWN* entries and no `Unknowns: none`")
+
+
+def collect_diags(wrist_dir, wrist_root, files, profile, pm, slug, lenient, override):
+    """Every diagnostic of the tree: {file rel: [(severity, line, msg)]}, the edges, and the unknowns."""
     for sf in files.values():
-        validate_file(sf, args.lenient)
+        validate_file(sf, lenient, slug)
     deps, refs = build_edges(wrist_root, files)
     check_bidirectional(files, deps, refs)
-    primary = resolve_units(files)
-    for sf in files.values():
-        if "untested" in sf.meta and primary[sf.path] != sf.path:
-            sf.err(sf.meta["untested"][0], "`untested:` belongs on the unit's primary stand-in, "
-                                           f"{files[primary[sf.path]].rel}")
-    for (a, b), links in deps.items():
-        if files[a].role == "product" and files[b].role == "test":
-            files[a].warn(links[0].line, f"a product stand-in depends on test stand-in {files[b].rel}; "
-                                         "one of the two roles is probably wrong")
-    for sf in untested_units(files, deps, primary):
-        sf.warn(1, "no test stand-in depends on this unit; link one or state `untested: <reason>` in front matter")
-    sys_unknowns, sys_links, sys_slugs = read_system(wrist_root)
     diags = {sf.rel: sf.diags for sf in files.values()}
-    diags[SYSTEM_FILE] = check_system(wrist_root, files, sys_links, sys_slugs)
-    pairs = tree_unknowns(files, sys_unknowns)
+    diags[PREMISE_FILE] = premise_problems(pm, profile, override) + check_premise_links(wrist_root, files, pm)
+    expected = profile.expected_files(slug)
+    present = {sf.impl_rel for sf in files.values()}
+    for path, _ in expected:
+        if path not in present:
+            diags[PREMISE_FILE].append(
+                ("error", 1, f"required stand-in missing: {os.path.join(wrist_dir, path + WRIST_SUFFIX)}"))
+    names = ", ".join(p for p, _ in expected)
+    for sf in files.values():
+        if sf.function is None:
+            sf.err(1, f"this stand-in is outside the {profile.name} shape; the stand-ins are {names}")
+    pairs = tree_unknowns(files, pm.unknowns)
     for rel, u in pairs:
-        diags[rel].extend((sev, u.line, msg) for sev, msg in unknown_problems(u, args.lenient))
+        diags[rel].extend((sev, u.line, msg) for sev, msg in unknown_problems(u, lenient))
     for rel, line, sev, msg in name_problems(pairs):
         diags[rel].append((sev, line, msg))
-    ne = nw = 0
-    for rel in sorted(r for r in diags if r != SYSTEM_FILE) + [SYSTEM_FILE]:
+    return diags, deps, pairs
+
+
+def count_diags(diags):
+    errors = sum(1 for ds in diags.values() for sev, _, _ in ds if sev == "error")
+    warnings = sum(1 for ds in diags.values() for sev, _, _ in ds if sev == "warning")
+    return errors, warnings
+
+
+@command("check", lambda p: p.add_argument("--lenient", action="store_true",
+                                           help="report missing fields as warnings; link and naming errors still fail"))
+def cmd_check(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    diags, deps, pairs = collect_diags(args.wrist_dir, wrist_root, files, profile, pm, slug,
+                                       args.lenient, bool(args.profile))
+    for rel in sorted(r for r in diags if r != PREMISE_FILE) + [PREMISE_FILE]:
         for sev, ln, msg in sorted(diags[rel], key=lambda d: d[1]):
             print(f"{os.path.join(args.wrist_dir, rel)}:{ln}: {sev}: {msg}")
-            ne += sev == "error"
-            nw += sev == "warning"
-    n_unk = len(decisions(pairs)[0])
-    n_abs = sum(f.abstract for f in files.values())
-    print(f"\n{len(files)} stand-ins, {len(deps)} dependency edges, {n_unk} unknowns, "
-          f"{n_abs} abstract (placeholder extension); {ne} errors, {nw} warnings")
+    ne, nw = count_diags(diags)
+    print(f"\n{len(files)} stand-ins, {len(deps)} dependency edges, {len(decisions(pairs)[0])} unknowns; "
+          f"{ne} errors, {nw} warnings")
     return 1 if ne else 0
 
 
@@ -745,10 +686,10 @@ def heading_path(sec):
     return " > ".join(reversed(parts)) or "(top)"
 
 
-def tree_unknowns(files, system_unknowns):
-    """Every unknown as (file, Unknown): stand-ins in path order, then SYSTEM.md."""
+def tree_unknowns(files, premise_unknowns):
+    """Every unknown as (file, Unknown): stand-ins path order, then PREMISE.md."""
     pairs = [(sf.rel, u) for sf in sorted(files.values(), key=lambda f: f.rel) for u in sf.unknowns]
-    pairs.extend((SYSTEM_FILE, u) for u in system_unknowns)
+    pairs.extend((PREMISE_FILE, u) for u in premise_unknowns)
     return pairs
 
 
@@ -774,9 +715,10 @@ def unknown_item(rel, u, followers=()):
                            "consequence": f.clauses.get("consequence")} for r, f in followers]}
 
 
+@command("unknowns", lambda p: p.add_argument("--json", action="store_true"))
 def cmd_unknowns(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    declared, orphans = decisions(tree_unknowns(files, read_system(wrist_root)[0]))
+    wrist_root, files, profile, pm, slug = load_all(args)
+    declared, orphans = decisions(tree_unknowns(files, pm.unknowns))
     if args.json:
         items = [unknown_item(rel, u, followers) for rel, u, followers in declared]
         items += [unknown_item(rel, u) for rel, u in orphans]
@@ -805,66 +747,6 @@ def cmd_unknowns(args):
             print(f"- {rel}:{u.line} ({u.label}): {u.text}")
         print()
     print(f"{len(declared)} unknowns")
-    return 0
-
-
-def sccs(nodes, edges):
-    index, low, on, stack, out, counter = {}, {}, set(), [], [], [0]
-    sys.setrecursionlimit(max(10000, len(nodes) * 4))
-
-    def visit(v):
-        index[v] = low[v] = counter[0]
-        counter[0] += 1
-        stack.append(v)
-        on.add(v)
-        for w in edges.get(v, ()):
-            if w not in index:
-                visit(w)
-                low[v] = min(low[v], low[w])
-            elif w in on:
-                low[v] = min(low[v], index[w])
-        if low[v] == index[v]:
-            comp = []
-            while True:
-                w = stack.pop()
-                on.discard(w)
-                comp.append(w)
-                if w == v:
-                    break
-            out.append(sorted(comp))
-    for v in sorted(nodes):
-        if v not in index:
-            visit(v)
-    return out  # Tarjan emits components in reverse topological order of the edge direction
-
-
-def cmd_order(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    deps, _ = build_edges(wrist_root, files, report=False)
-    edges = defaultdict(set)
-    for a, b in deps:
-        edges[a].add(b)
-    comps = sccs(list(files), edges)  # dependencies come out first because edges point at dependencies
-    steps = []
-    for i, comp in enumerate(comps, 1):
-        steps.append({"step": i, "cycle": len(comp) > 1, "files": [{
-            "wrist": files[p].rel, "implements": files[p].impl_rel, "kind": files[p].kind,
-            "abstract": files[p].abstract, "unknowns": len(files[p].unknowns),
-            "depends_on": sorted(files[b].rel for b in edges.get(p, ()))} for p in comp]})
-    if args.json:
-        print(json.dumps(steps, indent=2))
-        return 0
-    for st in steps:
-        tag = "  (cycle: implement together, consider breaking it)" if st["cycle"] else ""
-        print(f"{st['step']}.{tag}")
-        for f in st["files"]:
-            flags = []
-            if f["abstract"]:
-                flags.append("ABSTRACT")
-            if f["unknowns"]:
-                flags.append(f"{f['unknowns']} UNKNOWN")
-            fl = f"  [{', '.join(flags)}]" if flags else ""
-            print(f"   {f['implements']}  ({f['kind']}){fl}")
     return 0
 
 
@@ -897,359 +779,11 @@ def stand_in_hash(sf):
     return hashlib.sha256(" ".join(" ".join(kept).split()).encode("utf-8")).hexdigest()[:8]
 
 
-def is_generated(sf):
-    """True when the stand-in says, at file level, that a tool writes its file."""
-    top = next((s for s in sf.sections if s.level == 1), None)
-    sources = own_fields(top).get("Source", []) if top else []
-    return any(value.strip().lower().startswith("generated") for _, value in sources)
 
 
-def drift_checked(sf):
-    """Stamps and name checks apply to code stand-ins that a person or agent writes."""
-    return sf.kind == "code" and not is_generated(sf)
-
-
-def spec_path(sf, root):
-    return os.path.relpath(sf.path, root).replace(os.sep, "/")
-
-
-def read_spec_header(path):
-    """(stand-in path, hash or None, line index) from the file's first lines, or None."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for idx, line in zip(range(SPEC_LINES), fh):
-                m = SPEC_RE.search(line)
-                if m:
-                    return m.group(1), m.group(2), idx
-    except OSError:
-        pass
-    return None
-
-
-def stamp_state(sf, impl, root):
-    """('implemented' | 'stale' | 'unstamped', reason or None) for an implemented code file."""
-    header = read_spec_header(impl)
-    if header is None:
-        return "unstamped", "no Spec: header"
-    if header[0] != spec_path(sf, root):
-        return "unstamped", f"Spec: header names {header[0]}"
-    if header[1] is None:
-        return "unstamped", "no hash; run stamp"
-    return ("implemented" if header[1].lower() == stand_in_hash(sf) else "stale"), None
-
-
-def heading_name(sec):
-    """The identifier a typed heading stands for: its first word, without markup, signature or qualifier."""
-    token = re.split(r"[\s(<\[,]", sec.name.strip().lstrip("`*"), maxsplit=1)[0].rstrip("`*:")
-    return re.split(r"::|\.", token)[-1]
-
-
-def missing_names(sf, impl):
-    """Every class, function and symbol the stand-in names that is not a whole word in the code."""
-    with open(impl, encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
-    out = []
-    for s in sf.sections:
-        if s.level > 1 and s.kind in ("class", "function", "symbol"):
-            name = heading_name(s)
-            if name and not re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", text):
-                out.append(f"{s.kind} {name}")
-    return out
-
-
-def cmd_stamp(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    root = os.path.abspath(args.root)
-    if not args.paths and not args.all:
-        sys.exit("stamp needs the implemented files to stamp, or --all")
-    if args.paths and args.all:
-        sys.exit("give the files to stamp or --all, not both")
-    by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
-    targets = sorted(by_impl) if args.all else [os.path.normpath(os.path.abspath(p)) for p in args.paths]
-    stamped = current = failed = 0
-    for impl in targets:
-        shown = os.path.relpath(impl, root)
-        sf = by_impl.get(impl)
-        if sf is None:
-            print(f"{shown}: no stand-in in this tree")
-            failed += 1
-            continue
-        if not os.path.exists(impl) or not drift_checked(sf):
-            if not args.all:
-                reason = "not implemented yet" if not os.path.exists(impl) else \
-                    "only code stand-ins that are not generated carry a stamp"
-                print(f"{shown}: {reason}")
-                failed += 1
-            continue
-        want, header = spec_path(sf, root), read_spec_header(impl)
-        if header is None or header[0] != want:
-            if header is None:
-                print(f"{shown}: no `Spec: {want}` header in its first {SPEC_LINES} lines")
-            else:
-                print(f"{shown}: its Spec: header names {header[0]}, not {want}")
-            failed += not args.all
-            continue
-        digest = stand_in_hash(sf)
-        if (header[1] or "").lower() == digest:
-            current += 1
-            continue
-        try:    # bytes and line endings outside the header line are written back exactly as read
-            with open(impl, encoding="utf-8", errors="surrogateescape", newline="") as fh:
-                lines = fh.readlines()
-            lines[header[2]] = SPEC_RE.sub(lambda m: f"Spec: {m.group(1)} @ {digest}", lines[header[2]], count=1)
-            with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
-                fh.writelines(lines)
-        except OSError as exc:
-            print(f"{shown}: cannot be rewritten ({exc.strerror})")
-            failed += 1
-            continue
-        print(f"stamped {shown} @ {digest}")
-        stamped += 1
-    print(f"\n{stamped} stamped, {current} already current")
-    return 1 if failed else 0
-
-
-def cmd_batches(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    deps, _ = build_edges(wrist_root, files, report=False)
-    primary = resolve_units(files, report=False)
-    members = unit_members(files, primary)
-    manifests = sorted(m.impl_rel for p, group in members.items() if files[p].role == "manifest" for m in group)
-    nodes = sorted(p for p in members if files[p].role != "manifest")
-    ignored = sorted(sf.rel for sf in files.values() if "unit" in sf.meta and primary[sf.path] == sf.path)
-    edges, manifest_deps = defaultdict(set), defaultdict(set)
-    for (a, b) in deps:
-        ua, ub = primary[a], primary[b]
-        if ua == ub or files[ua].role == "manifest":
-            continue
-        (manifest_deps if files[ub].role == "manifest" else edges)[ua].add(ub)
-    comps = sccs(nodes, edges)  # dependencies come out first, so every level below is already known
-    comp_of = {p: i for i, comp in enumerate(comps) for p in comp}
-    level = {}
-    for i, comp in enumerate(comps):
-        below = {comp_of[d] for p in comp for d in edges.get(p, ()) if comp_of[d] != i}
-        level[i] = 1 + max((level[j] for j in below), default=0)
-    batches = defaultdict(list)
-    for i, comp in enumerate(comps):
-        for p in comp:
-            group = members[p]
-            batches[level[i]].append({
-                "unit": files[p].impl_rel, "files": [m.impl_rel for m in group],
-                "role": files[p].role or "product", "cycle": len(comp) > 1,
-                "abstract": any(m.abstract for m in group), "unknowns": sum(len(m.unknowns) for m in group),
-                "depends_on": sorted(files[d].impl_rel for d in edges.get(p, ())),
-                "depends_on_manifests": sorted(files[d].impl_rel for d in manifest_deps.get(p, ()))})
-    result = {"manifests": manifests,
-              "batches": [{"batch": n, "units": sorted(batches[n], key=lambda u: u["unit"])} for n in sorted(batches)],
-              "ignored_units": ignored}
-    if args.json:
-        print(json.dumps(result, indent=2))
-        return 0
-    if not files:
-        print("No stand-ins.")
-        return 0
-    if manifests:
-        print("Manifests (create with batch 1, extend with every batch):")
-        for path in manifests:
-            print(f"  {path}")
-        print()
-    for batch in result["batches"]:
-        print(f"Batch {batch['batch']}:")
-        for u in batch["units"]:
-            extra = f"  (+ {', '.join(u['files'][1:])})" if len(u["files"]) > 1 else ""
-            flags = [f"[{u['role']}]"] if u["role"] == "test" else []
-            if u["cycle"]:
-                flags.append("[cycle]")
-            if u["abstract"]:
-                flags.append("[ABSTRACT]")
-            if u["unknowns"]:
-                flags.append(f"[{u['unknowns']} UNKNOWN]")
-            print(f"  {u['unit']}{extra}{'  ' + ' '.join(flags) if flags else ''}")
-        print()
-    if ignored:
-        plural = "value" if len(ignored) == 1 else "values"
-        print(f"note: {len(ignored)} `unit:` {plural} ignored because it is not valid; `check` explains why:")
-        for rel in ignored:
-            print(f"  {rel}")
-    return 0
-
-
-IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target", "__pycache__",
-               ".idea", ".vscode", "wrist", ".next", "out", "vendor"}
-
-
-def cmd_status(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    root = os.path.abspath(args.root)
-    groups = {"implemented": [], "stale": [], "unstamped": [], "pending": [], "abstract": []}
-    missing, specified = [], set()
-    members = unit_members(files, resolve_units(files, report=False))
-    for sf in sorted(files.values(), key=lambda f: f.rel):
-        impl = os.path.join(root, sf.impl_rel)
-        specified.add(os.path.normpath(impl))
-        if not os.path.exists(impl):
-            unk = f"  [{len(sf.unknowns)} UNKNOWN]" if sf.unknowns else ""
-            groups["abstract" if sf.abstract else "pending"].append(f"{sf.impl_rel}{unk}")
-        elif not (os.path.isfile(impl) and os.access(impl, os.R_OK)):
-            groups["unstamped"].append(f"{sf.impl_rel}  (cannot be read)")
-        elif not drift_checked(sf):
-            groups["implemented"].append(f"{sf.impl_rel}  (generated)" if sf.kind == "code" else sf.impl_rel)
-        else:
-            group, reason = stamp_state(sf, impl, root)
-            rest = [m.impl_rel for m in members.get(sf.path, [])[1:]]
-            if group == "stale" and rest:       # a stale primary puts its whole unit on the work list
-                reason = "unit: also " + ", ".join(rest)
-            groups[group].append(f"{sf.impl_rel}  ({reason})" if reason else sf.impl_rel)
-            missing.extend(f"{sf.impl_rel}: {name}" for name in missing_names(sf, impl))
-    unspecified = []
-    for dp, dns, fns in os.walk(root):
-        dns[:] = [d for d in dns if d not in IGNORE_DIRS and not d.startswith(".")
-                  and os.path.abspath(os.path.join(dp, d)) != wrist_root]
-        for fn in fns:
-            ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
-            if (ext in CODE_EXT | IAC_EXT and ext not in PLACEHOLDER_EXT) or fn in EXTLESS:
-                p = os.path.normpath(os.path.join(dp, fn))
-                if p not in specified:
-                    unspecified.append(os.path.relpath(p, root))
-    listing = [("Implemented", groups["implemented"]),
-               ("Stale, stand-in changed since stamped", groups["stale"]),
-               ("Unstamped", groups["unstamped"]),
-               ("Pending", groups["pending"]),
-               ("Abstract, adapt before implementing", groups["abstract"]),
-               ("Code/IaC files with no stand-in", sorted(unspecified)),
-               ("Names not found in code", missing)]
-    for title, lines in listing:
-        print(f"{title} ({len(lines)}):")
-        for line in lines:
-            print(f"  {line}")
-    return 0
-
-
-def infer_role(sf):
-    """(role, reason it is unsure or None), judged from the implemented file's path alone."""
-    parts = sf.impl_rel.split(os.sep)
-    name, dirs = parts[-1], [d.lower() for d in parts[:-1]]
-    if name in MANIFEST_NAMES or name.endswith(MANIFEST_SUFFIXES) or MANIFEST_NAME_RE.match(name):
-        return "manifest", None
-    strong, weak = STRONG_TEST_NAME_RE.match(name), WEAK_TEST_NAME_RE.match(name)
-    in_test_dir = any(d in TEST_DIRS or d.endswith((".test", ".tests")) for d in dirs)
-    looks_test = bool(strong or in_test_dir)
-    for d in dirs:
-        if d in UNSURE_DIRS:
-            return ("test" if looks_test else "product"), f"under {d}/, so it may not be delivered"
-    if looks_test:
-        return "test", None
-    if any(d in SPEC_DIRS for d in dirs):
-        return "test", "a spec/ folder can hold specifications as well as tests"
-    if weak:
-        return "test", "its name ends in Test, Tests or IT, but it is not in a test folder"
-    return "product", None
-
-
-def infer_unit(sf, files, deps):
-    """(header stand-in this source is built with or None, reason it is unsure or None).
-
-    A header of the same name in the same folder is taken as it is. A header whose name is only a
-    prefix of the source's, or one of the same name in another folder, needs a `Depends on:` link
-    from the source to confirm it."""
-    if sf.ext.lower() not in SOURCE_EXT:
-        return None, None
-    stem = sf.base.rsplit(".", 1)[0]
-    linked = {b for (a, b) in deps if a == sf.path}
-    here, elsewhere = [], []
-    for other in files.values():
-        if other.ext.lower() not in HEADER_EXT:
-            continue
-        ostem = other.base.rsplit(".", 1)[0]
-        if os.path.dirname(other.path) == os.path.dirname(sf.path):
-            if stem == ostem or (stem.startswith(ostem) and stem[len(ostem)] in "_-."):
-                here.append((len(ostem), other))
-        elif stem == ostem and other.path in linked:
-            elsewhere.append(other)
-    if here:
-        longest = max(n for n, _ in here)
-        winners = sorted((o for n, o in here if n == longest), key=lambda o: o.path)
-        header = winners[0]
-        if len(winners) > 1:
-            return header, "more than one header fits: " + ", ".join(os.path.basename(o.path) for o in winners)
-        if longest != len(stem) and header.path not in linked:
-            return header, (f"its name only begins with {header.base}, and no `Depends on:` link "
-                            "confirms the pairing")
-        return header, None
-    if len(elsewhere) == 1:
-        return elsewhere[0], None
-    if elsewhere:
-        elsewhere.sort(key=lambda o: o.path)
-        return elsewhere[0], "more than one linked header has that name: " + ", ".join(o.rel for o in elsewhere)
-    return None, None
-
-
-def add_front_matter(sf, pairs):
-    """Write `key: value` lines into the stand-in's front matter, creating the block if it has none."""
-    lines = list(sf.lines)
-    new = [f"{key}: {value}" for key, value in pairs]
-    close = front_matter_end(lines)
-    if close > 0:
-        lines[close:close] = new
-    else:
-        lines = ["---", *new, "---"] + lines
-    with open(sf.path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-
-
-def cmd_infer_roles(args):
-    wrist_root, files = load_tree(args.wrist_dir)
-    deps, _ = build_edges(wrist_root, files, report=False)
-    roles, unsure = {}, {}
-    for sf in files.values():
-        roles[sf.path], unsure[sf.path] = (sf.role, None) if sf.role is not None else infer_role(sf)
-    for (a, b) in sorted(deps):
-        if files[b].role is None and roles[b] == "test" and roles[a] == "product" and not unsure[b]:
-            unsure[b] = f"product stand-in {files[a].rel} depends on it"
-    n_write = n_unsure = 0
-    for sf in sorted(files.values(), key=lambda f: f.rel):
-        sure, doubts = [], []
-        if front_matter_end(sf.lines) == -1:
-            doubts.append(("front matter", None, "it opens with `---` and is not closed; fix it by hand"))
-        else:
-            if sf.role is None:
-                if unsure[sf.path]:
-                    doubts.append(("role", roles[sf.path], unsure[sf.path]))
-                else:
-                    sure.append(("role", roles[sf.path]))
-            header, reason = infer_unit(sf, files, deps) if "unit" not in sf.meta else (None, None)
-            if header is not None and roles[header.path] == roles[sf.path]:
-                rel = relpath_dot(header.path, os.path.dirname(sf.path))
-                if not reason and "unit" in header.meta:
-                    reason = f"{header.base} is itself part of a unit; name that unit's primary instead"
-                if not reason and unsure[sf.path]:
-                    reason = "its own role is not settled yet"
-                if reason:
-                    doubts.append(("unit", rel, reason))
-                else:
-                    sure.append(("unit", rel))
-        if not sure and not doubts:
-            continue
-        print(f"{sf.rel}:")
-        for key, value in sure:
-            print(f"  + {key}: {value}")
-        for key, value, reason in doubts:
-            print(f"  ? {key}{': ' + value if value else ''}  (unsure: {reason})")
-        n_write += len(sure)
-        n_unsure += len(doubts)
-        if args.write and sure:
-            add_front_matter(sf, sure)
-    if not n_write and not n_unsure:
-        print("Nothing to infer.")
-        return 0
-    print(f"\n{n_write} to write, {n_unsure} unsure (never written; set those by hand)")
-    if not args.write:
-        print("(dry run; pass --write to apply)")
-    return 0
-
-
+@command("fix-backlinks", lambda p: p.add_argument("--write", action="store_true"))
 def cmd_fix_backlinks(args):
-    wrist_root, files = load_tree(args.wrist_dir)
+    wrist_root, files, profile, pm, slug = load_all(args)
     deps, refs = build_edges(wrist_root, files, report=False)
     inserts = defaultdict(list)  # target path -> [(line_index, text)]
     for (a, b), lks in sorted(deps.items()):
@@ -1310,16 +844,12 @@ def section_end(sf, sec):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("check"); p.add_argument("wrist_dir"); p.add_argument("--lenient", action="store_true",
-                                                                            help="report missing fields as warnings; link and naming errors still fail")
-    p = sub.add_parser("unknowns"); p.add_argument("wrist_dir"); p.add_argument("--json", action="store_true")
-    p = sub.add_parser("order"); p.add_argument("wrist_dir"); p.add_argument("--json", action="store_true")
-    p = sub.add_parser("status"); p.add_argument("wrist_dir"); p.add_argument("--root", required=True)
-    p = sub.add_parser("fix-backlinks"); p.add_argument("wrist_dir"); p.add_argument("--write", action="store_true")
-    p = sub.add_parser("infer-roles"); p.add_argument("wrist_dir"); p.add_argument("--write", action="store_true")
-    p = sub.add_parser("batches"); p.add_argument("wrist_dir"); p.add_argument("--json", action="store_true")
-    p = sub.add_parser("stamp"); p.add_argument("wrist_dir"); p.add_argument("--root", required=True)
-    p.add_argument("paths", nargs="*"); p.add_argument("--all", action="store_true")
+    for name, (fn, setup) in COMMANDS.items():
+        p = sub.add_parser(name)
+        p.add_argument("wrist_dir")
+        p.add_argument("--profile", help="profile name; overrides `profile:` in PREMISE.md")
+        if setup:
+            setup(p)
     # argparse will not take positionals on both sides of an option, so `stamp DIR --root . PATH...`
     # leaves its paths over; collect them here.
     args, extra = ap.parse_known_args()
@@ -1327,10 +857,7 @@ def main():
         ap.error("unrecognized arguments: " + " ".join(extra))
     if args.cmd == "stamp":
         args.paths += extra
-    fn = {"check": cmd_check, "unknowns": cmd_unknowns, "order": cmd_order, "status": cmd_status,
-          "fix-backlinks": cmd_fix_backlinks, "infer-roles": cmd_infer_roles, "batches": cmd_batches,
-          "stamp": cmd_stamp}[args.cmd]
-    sys.exit(fn(args))
+    sys.exit(COMMANDS[args.cmd][0](args))
 
 
 if __name__ == "__main__":
