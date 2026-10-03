@@ -63,3 +63,15 @@ A required question with no answer is an error; a deferrable one is a warning. A
 ## 6. Fences
 
 Every fence opens with three or more backticks (or tildes) and a language tag; use `text` for plain text. **(checked)** Fenced content is ignored for headings, fields, links and unknowns.
+
+## 7. What a profile can add
+
+A profile (`profiles/<name>/profile.json`) decides the file shape and what every stand-in must hold. Beyond the short story's fixed files it can declare:
+
+- **`premise_keys`**: the `PREMISE.md` front matter keys it reads, each `bool` (`yes` or `no`, default no) or `int` (a whole number within `min` and `max`, optionally `required`). A wrong or missing required value is a `check` error that names the key. A question whose id is a premise key counts as answered when the front matter has the key.
+- **`when`** on a file entry: the file exists only when that bool key is yes (`forward: yes` makes `work/forward.md`).
+- **`family`** on a file entry: the file expands into one per number from 1 to the int key's value, with `{n}` in the path replaced by the number zero-padded to the width of the count. `check` requires exactly those stand-ins, so changing the count means changing the tree.
+- **`required_when_realized`**: fields a stand-in must hold once its realized file exists. For a novel chapter this is `Established:`; `stamp` refuses a chapter without it and `gate publishing` reports it. Text on the same line, or on the lines that follow it up to a blank line, counts; an empty field does not.
+- **`sequence`**: each file of a family should link to the one before it with the relation `continues`; `check` warns when it does not.
+- **`heading_field`**: the field (for the novel, `Heading:`) whose value is the exact first line of the realized file, for example `# 7. The Long Wait`. `gate publishing` reports a realized file that starts with something else.
+- **`title_page`**: whether the published book has a separate title page (default true; the short story sets it false).

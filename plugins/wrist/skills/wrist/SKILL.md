@@ -14,7 +14,7 @@ wrist/work/the-lamp.md.wrist.md ->  work/the-lamp.md
 
 The `references/`, `profiles/`, `assets/` and `scripts/` paths here are relative to this skill's directory, `${CLAUDE_SKILL_DIR}`, not to the user's project.
 
-Read `references/grammar.md` before writing or editing any `.wrist.md`. The checker enforces it. Only the `shortstory` profile exists so far; if the user wants a novel, screenplay or poem, say it is not built yet.
+Read `references/grammar.md` before writing or editing any `.wrist.md`. The checker enforces it. Two profiles exist: `shortstory` and `novel`. If the user wants a screenplay or a poem, say it is not built yet. Each profile has its own folder under `profiles/` (questions, structures, quality lists) and its own templates: `assets/templates/` for the short story and `assets/templates/novel/` for the novel.
 
 ## The four phases
 
@@ -28,15 +28,15 @@ A gate prints what blocks the phase. It stays blocked until `PREMISE.md` records
 
 ### 1. Premise
 
-1. Ask which profile (`shortstory`). Read `profiles/shortstory/questions.md`.
+1. Ask which profile (`shortstory` or `novel`) and read `profiles/<profile>/questions.md`.
 2. Ask the questions: `required` ones must be answered or become an `*UNKNOWN*:`; `deferrable` ones may be left out. Never invent an answer. A question the user skips on purpose still gets its line, written `- **<id>:** none (skipped on purpose)`, so `check` stops warning about it.
-3. Write `wrist/PREMISE.md` from `assets/templates/PREMISE.md`: front matter (`profile`, `title`, `slug`, `author`, `language`) and one `- **<id>:** <answer>` line per question. The slug is a file-friendly form of the title (lower-case words joined by hyphens).
+3. Write `wrist/PREMISE.md` from `assets/templates/PREMISE.md` (`assets/templates/novel/PREMISE.md` for a novel): front matter (`profile`, `title`, `slug`, `author`, `language`) and one `- **<id>:** <answer>` line per question. The slug is a file-friendly form of the title (lower-case words joined by hyphens). For a novel the front matter also holds the keys that decide which files exist: `chapters:` (a whole number; if the user is unsure, propose one from the length and the structure, then fix it), and `forward:`, `prologue:`, `afterward:`, `index:` (each `yes` or `no`). Ask each of the four with the reason it is wanted. These answers count for their questions, so they need no line in the body. Changing one later means changing the tree. Optional text for the published book (`copyright:`, `dedication:`, `epigraph:`) is asked in the publishing question phase.
 
 ### 2. Generation
 
 1. Question phase, then `questions_generation: done`.
-2. Read `profiles/shortstory/structures.md` and `quality.md`. Choose a structure that fits the premise. If the user did not name one, record the choice as an `*UNKNOWN*:` with `Proposed:`; do not present your own choice as settled.
-3. Write every stand-in in the profile's shape (five files for a short story), using `assets/templates/`. Create the empty files first so links have targets. Fill in the notes; copy the quality rules that apply into each stand-in's `Rules:`. No stand-in contains final prose: a scene says what it must do, include and avoid, not the sentences.
+2. Read `profiles/<profile>/structures.md` and `quality.md`. Choose a structure that fits the premise. If the user did not name one, record the choice as an `*UNKNOWN*:` with `Proposed:`; do not present your own choice as settled.
+3. Write every stand-in in the profile's shape (five files for a short story), using `assets/templates/` (short story) or `assets/templates/novel/` (novel). For a novel write one chapter stand-in per chapter, named with the number zero-padded to the width of the chapter count (`chapter-07.md.wrist.md` in a 28-chapter book), with a `(continues)` link to the chapter before, a `Heading:` line giving the exact first line of the realized file, and `Established:` left empty. Create the empty files first so links have targets. Fill in the notes; copy the quality rules that apply into each stand-in's `Rules:`. No stand-in contains final prose: a scene says what it must do, include and avoid, not the sentences.
 4. Add `Depends on:` links with a relation word where it helps, for example `(appears)` or `(realizes)`. Do not hand-write `Referred by:` yet. Then:
 
 ```bash
@@ -57,7 +57,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
 python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.md
 ```
 
-   Follow every `Rules:`, `Must include:` and `Must avoid:`. Separate scenes with a line containing only `* * *`. Do not add a fact the stand-ins do not hold: no new name, object, event, number or backstory. If the text needs one, add it to the scene's `Must include:` first, run `check`, then write it. Never let the text drift from its notes.
+   Follow every `Rules:`, `Must include:` and `Must avoid:`. Separate scenes with a line containing only `* * *`. Do not add a fact the stand-ins do not hold: no new name, object, event, number or backstory. If the text needs one, add it to the scene's `Must include:` first, run `check`, then write it. Never let the text drift from its notes. For a novel, work one chapter at a time: realize the chapter, fill in `Established:`, stamp it, then go on. `Established:` goes in the chapter's stand-in and lists every new fact, date, injury, object moved, who-knows-what and promise the text fixed. `stamp` refuses a chapter whose `Established:` is empty. Before writing a chapter, read the `Established:` fields of the chapters before it and the registries instead of rereading their text.
 3. Craft rules for every file: write for the intended reader; prefer the specific to the general; let action and detail carry feeling; give each speaker a distinct voice; vary sentence length and shape; cut anything the story survives losing; read as the audience would.
 4. Run `lint`, fix each hit that is not deliberate, and re-stamp:
 
@@ -70,7 +70,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
 
 ### 4. Publishing
 
-1. Question phase: ask the author line (it appears as the byline under a short story's heading, or on a novel's title page), the trim size (`trim:` a Typst paper name such as `a5` or `us-trade`) and the font if not the default. Record them in `PREMISE.md`, then set `questions_publishing: done`.
+1. Question phase: ask the author line (it appears as the byline under a short story's heading, or on a novel's title page), the trim size (`trim:` a Typst paper name such as `a5` or `us-trade`) and the font if not the default. For a novel also ask for the copyright line, the dedication and the epigraph (each optional, one line) and record them as `copyright:`, `dedication:` and `epigraph:`. Record everything in `PREMISE.md`, then set `questions_publishing: done`.
 2. Run `gate wrist publishing`, then:
 
 ```bash

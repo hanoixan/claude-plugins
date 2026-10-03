@@ -21,6 +21,10 @@ Only files whose profile function is marked `prose` (the story, for a short stor
 
 Whether a work gets a separate title page is the profile's `title_page` setting. A short story has none: its own heading is the title, and an italic byline (the `author:` from `PREMISE.md`) follows it in both formats. A profile that sets `title_page` to true, as a novel's will, gets a title page with the title and author, and no byline under the first heading.
 
+## A book with front matter
+
+When a profile has a `sequence` function (a novel's chapters), the book is assembled in this order: title page, copyright page, dedication, epigraph, contents, then the realized files in the profile's order. The copyright, dedication and epigraph are the `copyright:`, `dedication:` and `epigraph:` keys of `PREMISE.md`, each optional; the contents page is generated from the level-1 headings. In the PDF every page before the first chapter carries no running head and is numbered in lower-case roman numerals after the title page; the first chapter's page is arabic 1. In the EPUB the contents page is the navigation document, listed in the reading order after the title page. The publisher writes a temporary marker file into `output/` for the numbering switch and removes it afterward.
+
 ## When the build fails
 
 Pandoc's error is printed. The usual cause is a Typst helper that a newer pandoc emits and `book.typ` does not define; run `pandoc -D typst` and copy the missing `#let` or `#show` definitions into `publish/book.typ`.
