@@ -2,8 +2,8 @@
 """wrist_profile.py: load and validate a wrist profile.
 
 A profile is a folder under profiles/ holding the data the checker reads: profile.json (file
-shape, heading types, required fields), questions.md, and optionally lint.json. Standard
-library only.
+shape, heading types, required fields, premise keys), questions.md, and optionally lint.json.
+Standard library only.
 """
 import copy
 import json
@@ -15,8 +15,12 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUESTION_RE = re.compile(r"^-\s+\[(required|deferrable)\]\s+([a-z0-9]+(?:-[a-z0-9]+)*):\s+(\S.*)$")
 TOP_KEYS = {"name", "files", "functions", "relations", "limits"}
-OPTIONAL_KEYS = {"title_page"}      # title_page: a separate title page when published; default true
-FUNCTION_KEYS = {"heading", "fields", "children", "prose"}
+OPTIONAL_KEYS = {"title_page", "premise_keys"}    # title_page: a separate title page when published (default true)
+FUNCTION_KEYS = {"heading", "fields", "children", "prose", "required_when_realized", "sequence", "heading_field"}
+FILE_KEYS = {"path", "function", "order", "when", "family"}
+KEY_SETTINGS = {"type", "min", "max", "required"}
+KEY_TYPES = ("bool", "int")
+BOOL_WORDS = {"yes": True, "true": True, "no": False, "false": False}
 SCOPES = ("narration", "anywhere")
 LINT_KEYS = ("id", "pattern", "label", "note", "scope", "positive", "negative")
 
@@ -34,6 +38,28 @@ def _strings(value):
     return isinstance(value, list) and all(isinstance(v, str) and v for v in value)
 
 
+def _int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_premise_keys(keys):
+    if not isinstance(keys, dict):
+        raise ProfileError("'premise_keys' must be an object")
+    for kname, kspec in keys.items():
+        if not NAME_RE.match(kname) or not isinstance(kspec, dict):
+            raise ProfileError(f"premise key '{kname}' needs a valid name and an object")
+        extra = sorted(set(kspec) - KEY_SETTINGS)
+        if extra:
+            raise ProfileError(f"premise key '{kname}' has unknown key {extra[0]!r}")
+        if kspec.get("type") not in KEY_TYPES:
+            raise ProfileError(f"premise key '{kname}': 'type' must be one of {', '.join(KEY_TYPES)}")
+        for bound in ("min", "max"):
+            if bound in kspec and (kspec["type"] != "int" or not _int(kspec[bound])):
+                raise ProfileError(f"premise key '{kname}': '{bound}' is only for int keys and must be an integer")
+        if not isinstance(kspec.get("required", False), bool):
+            raise ProfileError(f"premise key '{kname}': 'required' must be true or false")
+
+
 def validate(data):
     """Raise ProfileError for the first problem in a parsed profile.json."""
     if not isinstance(data, dict):
@@ -48,6 +74,8 @@ def validate(data):
         raise ProfileError("'title_page' must be true or false")
     if not (isinstance(data["name"], str) and NAME_RE.match(data["name"])):
         raise ProfileError("'name' must be lower-case letters, digits and hyphens")
+    keys = data.get("premise_keys", {})
+    _validate_premise_keys(keys)
     functions = data["functions"]
     if not isinstance(functions, dict) or not functions:
         raise ProfileError("'functions' must be a non-empty object")
@@ -69,24 +97,46 @@ def validate(data):
                 raise ProfileError(f"function '{fname}': child '{child}' needs a valid name and a list of labels")
         if not isinstance(spec.get("prose", False), bool):
             raise ProfileError(f"function '{fname}': 'prose' must be true or false")
+        if not isinstance(spec.get("sequence", False), bool):
+            raise ProfileError(f"function '{fname}': 'sequence' must be true or false")
+        if not _strings(spec.get("required_when_realized", [])):
+            raise ProfileError(f"function '{fname}': 'required_when_realized' must be a list of labels")
+        for label in spec.get("required_when_realized", []):
+            if label in spec.get("fields", []):
+                raise ProfileError(f"function '{fname}': '{label}' cannot be both always required and "
+                                   "required_when_realized")
+        heading_field = spec.get("heading_field")
+        if heading_field is not None and heading_field not in spec.get("fields", []):
+            raise ProfileError(f"function '{fname}': 'heading_field' must be one of its fields")
     files = data["files"]
     if not isinstance(files, list) or not files:
         raise ProfileError("'files' must be a non-empty list")
     seen = set()
     for f in files:
         if not (isinstance(f, dict) and isinstance(f.get("path"), str) and isinstance(f.get("function"), str)
-                and isinstance(f.get("order"), int) and not isinstance(f.get("order"), bool)):
+                and _int(f.get("order"))):
             raise ProfileError(f"a files entry needs string 'path', string 'function' and integer 'order': {f!r}")
+        extra = sorted(set(f) - FILE_KEYS)
+        if extra:
+            raise ProfileError(f"file '{f['path']}' has unknown key {extra[0]!r}")
         if f["path"] in seen:
             raise ProfileError(f"'{f['path']}' is listed twice in 'files'")
         seen.add(f["path"])
         if f["function"] not in functions:
             raise ProfileError(f"file '{f['path']}' uses undeclared function '{f['function']}'")
+        if "when" in f and "family" in f:
+            raise ProfileError(f"file '{f['path']}' cannot have both 'when' and 'family'")
+        if "when" in f and keys.get(f["when"], {}).get("type") != "bool":
+            raise ProfileError(f"file '{f['path']}': 'when' must name a bool premise key")
+        if "family" in f and keys.get(f["family"], {}).get("type") != "int":
+            raise ProfileError(f"file '{f['path']}': 'family' must name an int premise key")
+        if ("{n}" in f["path"]) != ("family" in f):
+            raise ProfileError(f"file '{f['path']}': a family path must contain {{n}}, and only a family path may")
     if not _strings(data["relations"]):
         raise ProfileError("'relations' must be a list of words")
     limits = data["limits"]
     words = limits.get("max_prose_words") if isinstance(limits, dict) else None
-    if not (isinstance(words, int) and not isinstance(words, bool) and words > 0):
+    if not (_int(words) and words > 0):
         raise ProfileError("'limits' needs a positive integer 'max_prose_words'")
 
 
@@ -112,13 +162,18 @@ class Profile:
         self.relations = [r.lower() for r in data["relations"]]
         self.limits = data["limits"]
         self.title_page = data.get("title_page", True)
+        self.premise_keys = data.get("premise_keys", {})
         self.questions = questions
         self.directory = directory
+        self.options = {}              # resolved premise values; filled by set_premise
+        self.option_problems = []      # [(key, message)]
 
     def labels(self):
         out = []
         for spec in self.functions.values():
-            for label in list(spec["fields"]) + [f for fs in spec["children"].values() for f in fs]:
+            labels = (list(spec["fields"]) + [f for fs in spec["children"].values() for f in fs]
+                      + list(spec["required_when_realized"]))
+            for label in labels:
                 if label not in out:
                     out.append(label)
         return out
@@ -130,19 +185,72 @@ class Profile:
             types.update(spec["children"])
         return types
 
-    def expected_files(self, slug):
+    def resolve_options(self, front):
+        """(values, problems) for the premise keys the profile declares; `front` maps key to its text."""
+        values, problems = {}, []
+        for key, spec in self.premise_keys.items():
+            raw = (front.get(key) or "").strip() or None
+            if spec["type"] == "bool":
+                values[key] = False
+                if raw is None:
+                    continue
+                if raw.lower() in BOOL_WORDS:
+                    values[key] = BOOL_WORDS[raw.lower()]
+                else:
+                    problems.append((key, f"`{key}:` must be yes or no (got '{raw}')"))
+                continue
+            values[key] = 0
+            low, high = spec.get("min", 0), spec.get("max")
+            if high is None:
+                span = f"at least {low}"
+            else:
+                span = f"from {low} to {high}"
+            if raw is None:
+                if spec.get("required"):
+                    problems.append((key, f"`{key}:` is required (a whole number {span})"))
+                continue
+            if re.fullmatch(r"[0-9]+", raw) and low <= int(raw) and (high is None or int(raw) <= high):
+                values[key] = int(raw)
+            else:
+                problems.append((key, f"`{key}:` must be a whole number {span} (got '{raw}')"))
+        return values, problems
+
+    def set_premise(self, front):
+        """Bind the premise values, so the file set below follows PREMISE.md."""
+        self.options, self.option_problems = self.resolve_options(front)
+
+    def expected_files(self, slug, options=None):
+        opts = self.options if options is None else options
         out = []
         for _, f in sorted(enumerate(self.files), key=lambda p: (p[1]["order"], p[0])):
-            if "{slug}" in f["path"]:
+            path = f["path"]
+            if "{slug}" in path:
                 if not slug:
                     continue
-                out.append((f["path"].replace("{slug}", slug), f["function"]))
+                path = path.replace("{slug}", slug)
+            if "when" in f:
+                if opts.get(f["when"]):
+                    out.append((path, f["function"]))
+            elif "family" in f:
+                count = opts.get(f["family"]) or 0
+                width = len(str(count))
+                for n in range(1, count + 1):
+                    out.append((path.replace("{n}", str(n).zfill(width)), f["function"]))
             else:
-                out.append((f["path"], f["function"]))
+                out.append((path, f["function"]))
         return out
 
-    def function_for(self, rel, slug):
-        return dict(self.expected_files(slug)).get(rel)
+    def function_for(self, rel, slug, options=None):
+        return dict(self.expected_files(slug, options)).get(rel)
+
+    def sequence_prev(self, slug, options=None):
+        """{file: the file before it} for each family whose function is a `sequence`."""
+        prev = {}
+        for _, f in enumerate(self.files):
+            if "family" in f and self.functions[f["function"]]["sequence"]:
+                paths = [p for p, fn in self.expected_files(slug, options) if fn == f["function"]]
+                prev.update(zip(paths[1:], paths))
+        return prev
 
     def lint_items(self):
         """The searchable items of lint.json, validated; an empty list when the profile has none."""
@@ -179,6 +287,9 @@ def parse_profile(data, questions_text="", directory=None):
         spec.setdefault("fields", [])
         spec.setdefault("children", {})
         spec.setdefault("prose", False)
+        spec.setdefault("sequence", False)
+        spec.setdefault("required_when_realized", [])
+        spec.setdefault("heading_field", None)
     return Profile(data, parse_questions(questions_text), directory)
 
 
