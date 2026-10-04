@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 import unittest
 
 from support import HERE     # first: it puts the scripts folder on sys.path
@@ -74,6 +76,94 @@ class FountainLint(unittest.TestCase):
         items = [{"id": "x", "pattern": "dark", "label": "l", "note": "n", "scope": "narration"}]
         self.assertEqual(len(wrist_lint.lint_text("It was dark.", items)), 1)
         self.assertEqual(wrist_lint.lint_text('"dark," he said.', items), [])
+
+
+READER = os.path.normpath(os.path.join(HERE, "..", "skills", "wrist", "publish", "screenplay", "fountain.lua"))
+HAVE_PANDOC = shutil.which("pandoc") is not None
+
+
+def read(text):
+    """The reader's top-level blocks as pandoc JSON."""
+    proc = subprocess.run(["pandoc", "--from", READER, "-t", "json"], input=text, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)["blocks"]
+
+
+def kind(block):
+    return block["c"][0][1][0] if block["t"] == "Div" else block["t"]
+
+
+def plain(blocks):
+    """The text of blocks, flattened, for assertions about content."""
+    out = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("t") == "Str":
+                out.append(node["c"])
+            elif node.get("t") in ("Space", "SoftBreak", "LineBreak"):
+                out.append(" ")
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(blocks)
+    return "".join(out)
+
+
+@unittest.skipUnless(HAVE_PANDOC, "pandoc is not installed")
+class LuaReader(unittest.TestCase):
+    def test_review_focus_the_reader_follows_every_shared_case(self):
+        for case in CASES:
+            with self.subTest(case["name"]):
+                self.assertEqual([kind(b) for b in read(case["text"])], case["kinds"])
+
+    def test_the_reader_and_the_classifier_agree_on_every_case(self):
+        for case in CASES:
+            with self.subTest(case["name"]):
+                self.assertEqual([kind(b) for b in read(case["text"])], wrist_lint.elements(case["text"]))
+
+    def test_emphasis_is_kept(self):
+        blocks = read("She holds a *clipboard* and a **pen**.\n")
+        self.assertEqual(kind(blocks[0]), "action")
+        flat = json.dumps(blocks)
+        self.assertIn('"t": "Emph"', flat)
+        self.assertIn('"t": "Strong"', flat)
+
+    def test_text_content_survives(self):
+        text = plain(read("INT. FERRY DECK - NIGHT\n\nMARIT\n(quietly)\nTwenty-three.\n"))
+        for needle in ("INT. FERRY DECK - NIGHT", "MARIT", "(quietly)", "Twenty-three."):
+            self.assertIn(needle, text)
+
+    def test_a_forced_heading_loses_its_dot_and_a_scene_number_is_dropped(self):
+        text = plain(read(".THE BEACH\n\nWaves.\n\nINT. HOUSE - DAY #12#\n\nGo.\n"))
+        self.assertIn("THE BEACH", text)
+        self.assertNotIn(".THE", text)
+        self.assertNotIn("#12#", text)
+
+    def test_a_forced_character_loses_its_at_sign(self):
+        text = plain(read("@McCLOUD\nHi.\n"))
+        self.assertIn("McCLOUD", text)
+        self.assertNotIn("@", text)
+
+    def test_a_line_that_looks_like_a_list_is_kept_literally(self):
+        text = plain(read("1. The house\n"))
+        self.assertIn("1. The house", text)
+
+    def test_special_characters_pass_through(self):
+        text = plain(read('MARIT\nA & B #1 — "Q" café $5 @mara <Ann>\n'))
+        for needle in ("A & B #1", "café", "$5", "@mara"):
+            self.assertIn(needle, text)
+
+    def test_the_act_marker_keeps_its_whole_label(self):
+        block = read("@@ACT TWO@@\n\nINT. A - DAY\n\nText.\n")[0]
+        self.assertEqual(kind(block), "act-marker")
+        self.assertEqual(plain([block]).strip(), "ACT TWO")
+
+    def test_a_long_script_reads_in_one_pass(self):
+        script = "\n".join(f"INT. ROOM {i} - DAY\n\nMARIT\nLine {i}.\n" for i in range(100))
+        self.assertEqual(len(read(script)), 300)
 
 
 if __name__ == "__main__":
