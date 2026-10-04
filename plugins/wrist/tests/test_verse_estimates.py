@@ -25,6 +25,11 @@ class RhymeKeys(unittest.TestCase):
             with self.subTest((a, b)):
                 self.assertEqual(wv.rhyme_key(a), wv.rhyme_key(b))
 
+    def test_common_alternative_spellings_of_one_sound_share_a_key(self):
+        for group in (("due", "you", "few", "queue", "through", "view"), ("air", "chair", "stair", "there", "bare", "somewhere")):
+            keys = {wv.rhyme_key(w) for w in group}
+            self.assertEqual(len(keys), 1, (group, keys))
+
     def test_other_words_do_not(self):
         for a, b in (("light", "lit"), ("stone", "stun"), ("cat", "cot"), ("day", "dye")):
             with self.subTest((a, b)):

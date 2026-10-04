@@ -539,7 +539,9 @@ def stanza_count(poem):
 # -- advisory estimates -------------------------------------------------------------------------------
 # English only, and rough: a vowel-group syllable counter and an ending-sound rhyme key, with no
 # pronouncing dictionary. Every message is labelled an estimate and none of them blocks anything.
-RHYME_SAME = {"igh": "y", "ie": "y"}
+RHYME_SAME = {"igh": "y", "ie": "y",
+              **{k: "oo" for k in ("ue", "ew", "ueue", "iew", "you", "ough", "oo")},
+              **{k: "air" for k in ("ere", "are", "air")}}       # the commonest spellings of one sound
 STOP_ENDS = ".,;:!?—–-…)\"'”’"
 
 
