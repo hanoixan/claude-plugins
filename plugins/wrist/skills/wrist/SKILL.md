@@ -12,7 +12,7 @@ wrist/synopsis.md.wrist.md      ->  synopsis.md
 wrist/work/the-lamp.md.wrist.md ->  work/the-lamp.md
 ```
 
-The `references/`, `profiles/`, `assets/` and `scripts/` paths here are relative to this skill's directory, `${CLAUDE_SKILL_DIR}`, not to the user's project.
+The `references/`, `profiles/`, `assets/` and `scripts/` paths here are relative to this skill's directory, not to the user's project. In the commands below, `SKILL_DIR` stands for the folder that holds this `SKILL.md`: replace it with that folder's full path before running a command (it is a placeholder, not a shell variable).
 
 Read `references/grammar.md` before writing or editing any `.wrist.md`. The checker enforces it. Four profiles exist: `shortstory`, `novel`, `screenplay` and `poem`. Each profile has its own folder under `profiles/` (questions, structures or forms, quality lists) and its own templates: `assets/templates/` for the short story, `assets/templates/novel/` for the novel, `assets/templates/screenplay/` for the screenplay and `assets/templates/poem/` for the poem. A screenplay's acts are written in Fountain; read `references/fountain.md` before writing one. A poem is planned as a skeleton in the grammar of `references/psg.md` (the standard forms are ready-made skeletons in `profiles/poem/forms/`) and written as plain verse; read `references/verse.md` before writing one.
 
@@ -21,7 +21,7 @@ Read `references/grammar.md` before writing or editing any `.wrist.md`. The chec
 Each phase starts with a **question phase**: ask the user whatever you need so that nothing in the phase is a guess. Ask a few questions at a time in plain language, and offer your recommendation with each. Record the result, then run the phase's gate:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" gate wrist generation   # or realization, publishing
+python3 "SKILL_DIR/scripts/wrist_check.py" gate wrist generation   # or realization, publishing
 ```
 
 A gate prints what blocks the phase. It stays blocked until `PREMISE.md` records that you asked: set `questions_<phase>: done` in its front matter after the questions are answered, never before.
@@ -40,13 +40,13 @@ A gate prints what blocks the phase. It stays blocked until `PREMISE.md` records
 4. Add `Depends on:` links with a relation word where it helps, for example `(appears)` or `(realizes)`. Do not hand-write `Referred by:` yet. Then:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" fix-backlinks wrist --write
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
+python3 "SKILL_DIR/scripts/wrist_check.py" fix-backlinks wrist --write
+python3 "SKILL_DIR/scripts/wrist_check.py" check wrist
 ```
 
    Repeat until `check` is clean. A missing file is an error: the tree must name every file that will exist.
 5. Before handing back, list every choice you made that the user did not state: the action an ending turns on, a name, a number, a setting detail. Each one must already be an `*UNKNOWN*:` in the tree with your choice as `Proposed:`. A choice that appears only in your chat message is a decision made in secret.
-6. Hand back the agenda from `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns wrist` (blocking decisions need the user before realization; local ones come with a proposal to accept) and `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order wrist` (the realization order). List nothing as decided that is not in the tree.
+6. Hand back the agenda from `python3 "SKILL_DIR/scripts/wrist_check.py" unknowns wrist` (blocking decisions need the user before realization; local ones come with a proposal to accept) and `python3 "SKILL_DIR/scripts/wrist_check.py" order wrist` (the realization order). List nothing as decided that is not in the tree.
 
 ### 3. Realization
 
@@ -54,7 +54,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check wrist
 2. Realize the files in the order `order` prints. For each: read its stand-in and the stand-ins it depends on, write the file at the mirrored path, then stamp it:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.md
+python3 "SKILL_DIR/scripts/wrist_check.py" stamp wrist work/the-lamp.md
 ```
 
    Follow every `Rules:`, `Must include:` and `Must avoid:`. In a story or novel, separate scenes with a line containing only `* * *`; a screenplay separates scenes with scene headings. Do not add a fact the stand-ins do not hold: no new name, object, event, number or backstory. If the text needs one, add it to the scene's `Must include:` first, run `check`, then write it. Never let the text drift from its notes. For a novel, work one chapter at a time: realize the chapter, fill in `Established:`, stamp it, then go on. `Established:` goes in the chapter's stand-in and lists every new fact, date, injury, object moved, who-knows-what and promise the text fixed. `stamp` refuses a chapter whose `Established:` is empty. Before writing a chapter, read the `Established:` fields of the chapters before it and the registries instead of rereading their text. For a screenplay, write each act as Fountain (see `references/fountain.md`): a scene heading for every scene, one action beat per paragraph of four lines or fewer, only what the camera can see, no camera directions in a spec script, dialogue with subtext. Write each action paragraph and each speech on one line: every line break in the file is a line break on the page. Work one act at a time: realize the act, fill in `Established:`, stamp it, then go on. `stamp` refuses an act whose `Established:` is empty. For a poem, realize `structure.md` first: the skeleton, in the grammar of `references/psg.md`. Copy the catalog form from `profiles/poem/forms/` when the form is one of them and keep its `named` line; write your own skeleton for `custom`. Run `wrist_check.py verse wrist` until the only error left is that the poem does not exist, then stamp it. Then write `work/<slug>.md` as plain verse (`references/verse.md`): one line of verse per line, a blank line between stanzas, a `# Title` first line only when `titled: yes`, never a line wrapped by hand. Run `verse` again: errors must be fixed, estimates are advisory. If a line fails, revise the line, not the skeleton.
@@ -62,11 +62,11 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp wrist work/the-lamp.m
 4. Run `lint`, fix each hit that is not deliberate, and re-stamp:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
+python3 "SKILL_DIR/scripts/wrist_check.py" lint wrist
 ```
 
 5. Do the review pass as its own step, after the text is finished. Reread the story from the first line to the last, then work through the `## Judgment checklist` in `quality.md` and write down what fails. Also check continuity: every number, name, time and fact the story states must agree everywhere it appears, and the text must not contradict itself about what a character sees or says, unless a stand-in names the discrepancy as deliberate (a haunting, an unreliable narrator, a lie). Check each apparent contradiction against the stand-ins and the premise before calling it an error. List each concrete detail in the text that no stand-in holds, and add it to a stand-in or cut it. For a poem the review includes deleting the last line to see whether the poem is better, rebreaking half the lines that end at a natural pause, and replacing every word on the ban list with a specific object. Fix what fails, re-stamp, and only then set `review_done: yes` in `PREMISE.md`.
-6. `python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status wrist` must show every file realized. A stand-in changed after its file was realized shows as stale: realize the file again.
+6. `python3 "SKILL_DIR/scripts/wrist_check.py" status wrist` must show every file realized. A stand-in changed after its file was realized shows as stale: realize the file again.
 
 ### 4. Publishing
 
@@ -74,7 +74,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint wrist
 2. Run `gate wrist publishing`, then:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" publish wrist
+python3 "SKILL_DIR/scripts/wrist_check.py" publish wrist
 ```
 
    It needs `pandoc` and `typst`; if either is missing it prints the install steps and stops. Output is `output/<slug>.epub` and `output/<slug>.pdf`. See `references/publishing.md`.
@@ -89,17 +89,17 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" publish wrist
 ## Tools
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" check WRIST_DIR [--lenient] [--profile NAME]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" unknowns WRIST_DIR [--json]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" order WRIST_DIR [--json]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" status WRIST_DIR [--root .]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" stamp WRIST_DIR PATH... | --all [--root .]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" fix-backlinks WRIST_DIR [--write]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" gate WRIST_DIR generation|realization|publishing
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" lint WRIST_DIR [--root .]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" verse WRIST_DIR [--root .] [--json]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_check.py" publish WRIST_DIR [--root .]
-python3 "${CLAUDE_SKILL_DIR}/scripts/wrist_mv.py" WRIST_DIR OLD NEW | --map map.txt [--dry-run]
+python3 "SKILL_DIR/scripts/wrist_check.py" check WRIST_DIR [--lenient] [--profile NAME]
+python3 "SKILL_DIR/scripts/wrist_check.py" unknowns WRIST_DIR [--json]
+python3 "SKILL_DIR/scripts/wrist_check.py" order WRIST_DIR [--json]
+python3 "SKILL_DIR/scripts/wrist_check.py" status WRIST_DIR [--root .]
+python3 "SKILL_DIR/scripts/wrist_check.py" stamp WRIST_DIR PATH... | --all [--root .]
+python3 "SKILL_DIR/scripts/wrist_check.py" fix-backlinks WRIST_DIR [--write]
+python3 "SKILL_DIR/scripts/wrist_check.py" gate WRIST_DIR generation|realization|publishing
+python3 "SKILL_DIR/scripts/wrist_check.py" lint WRIST_DIR [--root .]
+python3 "SKILL_DIR/scripts/wrist_check.py" verse WRIST_DIR [--root .] [--json]
+python3 "SKILL_DIR/scripts/wrist_check.py" publish WRIST_DIR [--root .]
+python3 "SKILL_DIR/scripts/wrist_mv.py" WRIST_DIR OLD NEW | --map map.txt [--dry-run]
 ```
 
 All scripts use only the Python standard library. `check` exits non-zero on errors. `--root` defaults to the folder that holds `wrist/`.

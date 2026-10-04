@@ -1,7 +1,7 @@
 {
   "name": "wrist",
   "description": "Write a prose work in four phases: premise, a checked tree of prose stand-ins under wrist/, realization into the real files, and PDF/EPUB publishing. Profiles: short story, novel, screenplay and poem",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
   "license": "MIT",
   "keywords": ["writing", "fiction", "short-story", "outline", "epub", "publishing", "poetry"]

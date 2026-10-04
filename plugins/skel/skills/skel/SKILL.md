@@ -25,7 +25,7 @@ Inside a code stand-in, headings follow the code (`# module:` > `## class:` > `#
 
 Read `references/grammar.md` before writing or editing any `.skel.md`. It is the normative grammar, and the checker enforces it.
 
-The `references/`, `assets/`, and `scripts/` paths in this skill are relative to the skill's own directory, `${CLAUDE_SKILL_DIR}`, not to the project you are working in.
+The `references/`, `assets/`, and `scripts/` paths in this skill are relative to the skill's own directory, not to the project you are working in. In the commands below, `SKILL_DIR` stands for the folder that holds this `SKILL.md`: replace it with that folder's full path before running a command (it is a placeholder, not a shell variable).
 
 ## Core rules (summary)
 
@@ -46,7 +46,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix. Then give every stand-in its role, and pair each source file with its header:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles skel --write
+   python3 "SKILL_DIR/scripts/skel_check.py" infer-roles skel --write
    ```
 
    It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
@@ -55,14 +55,14 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 6. **Generate the backlinks** and review them:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks skel --write
+   python3 "SKILL_DIR/scripts/skel_check.py" fix-backlinks skel --write
    ```
 
    Then go through the inserted lines and fix the symbol text where a better name exists.
 7. **Validate** until the tree is clean:
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check skel            # --lenient while drafting
+   python3 "SKILL_DIR/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
 8. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py batches skel`, and report in this shape:
    1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence, what it unlocks, and its proposal if it has one.
@@ -88,15 +88,15 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 All scripts use only the Python standard library.
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record your claim that code matches its stand-in; checks nothing
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
-python3 "${CLAUDE_SKILL_DIR}/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
+python3 "SKILL_DIR/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
+python3 "SKILL_DIR/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
+python3 "SKILL_DIR/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
+python3 "SKILL_DIR/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
+python3 "SKILL_DIR/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record your claim that code matches its stand-in; checks nothing
+python3 "SKILL_DIR/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
+python3 "SKILL_DIR/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
+python3 "SKILL_DIR/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
+python3 "SKILL_DIR/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
 ```
 
 The reference files and templates name the scripts by filename alone (`skel_check.py check skel/`). Run them by the full paths shown here.
