@@ -129,8 +129,8 @@ class Validation(unittest.TestCase):
 class Loading(unittest.TestCase):
     def test_unknown_profile_lists_what_exists(self):
         with self.assertRaises(wp.ProfileError) as cm:
-            wp.load_profile("poem")
-        self.assertIn("no profile 'poem'", str(cm.exception))
+            wp.load_profile("sonnet")
+        self.assertIn("no profile 'sonnet'", str(cm.exception))
         self.assertIn("shortstory", str(cm.exception))
 
     def test_a_name_cannot_climb_out_of_the_profiles_folder(self):
