@@ -1,0 +1,10 @@
+(* Ballad: rhymed quatrains, the second and fourth lines rhyming and the first and third free, alternating four and three beats. Each stanza has its own rhyme. *)
+poem {
+  named "ballad";
+  stanza (quatrain, 2..40, fresh x A x A) {
+    line (iamb 4, stop, x) { }
+    line (iamb 3, stop, A) { }
+    line (iamb 4, stop, x) { }
+    line (iamb 3, stop, A) { }
+  }
+}

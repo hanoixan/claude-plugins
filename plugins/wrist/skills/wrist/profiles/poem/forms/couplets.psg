@@ -1,0 +1,8 @@
+(* Couplets: pairs of rhymed lines, each pair with its own rhyme, in any meter. *)
+poem {
+  named "couplets";
+  stanza (couplet, 1..*, fresh A A) {
+    line (free, stop, A) { }
+    line (free, stop, A) { }
+  }
+}

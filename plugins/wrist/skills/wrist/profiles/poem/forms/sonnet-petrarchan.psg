@@ -1,0 +1,23 @@
+(* Petrarchan sonnet: an octave on two rhymes and a sestet on three, in iambic pentameter. The turn usually falls at line 9. The sestet may instead rhyme C D C D C D. The stanza breaks may be moved. *)
+poem {
+  named "sonnet-petrarchan";
+  breaks flexible;
+  stanza (octave, 1, A B B A A B B A) {
+    line (iamb 5, stop, A) { }
+    line (iamb 5, stop, B) { }
+    line (iamb 5, stop, B) { }
+    line (iamb 5, stop, A) { }
+    line (iamb 5, stop, A) { }
+    line (iamb 5, stop, B) { }
+    line (iamb 5, stop, B) { }
+    line (iamb 5, stop, A) { }
+  }
+  stanza (sestet, 1, C D E C D E) {
+    line (iamb 5, stop, C) { }
+    line (iamb 5, stop, D) { }
+    line (iamb 5, stop, E) { }
+    line (iamb 5, stop, C) { }
+    line (iamb 5, stop, D) { }
+    line (iamb 5, stop, E) { }
+  }
+}

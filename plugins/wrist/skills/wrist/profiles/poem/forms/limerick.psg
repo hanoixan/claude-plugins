@@ -1,0 +1,11 @@
+(* Limerick: five lines, rhymed A A B B A, with three beats in the long lines and two in the short. *)
+poem {
+  named "limerick";
+  stanza (quintain, 1, A A B B A) {
+    line (syllables 8..9, stop, A) { }
+    line (syllables 8..9, stop, A) { }
+    line (syllables 5..6, stop, B) { }
+    line (syllables 5..6, stop, B) { }
+    line (syllables 8..9, stop, A) { }
+  }
+}

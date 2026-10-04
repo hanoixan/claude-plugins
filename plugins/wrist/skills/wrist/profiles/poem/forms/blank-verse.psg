@@ -1,0 +1,8 @@
+(* Blank verse: unrhymed iambic pentameter, any number of lines, divided into verse paragraphs as the poem needs. *)
+poem {
+  named "blank-verse";
+  breaks flexible;
+  stanza (free, 1..*, none) {
+    line (iamb 5, stop, x) { }
+  }
+}

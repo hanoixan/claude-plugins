@@ -631,3 +631,97 @@ def estimates(poem, verse):
             if len(numbers) > 1:
                 out.append(Problem("estimate", numbers[1], f"the rhyme word '{word}' is used again (lines {', '.join(map(str, numbers))}) (estimate)"))
     return sorted(out, key=lambda p: (p.line, p.message))
+
+
+# -- the catalog of forms ---------------------------------------------------------------------------
+def list_catalog(forms_dir):
+    if not os.path.isdir(forms_dir):
+        return []
+    return sorted(n[:-4] for n in os.listdir(forms_dir) if n.endswith(".psg"))
+
+
+def load_catalog(name, forms_dir):
+    """The catalog Poem called `name`; None when there is no such form."""
+    path = os.path.join(forms_dir, name + ".psg")
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name or "") or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return parse_poem(fh.read())
+
+
+def canonical_tags(xlines):
+    """Each line's tag renamed by order of first appearance (A, B, C...), x kept: two schemes with the same
+    shape compare equal whatever letters they use."""
+    names, out = {}, []
+    for x in xlines:
+        if x.tag == "x":
+            out.append("x")
+            continue
+        if x.tag not in names:
+            names[x.tag] = chr(65 + len(names)) if len(names) < 26 else f"#{len(names)}"
+        out.append(names[x.tag])
+    return out
+
+
+def _resolve_counts(poem, catalog, name):
+    """({stanza index: repeats} for the catalog's one repeating stanza, [problems])."""
+    ranged = [i for i, s in enumerate(catalog.stanzas) if s.count.lo != s.count.hi]
+    total = total_lines(poem)
+    if not ranged:
+        want = total_lines(catalog)
+        if want != total:
+            return {}, [f"{name} has {want} lines, this skeleton has {total}"]
+        return {}, []
+    index = ranged[0]
+    fixed = total_lines(catalog) - len(catalog.stanzas[index].lines) * catalog.stanzas[index].count.lo
+    per = len(catalog.stanzas[index].lines)
+    count = catalog.stanzas[index].count
+    repeats, rest = divmod(total - fixed, per)
+    span = f"{count.lo}..{'*' if count.hi is None else count.hi}"
+    if total - fixed < 0 or rest or repeats < count.lo or (count.hi is not None and repeats > count.hi):
+        return {}, [f"{name} repeats its stanza {span} times ({per} lines each); this skeleton's {total} lines do not fit"]
+    return {index: repeats}, []
+
+
+def catalog_problems(poem, catalog, name):
+    """Errors where a skeleton that says `named "<name>"` differs from the catalog form: line count, rhyme
+    scheme (up to renaming), refrain positions, `ends` pattern, meter (where the form fixes one) and, unless
+    the form says `breaks flexible`, the stanza division."""
+    counts, problems = _resolve_counts(poem, catalog, name)
+    anchor = poem.stanzas[0].line
+    if problems:
+        return [Problem("error", anchor, f"named form {name}: {p}") for p in problems]
+    ours, theirs = expand(poem), expand(catalog, counts)
+    out = []
+
+    def first_difference(kind, mine, wanted, show):
+        for position, (a, b) in enumerate(zip(mine, wanted), 1):
+            if a != b:
+                out.append(Problem("error", ours[position - 1].line.line,
+                                   f"named form {name}: {kind} differs at line {position}: {name} has {show(b)}, "
+                                   f"this skeleton has {show(a)}"))
+                return
+
+    first_difference("the rhyme scheme", canonical_tags(ours), canonical_tags(theirs), lambda t: t)
+    first_difference("the `ends` pattern", [x.line.ends[1] if x.line.ends else None for x in ours],
+                     [x.line.ends[1] if x.line.ends else None for x in theirs],
+                     lambda e: "no fixed end word" if e is None else f"end word {e}")
+    first_difference("the meter", [None if t.line.meter.kind == "free" else o.line.meter for o, t in zip(ours, theirs)],
+                     [None if t.line.meter.kind == "free" else t.line.meter for t in theirs],
+                     lambda m: "no meter" if m is None else (f"{m.foot} {m.n}" if m.kind == "foot" else
+                                                          m.kind if m.kind != "syllables" else f"{m.lo}..{m.hi} syllables"
+                                                          if m.lo != m.hi else f"{m.lo} syllables"))
+    mine = sorted(tuple(r.positions) for r in poem.refrains)
+    wanted = sorted(tuple(r.positions) for r in catalog.refrains)
+    if mine != wanted:
+        out.append(Problem("error", poem.refrains[0].line if poem.refrains else anchor,
+                           f"named form {name}: the refrains differ: {name} repeats lines "
+                           f"{'; '.join(','.join(map(str, p)) for p in wanted) or 'none'}, this skeleton repeats "
+                           f"{'; '.join(','.join(map(str, p)) for p in mine) or 'none'}"))
+    if not catalog.flexible:
+        def sizes(xs):
+            return [sum(1 for x in xs if x.stanza_no == n) for n in range(1, (xs[-1].stanza_no if xs else 0) + 1)]
+        if sizes(ours) != sizes(theirs):
+            out.append(Problem("error", anchor, f"named form {name}: the stanzas should be {','.join(map(str, sizes(theirs)))} "
+                                               f"lines long, this skeleton has {','.join(map(str, sizes(ours)))}"))
+    return sorted(out, key=lambda p: (p.line, p.message))

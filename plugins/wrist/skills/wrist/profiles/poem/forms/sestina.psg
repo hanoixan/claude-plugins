@@ -1,0 +1,58 @@
+(* Sestina: six sestets and a three-line envoi. The same six end words rotate through the stanzas in the order 123456, 615243, 364125, 532614, 451362, 246531. Put the six words in the let list; the envoi here ends on words 5, 3 and 1, one end word per line. *)
+poem {
+  named "sestina";
+  let end_words = ["word1", "word2", "word3", "word4", "word5", "word6"];
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[0]) { }
+    line (free, run, x, ends @end_words[1]) { }
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[3]) { }
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[5]) { }
+  }
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[5]) { }
+    line (free, run, x, ends @end_words[0]) { }
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[1]) { }
+    line (free, run, x, ends @end_words[3]) { }
+    line (free, run, x, ends @end_words[2]) { }
+  }
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[5]) { }
+    line (free, run, x, ends @end_words[3]) { }
+    line (free, run, x, ends @end_words[0]) { }
+    line (free, run, x, ends @end_words[1]) { }
+    line (free, run, x, ends @end_words[4]) { }
+  }
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[1]) { }
+    line (free, run, x, ends @end_words[5]) { }
+    line (free, run, x, ends @end_words[0]) { }
+    line (free, run, x, ends @end_words[3]) { }
+  }
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[3]) { }
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[0]) { }
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[5]) { }
+    line (free, run, x, ends @end_words[1]) { }
+  }
+  stanza (sestet, 1, none) {
+    line (free, run, x, ends @end_words[1]) { }
+    line (free, run, x, ends @end_words[3]) { }
+    line (free, run, x, ends @end_words[5]) { }
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[0]) { }
+  }
+  stanza (tercet, 1, none) {
+    line (free, run, x, ends @end_words[4]) { }
+    line (free, run, x, ends @end_words[2]) { }
+    line (free, run, x, ends @end_words[0]) { }
+  }
+}

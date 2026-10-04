@@ -1,0 +1,16 @@
+(* Triolet: eight lines on two rhymes. Line 1 returns as lines 4 and 7, and line 2 as line 8. *)
+poem {
+  named "triolet";
+  refrain R1 at 1, 4, 7;
+  refrain R2 at 2, 8;
+  stanza (octave, 1, A B A A A B A B) {
+    line (syllables 8, stop, A) { }
+    line (syllables 8, stop, B) { }
+    line (syllables 8, stop, A) { }
+    line (syllables 8, stop, A) { }
+    line (syllables 8, stop, A) { }
+    line (syllables 8, stop, B) { }
+    line (syllables 8, stop, A) { }
+    line (syllables 8, stop, B) { }
+  }
+}
