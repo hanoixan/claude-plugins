@@ -469,3 +469,68 @@ def read_verse(text):
     if current:
         stanzas.append(current)
     return Verse(title, stanzas)
+
+
+# -- the poem against its skeleton: exact checks ------------------------------------------------------
+def normal(text):
+    """A line for comparison: lower case, curly quotes straightened, white space collapsed, punctuation
+    stripped at both ends."""
+    text = text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+    text = re.sub(r"\s+", " ", text.casefold()).strip()
+    return re.sub(r"^[\W_]+|[\W_]+$", "", text)
+
+
+def words(text):
+    return re.findall(r"[\w']+", normal(text))
+
+
+def poem_problems(poem, verse, titled, title):
+    """Errors for a poem read with read_verse against its skeleton: the title line, the stanza division,
+    every refrain word for word, every `ends` word. Messages come with the poem's own line numbers."""
+    out, xlines = [], expand(poem)
+    if verse.title and not titled:
+        out.append(Problem("error", verse.title[0], "the poem has a title line but PREMISE.md says `titled: no`"))
+    elif titled and not verse.title:
+        out.append(Problem("error", 1, "PREMISE.md says `titled: yes` but the poem has no `# Title` line first"))
+    elif titled and verse.title[1] != title:
+        out.append(Problem("error", verse.title[0], f"the title line '{verse.title[1]}' differs from the "
+                                                   f"premise title '{title}'"))
+    want = [sum(1 for x in xlines if x.stanza_no == n) for n in range(1, (xlines[-1].stanza_no if xlines else 0) + 1)]
+    have = [len(s) for s in verse.stanzas]
+    if len(have) != len(want):
+        first = verse.stanzas[0][0][0] if verse.stanzas else 1
+        out.append(Problem("error", first, f"the skeleton has {len(want)} stanzas, the poem has {len(have)}"))
+    for index, (w, h) in enumerate(zip(want, have), 1):
+        if w != h:
+            out.append(Problem("error", verse.stanzas[index - 1][0][0], f"stanza {index} has {h} lines, the skeleton says {w}"))
+    flat = [line for stanza in verse.stanzas for line in stanza]
+    if len(flat) != len(xlines):
+        out.append(Problem("error", flat[0][0] if flat else 1, f"the skeleton has {len(xlines)} lines, the poem has {len(flat)}"))
+        return sorted(out, key=lambda p: p.line)
+    for refrain in poem.refrains:
+        first = flat[refrain.positions[0] - 1]
+        for p in refrain.positions[1:]:
+            number, text = flat[p - 1]
+            if normal(text) != normal(first[1]):
+                out.append(Problem("error", number, f"R8: line {p} must repeat line {refrain.positions[0]} (refrain "
+                                                   f"{refrain.name}) word for word: '{spaced(first[1])}'"))
+    for x, (number, text) in zip(xlines, flat):
+        if x.line.ends:
+            name, index = x.line.ends
+            target = words(poem.lets[name][index])
+            if words(text)[-len(target):] != target:
+                out.append(Problem("error", number, f"R12: line {x.position} must end with '{poem.lets[name][index]}'"))
+    return sorted(out, key=lambda p: p.line)
+
+
+def spaced(text):
+    return text.replace(EN, " ")
+
+
+def total_lines(poem):
+    return len(expand(poem))
+
+
+def stanza_count(poem):
+    xlines = expand(poem)
+    return xlines[-1].stanza_no if xlines else 0
