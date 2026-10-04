@@ -424,3 +424,48 @@ def skeleton_problems(poem, concrete=True):
     `concrete` is True for a realized structure.md, False for a catalog entry, which may use ranges."""
     out = _r0(poem) + _r1_r2(poem) + _r3_r4_r5(poem) + _r8(poem) + _r11(poem, concrete)
     return sorted(out, key=lambda p: (p.line, p.message))
+
+
+# -- reading a poem written in verse format ---------------------------------------------------------
+EN = " "
+Verse = collections.namedtuple("Verse", "title stanzas")     # title: (line number, text) or None; stanzas: [[(number, text)]]
+
+
+def _blank(line):
+    return re.fullmatch(r"[ \t\r\f\v]*", line) is not None
+
+
+def verse_line(raw):
+    """The text of one line of verse as the reader keeps it: each leading space (a tab counts four) an en
+    space, the words joined by single spaces, trailing white space gone."""
+    lead = re.match(r"[ \t]*", raw).group()
+    words = [w for w in re.split(r"[ \t\n\v\f\r]+", raw[len(lead):]) if w]
+    return EN * (lead.count(" ") + 4 * lead.count("\t")) + " ".join(words)
+
+
+def read_verse(text):
+    """Read verse format (publish/poem/verse.lua applies the same rules): an optional first line `# Title`
+    followed by a blank line, then stanzas, the runs of non-blank lines between blank ones."""
+    text = text.replace("\r\n", "\n")
+    if text.startswith("﻿"):
+        text = text[1:]
+    if not text.endswith("\n"):
+        text += "\n"                       # pandoc gives a reader its input with a final newline
+    lines = (text + "\n").split("\n")[:-1]
+    n, i, title = len(lines), 0, None
+    while i < n and _blank(lines[i]):
+        i += 1
+    if i < n and lines[i].startswith("# ") and i + 1 < n and _blank(lines[i + 1]):
+        title = (i + 1, lines[i][2:].rstrip(" \t\n\v\f\r"))
+        i += 1
+    stanzas, current = [], []
+    for k in range(i, n):
+        if _blank(lines[k]):
+            if current:
+                stanzas.append(current)
+                current = []
+        else:
+            current.append((k + 1, verse_line(lines[k])))
+    if current:
+        stanzas.append(current)
+    return Verse(title, stanzas)
