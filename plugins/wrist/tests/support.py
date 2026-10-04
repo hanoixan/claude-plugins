@@ -39,6 +39,10 @@ S_PREMISE = "wrist/PREMISE.md"
 S_ACT1 = "wrist/work/act-1.md.wrist.md"
 S_ACT2 = "wrist/work/act-2.md.wrist.md"
 S_ACT3 = "wrist/work/act-3.md.wrist.md"
+POEM_EXAMPLE = os.path.join(SKILL, "assets", "examples", "counting")
+P_PREMISE = "wrist/PREMISE.md"
+P_STRUCTURE = "wrist/structure.md.wrist.md"
+P_POEM = "wrist/work/counting.md.wrist.md"
 NO_UNKNOWNS = "- **Unknowns:** none\n"
 
 
@@ -95,3 +99,7 @@ class NovelCase(TreeCase):
 
 class ScriptCase(TreeCase):
     example = SCRIPT_EXAMPLE
+
+
+class PoemCase(TreeCase):
+    example = POEM_EXAMPLE
