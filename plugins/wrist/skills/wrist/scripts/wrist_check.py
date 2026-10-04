@@ -546,7 +546,8 @@ def premise_problems(pm, profile, override):
     for key, message in profile.option_problems:
         out.append(("error", pm.front.get(key, (1, ""))[0], message))
     for q in profile.questions:
-        if q.id in profile.premise_keys and pm.front.get(q.id, (0, ""))[1]:
+        key = profile.question_key(q.id)
+        if key and pm.front.get(key, (0, ""))[1]:
             continue                # answered in the front matter, where the file set is decided
         answer = pm.answers.get(q.id)
         if answer is None or not answer[1]:

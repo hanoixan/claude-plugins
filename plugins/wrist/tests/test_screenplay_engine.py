@@ -72,5 +72,21 @@ class ScopesFollowTheFormat(unittest.TestCase):
         self.assertGreater(len(wp.load_profile("novel").lint_items()), 20)
 
 
+class UnderscoredKeys(unittest.TestCase):
+    def test_a_premise_key_may_contain_underscores(self):
+        data = base(premise_keys={"act_headings": {"type": "bool"}},
+                    files=[{"path": "a.md", "function": "a", "order": 1, "when": "act_headings"}])
+        p = wp.parse_profile(data)
+        p.set_premise({"act_headings": "yes"})
+        self.assertEqual([path for path, _ in p.expected_files("s")], ["a.md"])
+
+    def test_a_question_id_matches_a_premise_key_with_hyphens_or_underscores(self):
+        data = base(premise_keys={"act_headings": {"type": "bool"}})
+        p = wp.parse_profile(data, "- [deferrable] act-headings: Should acts be labelled?\n")
+        self.assertEqual([q.id for q in p.questions], ["act-headings"])
+        self.assertEqual(p.question_key("act-headings"), "act_headings")
+        self.assertIsNone(p.question_key("genre"))
+
+
 if __name__ == "__main__":
     unittest.main()

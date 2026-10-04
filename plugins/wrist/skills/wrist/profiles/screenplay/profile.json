@@ -1,0 +1,43 @@
+{
+  "name": "screenplay",
+  "title_page": true,
+  "publish": {"style": "screenplay"},
+  "lint_format": "fountain",
+  "premise_keys": {
+    "acts": {"type": "int", "min": 1, "max": 7, "required": true},
+    "act_headings": {"type": "bool"}
+  },
+  "files": [
+    {"path": "synopsis.md", "function": "synopsis", "order": 1},
+    {"path": "outline.md", "function": "outline", "order": 2},
+    {"path": "character.md", "function": "characters", "order": 3},
+    {"path": "misc.md", "function": "misc", "order": 4},
+    {"path": "work/act-{n}.md", "function": "act", "order": 5, "family": "acts"}
+  ],
+  "functions": {
+    "synopsis": {"heading": "synopsis", "fields": ["Logline", "Ending", "Theme"]},
+    "outline": {
+      "heading": "outline",
+      "fields": ["Structure"],
+      "children": {"beat": ["Purpose", "Change", "Pages"]}
+    },
+    "characters": {
+      "heading": "characters",
+      "children": {"character": ["Wants", "Flaw", "Voice", "Arc"]}
+    },
+    "misc": {
+      "heading": "misc",
+      "children": {"location": ["Slug", "Facts"], "prop": ["Facts"], "concept": ["Facts"], "timeline": ["Facts"]}
+    },
+    "act": {
+      "heading": "act",
+      "fields": ["Pages"],
+      "required_when_realized": ["Established"],
+      "sequence": true,
+      "children": {"scene": ["Purpose", "Location", "Pages", "Must include", "Must avoid"]},
+      "prose": true
+    }
+  },
+  "relations": ["appears", "mentions", "sets up", "pays off", "realizes", "continues"],
+  "limits": {"max_prose_words": 120}
+}

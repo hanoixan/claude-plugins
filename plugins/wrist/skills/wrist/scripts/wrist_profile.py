@@ -12,6 +12,7 @@ import re
 
 PROFILES_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "profiles"))
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")       # premise key names; PREMISE.md front matter reads underscores
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUESTION_RE = re.compile(r"^-\s+\[(required|deferrable)\]\s+([a-z0-9]+(?:-[a-z0-9]+)*):\s+(\S.*)$")
 TOP_KEYS = {"name", "files", "functions", "relations", "limits"}
@@ -47,7 +48,7 @@ def _validate_premise_keys(keys):
     if not isinstance(keys, dict):
         raise ProfileError("'premise_keys' must be an object")
     for kname, kspec in keys.items():
-        if not NAME_RE.match(kname) or not isinstance(kspec, dict):
+        if not KEY_RE.match(kname) or not isinstance(kspec, dict):
             raise ProfileError(f"premise key '{kname}' needs a valid name and an object")
         extra = sorted(set(kspec) - KEY_SETTINGS)
         if extra:
@@ -223,6 +224,11 @@ class Profile:
             else:
                 problems.append((key, f"`{key}:` must be a whole number {span} (got '{raw}')"))
         return values, problems
+
+    def question_key(self, qid):
+        """The premise key a question id stands for (hyphens read as underscores), or None."""
+        key = qid.replace("-", "_")
+        return key if key in self.premise_keys else None
 
     def set_premise(self, front):
         """Bind the premise values, so the file set below follows PREMISE.md."""
