@@ -534,3 +534,100 @@ def total_lines(poem):
 def stanza_count(poem):
     xlines = expand(poem)
     return xlines[-1].stanza_no if xlines else 0
+
+
+# -- advisory estimates -------------------------------------------------------------------------------
+# English only, and rough: a vowel-group syllable counter and an ending-sound rhyme key, with no
+# pronouncing dictionary. Every message is labelled an estimate and none of them blocks anything.
+RHYME_SAME = {"igh": "y", "ie": "y"}
+STOP_ENDS = ".,;:!?—–-…)\"'”’"
+
+
+def syllables(word):
+    """Estimated syllables in one word: vowel groups, less a silent final e, es or ed."""
+    w = re.sub(r"[^a-z]", "", word.casefold())
+    if not w:
+        return 0
+    n = len(re.findall(r"[aeiouy]+", w))
+    if re.search(r"[^aeiouy]e$", w) and not re.search(r"[^aeiouy]le$", w):
+        n -= 1
+    elif re.search(r"[^aeiouytdsxzch]es$|[^aeiouytd]ed$", w) and n > 1:
+        n -= 1
+    return max(n, 1)
+
+
+def line_syllables(text):
+    return sum(syllables(w) for w in re.findall(r"[A-Za-zÀ-ɏ']+", text))
+
+
+def rhyme_key(word):
+    """The ending sound as spelled: the last vowel group and what follows it (keeping a silent e), with a
+    few spellings of the same sound joined."""
+    w = re.sub(r"[^a-z]", "", word.casefold())
+    if len(w) > 3 and w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        w = w[:-1]                                  # a plural rhymes as its singular
+    m = re.search(r"[aeiouy]+[^aeiouy]*e$", w) or re.search(r"[aeiouy]+[^aeiouy]*$", w)
+    key = m.group() if m else w
+    return RHYME_SAME.get(key, key)
+
+
+def target_range(meter):
+    """(low, high) syllables a line of this meter is expected to have, or None for no expectation."""
+    if meter.kind == "foot":
+        per = FEET[meter.foot]
+        target = per * meter.n
+        return (target, target + 1) if per == 2 else (target - 2, target + 1)
+    if meter.kind == "syllables":
+        return (meter.lo, meter.hi)
+    if meter.kind == "stress":
+        return (len(meter.pattern), len(meter.pattern) + 1)
+    return None
+
+
+def estimates(poem, verse):
+    """Advisory Problems (severity 'estimate') for a poem whose line count matches its skeleton; an empty
+    list otherwise (the exact checks report that mismatch)."""
+    xlines = expand(poem)
+    flat = [line for stanza in verse.stanzas for line in stanza]
+    if len(flat) != len(xlines):
+        return []
+    out, copies = [], set()
+    for refrain in poem.refrains:
+        copies.update(refrain.positions[1:])
+    for x, (number, text) in zip(xlines, flat):
+        spec = x.line
+        bare = spaced(text).strip()
+        window = target_range(spec.meter)
+        count = line_syllables(bare)
+        if window and not window[0] <= count <= window[1]:
+            span = str(window[0]) if window[0] == window[1] else f"{window[0]} to {window[1]}"
+            out.append(Problem("estimate", number, f"about {count} syllable{'s' if count != 1 else ''}, the skeleton asks for {span} (estimate)"))
+        if spec.ending == "stop" and bare and bare[-1] not in STOP_ENDS:
+            out.append(Problem("estimate", number, "a `stop` line should end at a pause, but this one has no end punctuation (estimate)"))
+        if spec.ending == "run" and bare and bare[-1] in ".!?":
+            out.append(Problem("estimate", number, "a `run` line should run on, but this one ends a sentence (estimate)"))
+        if spec.caesura and not re.search(r"[,;:—–]|--", bare[:-1]):
+            out.append(Problem("estimate", number, f"caesura {spec.caesura}: no pause (comma, dash or colon) inside the line (estimate)"))
+    groups = collections.defaultdict(list)
+    for x, (number, text) in zip(xlines, flat):
+        if x.tag != "x" and x.position not in copies and not x.line.ends:
+            last = words(text)
+            if last:
+                groups[x.tag].append((number, last[-1]))
+    for tag, members in groups.items():
+        if len(members) < 2:
+            continue
+        shown = tag.split(".")[0]
+        keys = collections.Counter(rhyme_key(w) for _, w in members)
+        common = keys.most_common(1)[0][0]
+        for number, word in members:
+            if rhyme_key(word) != common:
+                others = ", ".join(sorted({w for _, w in members if rhyme_key(w) == common}))
+                out.append(Problem("estimate", number, f"'{word}' is under rhyme {shown} but may not rhyme with {others} (estimate)"))
+        seen = collections.defaultdict(list)
+        for number, word in members:
+            seen[word].append(number)
+        for word, numbers in seen.items():
+            if len(numbers) > 1:
+                out.append(Problem("estimate", numbers[1], f"the rhyme word '{word}' is used again (lines {', '.join(map(str, numbers))}) (estimate)"))
+    return sorted(out, key=lambda p: (p.line, p.message))
