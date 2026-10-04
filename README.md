@@ -2,12 +2,14 @@
 
 A Claude Code plugin marketplace. Six plugins.
 
-Four are small and built around the same observation: **a skill body reaches the model
-once, when it is invoked, and then sits at a fixed point in the conversation while
-everything after it competes for attention.** Guidance that has to hold for a whole
-session cannot live there. Each of those pairs its skill (where the long-form reasoning
-belongs) with a hook (which re-states the short form on every turn, at the end of the
-context window, where recency works in its favour).
+Four are small. Three of them are built around the same observation: **a skill body
+reaches the model once, when it is invoked, and then sits at a fixed point in the
+conversation while everything after it competes for attention.** Guidance that has to hold
+for a whole session cannot live there, so each puts it in a hook that re-states the short
+form on every turn, at the end of the context window, where recency works in its favour.
+economy-of-words and plan-batch-execution pair that hook with a skill holding the long-form
+reasoning; ask-questions is the hook alone. The fourth, do-next, is a skill with no hook: you
+invoke it deliberately, so there is nothing to keep alive between turns.
 
 The fifth, [skel](#skel), is a different kind of thing: a design format with its own
 grammar, checker and templates, loaded when you ask for it. The sixth, [wrist](#wrist), is
@@ -54,7 +56,7 @@ missing.
 
 | Plugin | What it changes | Hooks | Skill | Per-turn cost |
 | --- | --- | --- | --- | --- |
-| [economy-of-words](#economy-of-words) | How replies are written | `UserPromptSubmit` | yes | 170 words |
+| [economy-of-words](#economy-of-words) | How replies are written | `UserPromptSubmit` | yes | 191 words |
 | [do-next](#do-next) | Working a prompt queue | none | yes | none |
 | [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
@@ -72,7 +74,7 @@ Strips filler, framing and self-appraisal out of replies.
 | Piece | Role |
 | --- | --- |
 | `/economy-of-words` skill | The full reference: reply shape, banned phrases, a typography budget, rewrites, a red-flags checklist. 812 words, loaded only when invoked. |
-| `UserPromptSubmit` hook | A 170-word condensation, injected every turn. |
+| `UserPromptSubmit` hook | A 191-word condensation, injected every turn. |
 
 **Why the phrase list looks so specific**
 
@@ -102,31 +104,59 @@ right for a chat reply and wrong for a README.
 
 ## do-next
 
-Works through a queue of prompts kept in `./NEXT.md`, one at a time, confirming before
-it starts and archiving each finished prompt to `./DONE.md` with a timestamp read from
-the system clock.
+Works through a queue of prompts kept in `./NEXT.md`. It confirms the set, asks every
+prompt's questions and writes every prompt's plan up front, then runs the prompts one at a
+time, archiving each to `./DONE.md` the moment it is finished.
 
 ```
-/do-next        one prompt
-/do-next 3      the top three, in order
+/do-next                  one prompt
+/do-next 3                the top three prompts, in order
+/do-next section          every prompt in the next section
+/do-next section 2        every prompt in the next two sections
+/do-next section Cleanup  every prompt in the section named Cleanup
 ```
 
-**The queue format.** Prompts are separated by a line containing exactly `--`. Not
-`---`, which is a horizontal rule and a frontmatter fence.
+Anything else as the argument (a zero, a decimal, an unknown word, a section name that
+matches nothing or more than one section) makes it stop and ask rather than guess. If the
+queue holds fewer prompts than asked for, it takes what is there and says so.
+
+**The queue format.** Prompts are separated by a line whose trimmed content is exactly `--`.
+Not `---`, which is a horizontal rule and a frontmatter fence. A line starting with `#`
+divides the queue into named sections; sections do not nest, and the name is a label, never
+part of a prompt.
 
 ```
+# Groundwork
 Do the first thing.
 --
 Do the second thing.
 It can span many lines.
+
+# Cleanup
+Do the third thing.
 ```
 
-**What a batch buys.** One confirmation instead of several. It does not buy
-parallelism: prompts run in order, each finished and archived before the next starts,
-and trouble anywhere stops the batch with the queue left honest about what remains.
+Both files live at the project root (the current directory).
 
-Of the four small plugins, this is the one with no hook. The skill is invoked
-deliberately, by you, so there is nothing to keep alive between turns.
+**The run**
+
+| Step | What happens |
+| --- | --- |
+| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval in the run. |
+| Ask | Every prompt's clarifying questions are asked in one sitting, cumulatively: prompt 3's questions take into account what prompts 1 and 2 will do. Nothing is changed yet. |
+| Plan | A plan for every prompt (its text, your answers, the steps, how it is verified) is written to `./.claude/do-next-run.md` before any work starts, so a compaction or crash does not lose it. |
+| Run | One prompt at a time, in order, each re-checked against the tree as it then stands. |
+| Stop on trouble | A failing test, a plan that no longer fits, a missing dependency or work far larger than planned stops the run and asks you, unless this run told it to press through, in which case it records each deviation in the scratch file. A stopped prompt and everything after it stay queued. |
+| Archive | Each finished prompt is appended to `DONE.md` under a timestamp read from the system clock, then removed from `NEXT.md`; a finished section's `#` line moves with its last prompt. |
+| Report | What was done, prompt by prompt, and how much of the queue remains. |
+
+**What a batch buys.** You answer once and can then leave: one confirmation and one round of
+questions instead of one per prompt. It does not buy parallelism. Prompts run in order, each
+finished and archived before the next starts, and a queue interrupted half way says exactly
+what is left.
+
+The scratch file is deleted when the run completes and kept when it stops, so you can see
+where it halted. Add `.claude/do-next-run.md` to your `.gitignore`.
 
 ```
 /plugin install do-next@hanoixan-claude-plugins
@@ -144,8 +174,9 @@ Turns a written plan into the fewest subagent dispatches its dependency graph al
 2. `k` same-shape independent edits are **one** dispatch, whatever `k` is.
 3. A leaf — docs, a changelog, a constant — never gets its own dispatch.
 
-Gates (full suite plus review) go at chain hand-off points plus one final, rather than
-after every task.
+A single chain of five tasks or fewer is not dispatched at all; it runs inline. Gates (full
+suite plus review) go at chain hand-off points plus one final, rather than after every task.
+The skill ends with a worked example (`worked-example.md`).
 
 **How the three hooks divide the work**
 
@@ -237,7 +268,8 @@ skel_check.py order SKEL_DIR            dependency order (what must exist before
 skel_check.py status SKEL_DIR --root .  implemented, stale, unstamped, pending, abstract;
                                         names missing from code
 skel_check.py stamp SKEL_DIR --root . PATH... | --all
-                                        record your claim that a file matches its stand-in
+                                        write the stand-in's hash into each code file's
+                                        `Spec:` header: your claim that it matches
 skel_check.py fix-backlinks SKEL_DIR    insert missing `Referred by:` lines
 skel_check.py infer-roles SKEL_DIR      propose each stand-in's role and its unit
 skel_check.py batches SKEL_DIR          buildable batches of units, manifests set aside
