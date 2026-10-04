@@ -46,31 +46,45 @@ A profile may declare a poem form:
                  "breaks": "exact", "syllables": 10,
                  "stanzas": ["A1 b A2", "a b A1", "a b A2", "a b A1", "a b A2", "a b A1 A2"]},
   "ballad": {"summary": "Rhymed quatrains, alternating four and three beats.", "breaks": "exact",
-             "repeat": {"stanza": "- a - a", "syllables": ["8", "6", "8", "6"], "min": 2, "max": 40}},
+             "repeat": {"stanza": "X a X a", "syllables": ["8", "6", "8", "6"], "min": 2, "max": 40}},
   "free": {"summary": "No fixed pattern; the structure states the lines and stanzas.", "breaks": "free",
-           "open": {"scheme": "-", "syllables": null}}
+           "open": {"scheme": "X", "syllables": null}}
 }}
 ```
 
 A form has exactly one of `stanzas` (an explicit list), `repeat` (one stanza repeated between `min` and `max`
 times) or `open` (the author chooses the count; the grammar gives each line's defaults). Fields:
 
-- `scheme` tokens, one per line, space separated (a stanza string lists its lines' tokens):
-  - `-` an unrhymed line;
+- `scheme` tokens, one per line, space separated (a stanza string lists its lines' tokens). The notation follows the
+  conventions poets and reference works already use (see "Notation" below):
+  - `X` an unrhymed line;
   - `a`–`z` a rhyme sound (advisory);
-  - `A1`, `B2` (an upper-case letter and a number) a **refrain**: every line with the same token is the same line;
-  - `#a`–`#f` an **end-word group**: every line with the same token ends in the same word (the sestina).
+  - `A1`, `B2` (an upper-case letter and a number) or a bare `A`, `B` a **refrain**: every line with the same token
+    is the same line, repeated exactly. `X` is never a refrain;
+  - `1`–`6` (a bare numeral) an **end-word group**: every line with the same token ends in the same word. This is the
+    sestina's conventional numbering (`123456`, then `615243`, and so on).
 - `syllables`: one value for every line, or a list per line of a stanza; each value is a number, a range `8-9`, or
   `null` for none.
 - `breaks`: `exact` means the structure's stanza division must equal the grammar's; `free` means the structure may
   divide the same lines into stanzas as it likes (sonnets, blank verse, free verse).
 - `summary`: a sentence for the reader.
 
+### Notation
+
+There is no standard formal grammar for generating verse forms that I could find, so wrist's grammar is its own data
+format, but its tokens are the conventions already in use: lower-case letters for rhyme sounds, with `X` for unrhymed
+lines (the usage in Wikipedia's rhyme-scheme tables); upper-case letters for lines repeated verbatim (the same
+tables, for the rondeau, roundel and chant royal), numbered as `A1`, `A2` when a form has two refrains (the usual
+way of writing the villanelle, `A1 b A2 a b A1 a b A2 a b A1 a b A2 a b A1 A2`); and numerals for the sestina's
+end-word rotation (`123456` to `615243`). Where conventions overlap, wrist narrows them: an upper-case letter is
+always a refrain, never a masculine rhyme. The TEI P5 guidelines (chapter 6, "Verse") are a related standard that
+annotates an existing poem in XML (`lg`, `l`, `rhyme`, `met`); exporting to it is out of scope.
+
 **Equality for refrains and end words** is after lower-casing, collapsing white space, and stripping punctuation at
 the ends of the line or word.
 
 **The first catalog** (each with a summary, scheme and syllables): `sonnet-shakespearean` (abab cdcd efef gg, 10),
-`sonnet-petrarchan` (abbaabba cdecde, 10), `villanelle`, `sestina` (six sestets rotating the end-word groups `#a`–`#f`,
+`sonnet-petrarchan` (abbaabba cdecde, 10), `villanelle`, `sestina` (six sestets rotating the end-word groups `1`–`6`,
 then a three-line envoi, simplified to one end word per line), `pantoum` (four-line stanzas whose second and fourth
 lines return as the first and third of the next, closing the circle; refrain tokens), `haiku` (5-7-5), `tanka`
 (5-7-5-7-7), `limerick` (aabba, 8-9, 8-9, 5-6, 5-6, 8-9), `triolet` (A1 B1 a A2 a b A1 B1, 8), `ballad`, `couplets`
@@ -226,7 +240,7 @@ poems; scansion beyond a syllable count; non-English syllable and rhyme heuristi
 
 Choices made without an explicit instruction, to confirm during review:
 
-1. The scheme token notation (`a`, `A1`, `#a`, `-`) and the equality rule for refrains and end words.
+1. The token notation (`a`, `A1`, `1`, `X`) follows poets' conventions but narrows them (an upper-case letter is always a refrain), and the equality rule for refrains and end words is mine.
 2. The sestina's envoi is simplified to one end word per line.
 3. Each leading space of a verse line becomes an en space.
 4. The default paper is A5.
