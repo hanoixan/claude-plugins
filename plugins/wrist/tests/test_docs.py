@@ -20,6 +20,15 @@ class SkillText(unittest.TestCase):
         for cmd in COMMANDS:
             self.assertIn(f"wrist_check.py\" {cmd} ", skill, cmd)
 
+    def test_skill_paths_are_agent_neutral(self):
+        for dp, _, fns in os.walk(SKILL):
+            for fn in fns:
+                if fn.endswith(".md"):
+                    self.assertNotIn("CLAUDE_", text(dp, fn), os.path.join(dp, fn))
+        skill = text(SKILL, "SKILL.md")
+        self.assertIn("`SKILL_DIR` stands for the folder that holds this `SKILL.md`", skill)
+        self.assertIn('python3 "SKILL_DIR/scripts/wrist_check.py"', skill)
+
     def test_skill_front_matter(self):
         skill = text(SKILL, "SKILL.md")
         self.assertTrue(skill.startswith("---\nname: wrist\n"))

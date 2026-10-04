@@ -1690,5 +1690,19 @@ class Status(CodeCase):
                          ["src/command.py: class Command", "src/command.py: symbol MAX_DEPTH"])
 
 
+
+class AgentNeutralPaths(unittest.TestCase):
+    def test_skill_paths_are_agent_neutral(self):
+        for dp, _, fns in os.walk(SKILL):
+            for fn in fns:
+                if fn.endswith(".md"):
+                    with open(os.path.join(dp, fn), encoding="utf-8") as fh:
+                        self.assertNotIn("CLAUDE_", fh.read(), os.path.join(dp, fn))
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
+            skill = fh.read()
+        self.assertIn("`SKILL_DIR` stands for the folder that holds this `SKILL.md`", skill)
+        self.assertIn('python3 "SKILL_DIR/scripts/skel_check.py"', skill)
+
+
 if __name__ == "__main__":
     unittest.main()
