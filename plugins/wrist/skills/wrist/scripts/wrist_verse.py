@@ -273,3 +273,154 @@ class _Parser:
 def parse_poem(text):
     """The Poem a skeleton describes; raises ParseError(line, col, message) on the first syntax error."""
     return _Parser(text).poem()
+
+
+# -- expansion ----------------------------------------------------------------------------------------
+XLine = collections.namedtuple("XLine", "position stanza_no instance stanza line tag")
+
+
+def expand(poem, counts=None):
+    """One XLine per line of the poem, in order. `counts` maps a stanza's index to its number of repeats;
+    a ranged count without an entry uses its lower bound. A `fresh` stanza renames its tags per repeat
+    (A becomes A.1, A.2...), so repeats do not share rhyme sounds; x stays x."""
+    out, position, number = [], 0, 0
+    for index, stanza in enumerate(poem.stanzas):
+        repeats = (counts or {}).get(index, stanza.count.lo)
+        for instance in range(1, repeats + 1):
+            number += 1
+            for line in stanza.lines:
+                position += 1
+                tag = line.tag if line.tag == "x" or not stanza.fresh else f"{line.tag}.{instance}"
+                out.append(XLine(position, number, instance, stanza, line, tag))
+    return out
+
+
+def refrain_positions(poem):
+    """{line position: refrain} for every position of every refrain."""
+    return {p: r for r in poem.refrains for p in r.positions}
+
+
+# -- the well-formedness rules ----------------------------------------------------------------------
+HINT_REF_RE = re.compile(r"@([A-Za-z_][A-Za-z0-9_]*)(?:\[([^\]]*)\])?")
+KIND_LETTER = {"image": "i", "action": "a", "statement": "s", "pivot": "p", "question": "q", "address": "d"}
+ROLE_PATTERNS = {"setup": "ii[ai]s", "develop": "[ia]+s?", "turn": "p[iq][di]s", "resolve": "is"}
+ROLE_TEXT = {"setup": "image image (action | image) statement", "develop": "(image | action)+ statement?",
+             "turn": "pivot (image | question) (address | image) statement", "resolve": "image statement"}
+
+
+def _r0(poem):
+    out = []
+    for stanza in poem.stanzas:
+        repeated = stanza.count.lo > 1
+        for line in stanza.lines:
+            if line.ends:
+                name, index = line.ends
+                value = poem.lets.get(name)
+                if not isinstance(value, list):
+                    out.append(Problem("error", line.line, f"R0: `ends @{name}[{index}]` needs `let {name} = [...]` (a list)"))
+                elif index >= len(value):
+                    out.append(Problem("error", line.line, f"R0: `ends @{name}[{index}]` is past the end of the list "
+                                                          f"(it has {len(value)} items, numbered from 0)"))
+            for unit in line.units:
+                if re.search(r"\$n\b", unit.hint) and not repeated:
+                    out.append(Problem("error", unit.line, "R0: $n is only allowed in a stanza repeated more than once"))
+                for name, index in HINT_REF_RE.findall(unit.hint):
+                    value = poem.lets.get(name)
+                    if value is None:
+                        out.append(Problem("error", unit.line, f"R0: the hint refers to @{name}, which no `let` declares"))
+                    elif index and index.strip() != "$n":
+                        if not index.strip().isdigit() or not isinstance(value, list) or int(index) >= len(value):
+                            out.append(Problem("error", unit.line, f"R0: @{name}[{index}] is not an item of the list"))
+    return out
+
+
+def _r1_r2(poem):
+    out = []
+    for stanza in poem.stanzas:
+        lines = stanza.lines
+        if stanza.rhyme is None:
+            for line in lines:
+                if line.tag != "x":
+                    out.append(Problem("error", line.line, f"R1: the stanza says `none` but this line is tagged {line.tag}"))
+        elif len(stanza.rhyme) != len(lines):
+            out.append(Problem("error", stanza.line, f"R1: the rhyme scheme has {len(stanza.rhyme)} tags for {len(lines)} lines"))
+        else:
+            for tag, line in zip(stanza.rhyme, lines):
+                if tag != line.tag:
+                    out.append(Problem("error", line.line, f"R1: the scheme says {tag} but this line is tagged {line.tag}"))
+        want = SHAPES[stanza.shape]
+        if want is not None and len(lines) != want:
+            out.append(Problem("error", stanza.line, f"R2: a {stanza.shape} has {want} lines, this stanza has {len(lines)}"))
+    return out
+
+
+def _r3_r4_r5(poem):
+    if not poem.strict:
+        return []
+    out, units = [], []
+    for stanza in poem.stanzas:
+        kinds = [u for line in stanza.lines for u in line.units]
+        units.extend(kinds)
+        if stanza.role is None:
+            out.append(Problem("error", stanza.line, "R3: under `strict roles;` every stanza needs a role"))
+        elif not re.fullmatch(ROLE_PATTERNS[stanza.role], "".join(KIND_LETTER[u.kind] for u in kinds)):
+            out.append(Problem("error", stanza.line, f"R3: a {stanza.role} stanza reads {ROLE_TEXT[stanza.role]}, "
+                                                    f"this one reads {' '.join(u.kind for u in kinds) or 'nothing'}"))
+        seen_image = False
+        for unit in kinds:
+            seen_image = seen_image or unit.kind == "image"
+            if unit.kind == "statement" and not seen_image:
+                out.append(Problem("error", unit.line, "R5: a statement needs an image before it in its own stanza"))
+    turns = [s for s in poem.stanzas if s.role == "turn"]
+    if len(turns) != 1:
+        out.append(Problem("error", (turns[1] if turns else poem.stanzas[0]).line,
+                           f"R4: exactly one stanza must be the turn (found {len(turns)})"))
+    if units and units[-1].kind != "statement":
+        out.append(Problem("error", units[-1].line, "R3: under `strict roles;` the poem ends on a statement"))
+    return out
+
+
+def _r8(poem):
+    out, lines = [], expand(poem)
+    total, claimed = len(lines), {}
+    for refrain in poem.refrains:
+        positions = refrain.positions
+        if positions != sorted(set(positions)):
+            out.append(Problem("error", refrain.line, f"R8: refrain {refrain.name}: line numbers must rise and not repeat"))
+            continue
+        bad = [p for p in positions if not 1 <= p <= total]
+        if bad:
+            out.append(Problem("error", refrain.line, f"R8: refrain {refrain.name}: line {bad[0]} is outside the poem "
+                                                     f"(it has {total} lines)"))
+            continue
+        taken = [p for p in positions if p in claimed]
+        if taken:
+            out.append(Problem("error", refrain.line, f"R8: line {taken[0]} is already in refrain {claimed[taken[0]]}"))
+            continue
+        for p in positions:
+            claimed[p] = refrain.name
+        first = lines[positions[0] - 1]
+        for p in positions[1:]:
+            other = lines[p - 1]
+            if (other.line.meter, other.line.ending, other.tag) != (first.line.meter, first.line.ending, first.tag):
+                out.append(Problem("error", other.line.line, f"R8: line {p} repeats line {positions[0]} (refrain "
+                                                            f"{refrain.name}) but its meter, ending or tag differs"))
+    return out
+
+
+def _r11(poem, concrete):
+    if not concrete:
+        return []
+    out = []
+    for stanza in poem.stanzas:
+        if stanza.count.lo != stanza.count.hi:
+            span = f"{stanza.count.lo}..{'*' if stanza.count.hi is None else stanza.count.hi}"
+            out.append(Problem("error", stanza.line, f"R11: the count must be exact here (found {span}); choose a number"))
+    return out
+
+
+def skeleton_problems(poem, concrete=True):
+    """Errors for the rules R0, R1, R2, R3 to R5 (strict roles only), R8 and R11, sorted by line.
+    `concrete` is True for a realized structure.md, False for a catalog entry, which may use ranges."""
+    out = _r0(poem) + _r1_r2(poem) + _r3_r4_r5(poem) + _r8(poem) + _r11(poem, concrete)
+    return sorted(out, key=lambda p: (p.line, p.message))
