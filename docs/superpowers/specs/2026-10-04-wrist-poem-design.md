@@ -60,10 +60,11 @@ rules argue against: no closing explanation, break the symmetry).
 
 ```
 Poem      ::= "poem" "{" Decl* Stanza+ "}"
-Decl      ::= Named | Title | Strict | Rule | Refrain
+Decl      ::= Named | Title | Strict | Breaks | Rule | Refrain
 Named     ::= "named" String ";"
 Title     ::= "title" String ";"            (* informational; the checker ignores it *)
 Strict    ::= "strict" "roles" ";"
+Breaks    ::= "breaks" "flexible" ";"       (* the stanza division is not compared to the catalog form *)
 Refrain   ::= "refrain" Identifier "at" Integer ("," Integer)+ ";"
 Stanza    ::= "stanza" "(" Shape "," Count "," Rhyme ("," Role)? ")" "{" Line+ "}"
 Shape     ::= "couplet" | "tercet" | "quatrain" | "quintain" | "sestet" | "septet" | "octave" | "free"
@@ -88,10 +89,11 @@ Checked in order; all errors are reported with a line number in `structure.md`.
 - **R7 Line count.** The expanded line count is the sum of shape line counts times counts.
 - **R8 Refrains.** Positions are within the expanded poem, each line is in at most one refrain, and every position of a
   refrain has the same meter, ending and tag as the first.
-- **R9 Stress (advisory).** At least 70 percent of a filled line's syllables match its `stress` pattern.
+- **R9 Stress (advisory).** The checker estimates a `stress` line's syllables against the pattern's length. It cannot
+  estimate which syllables are stressed (it has no pronouncing dictionary), so the pattern itself is for the poet.
 - **R10 Caesura (advisory).** A line with `caesura N` contains a punctuation pause or dash.
 - **R11 Concrete (new).** Counts in `structure.md` are exact; the stanza `Count` has no range.
-- **R12 Ends (new).** In the poem, every line carrying the same `ends` element ends in the same word.
+- **R12 Ends (new).** In the poem, every line carrying `ends @list[k]` ends with item k of the list.
 
 ## The catalog
 
@@ -138,7 +140,8 @@ work/<slug>.md
 - `Turn` says where the poem changes direction; `Ending` says how it lands; `Must keep` names a detail, word or
   digression that stays even though an editor would cut it, without the poem explaining it (the prompt rules'
   "one rule that matters").
-- `poem` is `prose: true` (published and linted); `structure` is not. The poem stand-in depends on the structure
+- `Form`, `Lines` and `Stanzas` are `required_when_realized` fields of the structure stand-in. `poem` is `prose: true`
+  (published and linted); `structure` is not. The poem stand-in depends on the structure
   stand-in with the relation `realizes`.
 - Settings: `title_page` false, `form` `{"structure": "structure.md", "poem": "work/{slug}.md"}`, `publish`
   `{"style": "poem"}`, `lint_format` `prose`, `limits.max_prose_words` 120, relations `appears`, `mentions`,
@@ -149,7 +152,8 @@ work/<slug>.md
 One optional premise key, `titled` (bool, default false). The front matter `title:` is still required: it is the
 working title used for the slug, the file names and the metadata. When `titled` is true, the poem's first line is
 `# Title` and the title is printed. When false, the poem has no title line, nothing is printed above it, and the
-working title stays in the metadata. `verse` checks that the first line matches `titled`.
+working title stays in the metadata. `verse` checks that the first line matches `titled`, and that a printed title
+equals the front matter `title:`.
 
 ### Premise questions
 
@@ -167,6 +171,8 @@ For each catalog form: what it is, where it fits, its rules in words, and what t
 
 `wrist_check.py verse WRIST_DIR [--root .] [--json]` reads `structure.md`, the structure stand-in and the poem.
 
+- **Missing files and broken skeletons:** a missing `structure.md` is an error and ends the run; a missing poem is an
+  error after the skeleton is checked; a skeleton with rule errors leaves the poem unchecked (the message says so).
 - **The skeleton:** parsed with a recursive-descent parser (`wrist_verse.py`), expanded (counts, refrains, `ends`,
   `fresh` tags), and checked against R0 to R12. A parse error reports the line and column and what was expected.
   The structure stand-in's `Form`, `Lines` and `Stanzas` fields are compared as above. If `named` is present the
@@ -181,7 +187,7 @@ For each catalog form: what it is, where it fits, its rules in words, and what t
   `syllables` target (an English vowel-group counter; feet convert at 2 syllables for iamb, trochee and spondee and 3
   for anapest, dactyl and amphibrach, allowing one extra at a feminine ending); lines of one rhyme tag that do not
   rhyme (final vowel group and what follows); a rhyme word used twice for rhyme (excluding refrain and `ends`
-  lines); R9; R10; and `stop` lines that end with no punctuation or `run` lines that end with a full stop.
+  lines); R9 (syllable count only); R10; and `stop` lines that end with no punctuation or `run` lines that end with a full stop.
 - Exit 1 on errors, 0 otherwise. `gate publishing` runs the exact checks and blocks on any error; estimates never
   block.
 
@@ -202,7 +208,8 @@ For each catalog form: what it is, where it fits, its rules in words, and what t
 - **PDF:** A5 by default (`trim:` overrides), Libertinus Serif at 11 pt with generous leading, margins that give the
   poem room, flush left, never justified or reflowed, indentation kept. A line too long for the page wraps with a
   hanging indent. A stanza that fits on a page is not split. The page number shows from the second page.
-- **Heading block:** a `dedication:` in italic, the title if `titled` (bold), the author as an italic byline, and an
+- **Heading block** (in the EPUB the contents need a heading first, so the dedication follows the title there):
+  a `dedication:` in italic, the title if `titled` (bold), the author as an italic byline, and an
   `epigraph:` in italic. An untitled poem prints the byline and the verse with no title.
 - **EPUB:** the same elements as classed blocks and a stylesheet; no separate title page; the navigation lists the
   working title as metadata, and no title appears on the page of an untitled poem.
