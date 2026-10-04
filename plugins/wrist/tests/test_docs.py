@@ -76,6 +76,11 @@ class SkillText(unittest.TestCase):
                        "act_headings", "based_on", "realize the act, fill in `Established:`, stamp it"):
             self.assertIn(phrase, skill, phrase)
 
+    def test_a_screenplay_is_not_told_to_use_the_prose_scene_break(self):
+        skill = text(SKILL, "SKILL.md")
+        self.assertIn("a screenplay separates scenes with scene headings", skill)
+        self.assertIn("one line", text(SKILL, "references", "fountain.md"))
+
     def test_every_screenplay_template_exists(self):
         for name in ("PREMISE.md", "synopsis.wrist.md", "outline.wrist.md", "characters.wrist.md", "misc.wrist.md",
                      "act.wrist.md"):

@@ -184,7 +184,9 @@ class RealBuilds(unittest.TestCase):
         with zipfile.ZipFile(os.path.join(self.cwd, "output/tb.epub")) as z:
             nav = z.read("EPUB/nav.xhtml").decode("utf-8")
             pages = [z.read(n).decode("utf-8") for n in z.namelist() if n.startswith("EPUB/text/ch")]
-        self.assertEqual(re.findall(r'<a href="[^"]*"[^>]*>([^<]*)</a>', nav), ["Title Page"])
+        toc = re.search(r'<nav epub:type="toc"[^>]*>(.*?)</nav>', nav, re.S).group(1)
+        self.assertIn("<li", toc)                                      # an EPUB contents list is never empty
+        self.assertEqual(re.findall(r'<a href="[^"]*"[^>]*>([^<]*)</a>', toc), ["Screenplay"])
         text = "\n".join(pages)
         for cls in ("scene-heading", "action", "character", "parenthetical", "dialogue", "transition", "centered"):
             self.assertIn(f'class="{cls}"', text, cls)

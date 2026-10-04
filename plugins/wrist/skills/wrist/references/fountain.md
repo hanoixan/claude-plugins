@@ -14,9 +14,13 @@ The act files of a screenplay are written in Fountain, the plain-text screenplay
 - **Page break:** a line of three or more `=`, for example `===`.
 - **Emphasis:** `*italic*`, `**bold**` and `_underline_` (underline is typeset as italic).
 
+## Line breaks
+
+Every line break you type is kept, in action and in dialogue (Fountain takes every carriage return as intent). Write each action paragraph and each speech on one line, and break a line only where you want it broken: stacked beats, lyrics, a verse.
+
 ## Dropped
 
-Notes `[[like this]]`, boneyard `/* like this */` (either may span lines), sections (lines starting `#`), synopses (lines starting a single `=`) and a Fountain title page are removed. The title page is built from `PREMISE.md` instead.
+Notes `[[like this]]`, boneyard `/* like this */` (either may span lines), sections (lines starting `#`), synopses (lines starting a single `=`) and a Fountain title page (`key: value` lines at the very start of the text: Title, Credit, Author, Authors, Source, Notes, Draft date, Date, Contact, Copyright, Revision) are removed. The title page is built from `PREMISE.md` instead.
 
 ## wrist's own line
 

@@ -14,9 +14,22 @@ end
 
 local function is_blank(l) return l == nil or l:match("^%s*$") ~= nil end
 
+-- An upper-case name with at least one cased letter, in any script that has case. Characters are compared
+-- one by one with pandoc.text, as wrist_lint.py does.
 local function upper_name(line)
   local core = line:gsub("%s*%b()%s*$", "")
-  return core:match("%a") ~= nil and core == core:upper() and core:match("%S") ~= nil
+  if core:match("^%s*$") then return false end
+  local up, low = pandoc.text.upper(core), pandoc.text.lower(core)
+  return core == up and up ~= low
+end
+
+-- A Fountain title page: key: value lines at the very start of the text. wrist builds the title page from
+-- PREMISE.md instead, so it is dropped.
+local TITLE_KEYS = {title = true, credit = true, author = true, authors = true, source = true, notes = true,
+                    ["draft date"] = true, date = true, contact = true, copyright = true, revision = true}
+local function title_key(line)
+  local key = line and line:match("^(%a[%a ]-):")
+  return key ~= nil and TITLE_KEYS[key:lower()] == true
 end
 
 local SCENE_STARTS = {"INT%./EXT", "INT/EXT", "INT", "EXT", "EST", "I/E"}
@@ -29,15 +42,25 @@ local function natural_heading(line)
   return false
 end
 
+-- Fountain takes every carriage return as intent, so each line of an element ends in a line break.
 local function div(class, text)
-  return pandoc.Div({pandoc.Para(inlines(text))}, pandoc.Attr("", {class}))
+  local parts = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    if #parts > 0 then parts[#parts + 1] = pandoc.LineBreak() end
+    for _, inline in ipairs(inlines(line)) do parts[#parts + 1] = inline end
+  end
+  return pandoc.Div({pandoc.Para(parts)}, pandoc.Attr("", {class}))
 end
 
 function Reader(input)
   local text = tostring(input):gsub("\r\n", "\n"):gsub("/%*.-%*/", ""):gsub("%[%[.-%]%]", "")
   local lines = {}
   for l in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = l end
-  local blocks, i, n = {}, 1, #lines
+  local blocks, n = {}, #lines
+  local i = 1
+  if title_key(lines[1]) then
+    while i <= n and not is_blank(lines[i]) do i = i + 1 end
+  end
   while i <= n do
     local line = lines[i]
     local prev_blank, next_blank = (i == 1) or is_blank(lines[i - 1]), is_blank(lines[i + 1])

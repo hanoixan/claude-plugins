@@ -40,13 +40,40 @@ def mask_comments(text):
     return re.sub(r"\[\[.*?\]\]", blank, text, flags=re.S)
 
 
+TITLE_KEYS = {"title", "credit", "author", "authors", "source", "notes", "draft date", "date", "contact",
+              "copyright", "revision"}
+
+
 def _blank(line):
-    return line is None or not line.strip()
+    """Blank means only ASCII white space, as in the Lua reader; a no-break space is text."""
+    return line is None or re.fullmatch(r"[ \t\r\f\v]*", line) is not None
+
+
+def _simple_upper(s):
+    """Upper-case one character at a time, keeping a character whose upper case is longer (the German eszett),
+    as the reader's pandoc.text.upper does."""
+    return "".join(c.upper() if len(c.upper()) == 1 else c for c in s)
+
+
+def _simple_lower(s):
+    return "".join(c.lower() if len(c.lower()) == 1 else c for c in s)
 
 
 def _upper_name(line):
+    """True for an upper-case name with at least one cased letter, in any script that has case."""
     core = re.sub(r"\s*\([^()]*\)\s*$", "", line)
-    return bool(re.search(r"[^\W\d_]", core)) and core == core.upper() and bool(core.strip())
+    return bool(core.strip()) and core == _simple_upper(core) and _simple_upper(core) != _simple_lower(core)
+
+
+def _title_page_end(lines):
+    """The number of lines of a Fountain title page at the very start (key: value lines up to a blank line)."""
+    m = re.match(r"^([A-Za-z][A-Za-z ]*?):", lines[0]) if lines else None
+    if not m or m.group(1).lower() not in TITLE_KEYS:
+        return 0
+    k = 0
+    while k < len(lines) and not _blank(lines[k]):
+        k += 1
+    return k
 
 
 def _natural_heading(line):
@@ -55,7 +82,9 @@ def _natural_heading(line):
 
 
 def _classify(lines):
-    out, i, n = [], 0, len(lines)
+    out, n = [], len(lines)
+    i = _title_page_end(lines)
+    out.extend((k + 1, "dropped", lines[k]) for k in range(i))
 
     def prev_blank(k):
         return k == 0 or _blank(lines[k - 1])

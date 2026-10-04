@@ -161,6 +161,15 @@ class LuaReader(unittest.TestCase):
         self.assertEqual(kind(block), "act-marker")
         self.assertEqual(plain([block]).strip(), "ACT TWO")
 
+    def test_review_focus_line_breaks_in_action_and_dialogue_are_kept(self):
+        """Fountain takes every carriage return as intent (fountain.io, Line Breaks)."""
+        for text in ("Line one.\nLine two.\n", "MARIT\nRow, row,\nrow your boat.\n"):
+            with self.subTest(text=text):
+                self.assertIn('"LineBreak"', json.dumps(read(text)))
+
+    def test_a_single_line_has_no_line_break(self):
+        self.assertNotIn('"LineBreak"', json.dumps(read("One line only.\n")))
+
     def test_a_long_script_reads_in_one_pass(self):
         script = "\n".join(f"INT. ROOM {i} - DAY\n\nMARIT\nLine {i}.\n" for i in range(100))
         self.assertEqual(len(read(script)), 300)

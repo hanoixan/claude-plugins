@@ -1,27 +1,299 @@
 [
- {"name": "heading then action", "text": "INT. KITCHEN - DAY\n\nShe waits.\n", "kinds": ["scene-heading", "action"]},
- {"name": "a heading with no blank before it is action", "text": "She waits.\nINT. KITCHEN - DAY\n\nMore.\n", "kinds": ["action", "action"]},
- {"name": "an upper-case heading with no blank after reads as a character cue", "text": "INT. KITCHEN - DAY\nShe waits.\n", "kinds": ["character", "dialogue"]},
- {"name": "lower case int heading", "text": "int. kitchen - day\n\nShe waits.\n", "kinds": ["scene-heading", "action"]},
- {"name": "I/E and INT./EXT. forms", "text": "I/E CAR - MOVING\n\nGo.\n\nINT./EXT. HOUSE - DAY\n\nGo.\n", "kinds": ["scene-heading", "action", "scene-heading", "action"]},
- {"name": "INTERIOR is not a heading", "text": "INTERIOR design is hard.\n\nOk.\n", "kinds": ["action", "action"]},
- {"name": "forced heading", "text": ".THE BEACH\n\nWaves.\n", "kinds": ["scene-heading", "action"]},
- {"name": "double dot is not a forced heading", "text": "..and so on\n\nOk.\n", "kinds": ["action", "action"]},
- {"name": "dialogue block", "text": "MARIT\n(quietly)\nTwenty-three.\nI counted twice.\n\nHALLORAN (O.S.)\nLog says twenty-four.\n", "kinds": ["character", "parenthetical", "dialogue", "character", "dialogue"]},
- {"name": "a character cue needs a blank line before it", "text": "She says:\nMARIT\nHello.\n", "kinds": ["action"]},
- {"name": "a character cue needs dialogue after it", "text": "Fog.\n\nMARIT\n\nSilence.\n", "kinds": ["action", "action", "action"]},
- {"name": "forced character", "text": "@McCLOUD\nHi.\n", "kinds": ["character", "dialogue"]},
- {"name": "character with numbers and an extension", "text": "AGENT 47 (CONT'D)\nStill here.\n", "kinds": ["character", "dialogue"]},
- {"name": "transition", "text": "Fog.\n\nCUT TO:\n\nEXT. GATE - DUSK\n\nSea.\n", "kinds": ["action", "transition", "scene-heading", "action"]},
- {"name": "forced transition", "text": "Fog.\n\n> Burn to white.\n\nSea.\n", "kinds": ["action", "transition", "action"]},
- {"name": "centered", "text": "> THE END <\n", "kinds": ["centered"]},
- {"name": "page break", "text": "One.\n\n===\n\nTwo.\n", "kinds": ["action", "pagebreak", "action"]},
- {"name": "forced action", "text": "!MARIT\n", "kinds": ["action"]},
- {"name": "notes and boneyard are removed", "text": "/* gone */\nINT. A - DAY\n\nText [[a note]] here.\n\n[[whole\nnote]]\n\nMore.\n", "kinds": ["scene-heading", "action", "action"]},
- {"name": "sections and synopses are dropped", "text": "# Act one\n\n= the synopsis\n\nINT. A - DAY\n\nText.\n", "kinds": ["scene-heading", "action"]},
- {"name": "act marker", "text": "@@ACT ONE@@\n\nINT. A - DAY\n\nText.\n", "kinds": ["act-marker", "scene-heading", "action"]},
- {"name": "an upper-case line inside action is action", "text": "He reads.\nSTOP\nHe stops.\n", "kinds": ["action"]},
- {"name": "crlf line endings", "text": "INT. A - DAY\r\n\r\nText.\r\n", "kinds": ["scene-heading", "action"]},
- {"name": "empty text", "text": "", "kinds": []},
- {"name": "only blank lines", "text": "\n\n  \n", "kinds": []}
+ {
+  "name": "heading then action",
+  "text": "INT. KITCHEN - DAY\n\nShe waits.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "a heading with no blank before it is action",
+  "text": "She waits.\nINT. KITCHEN - DAY\n\nMore.\n",
+  "kinds": [
+   "action",
+   "action"
+  ]
+ },
+ {
+  "name": "an upper-case heading with no blank after reads as a character cue",
+  "text": "INT. KITCHEN - DAY\nShe waits.\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "lower case int heading",
+  "text": "int. kitchen - day\n\nShe waits.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "I/E and INT./EXT. forms",
+  "text": "I/E CAR - MOVING\n\nGo.\n\nINT./EXT. HOUSE - DAY\n\nGo.\n",
+  "kinds": [
+   "scene-heading",
+   "action",
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "INTERIOR is not a heading",
+  "text": "INTERIOR design is hard.\n\nOk.\n",
+  "kinds": [
+   "action",
+   "action"
+  ]
+ },
+ {
+  "name": "forced heading",
+  "text": ".THE BEACH\n\nWaves.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "double dot is not a forced heading",
+  "text": "..and so on\n\nOk.\n",
+  "kinds": [
+   "action",
+   "action"
+  ]
+ },
+ {
+  "name": "dialogue block",
+  "text": "MARIT\n(quietly)\nTwenty-three.\nI counted twice.\n\nHALLORAN (O.S.)\nLog says twenty-four.\n",
+  "kinds": [
+   "character",
+   "parenthetical",
+   "dialogue",
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "a character cue needs a blank line before it",
+  "text": "She says:\nMARIT\nHello.\n",
+  "kinds": [
+   "action"
+  ]
+ },
+ {
+  "name": "a character cue needs dialogue after it",
+  "text": "Fog.\n\nMARIT\n\nSilence.\n",
+  "kinds": [
+   "action",
+   "action",
+   "action"
+  ]
+ },
+ {
+  "name": "forced character",
+  "text": "@McCLOUD\nHi.\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "character with numbers and an extension",
+  "text": "AGENT 47 (CONT'D)\nStill here.\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "transition",
+  "text": "Fog.\n\nCUT TO:\n\nEXT. GATE - DUSK\n\nSea.\n",
+  "kinds": [
+   "action",
+   "transition",
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "forced transition",
+  "text": "Fog.\n\n> Burn to white.\n\nSea.\n",
+  "kinds": [
+   "action",
+   "transition",
+   "action"
+  ]
+ },
+ {
+  "name": "centered",
+  "text": "> THE END <\n",
+  "kinds": [
+   "centered"
+  ]
+ },
+ {
+  "name": "page break",
+  "text": "One.\n\n===\n\nTwo.\n",
+  "kinds": [
+   "action",
+   "pagebreak",
+   "action"
+  ]
+ },
+ {
+  "name": "forced action",
+  "text": "!MARIT\n",
+  "kinds": [
+   "action"
+  ]
+ },
+ {
+  "name": "notes and boneyard are removed",
+  "text": "/* gone */\nINT. A - DAY\n\nText [[a note]] here.\n\n[[whole\nnote]]\n\nMore.\n",
+  "kinds": [
+   "scene-heading",
+   "action",
+   "action"
+  ]
+ },
+ {
+  "name": "sections and synopses are dropped",
+  "text": "# Act one\n\n= the synopsis\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "act marker",
+  "text": "@@ACT ONE@@\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "act-marker",
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "an upper-case line inside action is action",
+  "text": "He reads.\nSTOP\nHe stops.\n",
+  "kinds": [
+   "action"
+  ]
+ },
+ {
+  "name": "crlf line endings",
+  "text": "INT. A - DAY\r\n\r\nText.\r\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "empty text",
+  "text": "",
+  "kinds": []
+ },
+ {
+  "name": "only blank lines",
+  "text": "\n\n  \n",
+  "kinds": []
+ },
+ {
+  "name": "a Cyrillic name is a character cue",
+  "text": "НАТАША\nПривет\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "a Greek name is a character cue",
+  "text": "ΑΛΦΑ\nΓεια\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "an accented upper-case name is a character cue",
+  "text": "ÉMILE\nBonjour.\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "a name with no case (CJK) is action unless forced",
+  "text": "李明\n你好\n",
+  "kinds": [
+   "action"
+  ]
+ },
+ {
+  "name": "a forced CJK name is a character cue",
+  "text": "@李明\n你好\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "a half-lower-case accented name is action",
+  "text": "JOSé\nHola.\n",
+  "kinds": [
+   "action"
+  ]
+ },
+ {
+  "name": "a line of only a no-break space is not blank",
+  "text": "BOB\n \nHi.\n",
+  "kinds": [
+   "character",
+   "dialogue"
+  ]
+ },
+ {
+  "name": "a title page at the very start is dropped",
+  "text": "Title: The Thing\nAuthor: Me\nDraft date: 1/20/2012\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "a title page value may continue on indented lines",
+  "text": "Contact:\n   a@b.example\n   555 0100\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "a title page key is case-insensitive and may have spaces",
+  "text": "draft DATE: today\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "a title-page-like line later in the script is action",
+  "text": "INT. A - DAY\n\nTitle: not a title page\n",
+  "kinds": [
+   "scene-heading",
+   "action"
+  ]
+ },
+ {
+  "name": "an unknown key at the start is action",
+  "text": "Mood: tense\n\nINT. A - DAY\n\nText.\n",
+  "kinds": [
+   "action",
+   "scene-heading",
+   "action"
+  ]
+ }
 ]

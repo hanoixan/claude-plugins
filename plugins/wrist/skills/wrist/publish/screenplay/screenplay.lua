@@ -8,9 +8,10 @@ local KINDS = {
 
 function Pandoc(doc)
   if not FORMAT:match("typst") then
-    -- Without a heading before the script pandoc files it under the title and lists that in the contents.
-    -- Give it an unlisted heading of its own; the stylesheet hides it.
-    local out = {pandoc.Header(1, {pandoc.Str("Screenplay")}, pandoc.Attr("script", {"unlisted", "unnumbered"}))}
+    -- Without a heading before the script pandoc files it under the title and lists that in the contents,
+    -- and an EPUB contents list may not be empty. Give the script a heading of its own, listed as
+    -- "Screenplay"; the stylesheet hides it on the page.
+    local out = {pandoc.Header(1, {pandoc.Str("Screenplay")}, pandoc.Attr("script", {"unnumbered"}))}
     -- The title page lines pandoc's own title page does not show.
     for _, key in ipairs({"based_on", "draft", "contact"}) do
       local v = doc.meta[key]
