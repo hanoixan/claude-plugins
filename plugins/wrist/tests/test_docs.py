@@ -64,11 +64,40 @@ class SkillText(unittest.TestCase):
 
     def test_the_readme_lists_the_novel(self):
         readme = text(ROOT, "README.md")
-        self.assertIn("`shortstory` and `novel`", readme)
+        self.assertIn("`novel`", readme)
 
     def test_the_chapter_template_leaves_established_bare(self):
         template = text(SKILL, "assets", "templates", "novel", "chapter.wrist.md")
         self.assertIn("\n- **Established:**\n", template)
+
+    def test_skill_covers_the_screenplay(self):
+        skill = text(SKILL, "SKILL.md")
+        for phrase in ("`screenplay`", "Fountain", "acts:", "assets/templates/screenplay/", "references/fountain.md",
+                       "act_headings", "based_on", "realize the act, fill in `Established:`, stamp it"):
+            self.assertIn(phrase, skill, phrase)
+
+    def test_a_screenplay_is_not_told_to_use_the_prose_scene_break(self):
+        skill = text(SKILL, "SKILL.md")
+        self.assertIn("a screenplay separates scenes with scene headings", skill)
+        self.assertIn("one line", text(SKILL, "references", "fountain.md"))
+
+    def test_every_screenplay_template_exists(self):
+        for name in ("PREMISE.md", "synopsis.wrist.md", "outline.wrist.md", "characters.wrist.md", "misc.wrist.md",
+                     "act.wrist.md"):
+            self.assertTrue(os.path.isfile(os.path.join(SKILL, "assets", "templates", "screenplay", name)), name)
+
+    def test_the_fountain_reference_names_the_dialect(self):
+        ref = text(SKILL, "references", "fountain.md")
+        for phrase in ("INT.", "forced", "@@ACT", "dropped", "[[", "/*", "===", "TO:", "dual dialogue"):
+            self.assertIn(phrase, ref, phrase)
+
+    def test_the_grammar_reference_explains_publish_style_and_lint_format(self):
+        grammar = text(SKILL, "references", "grammar.md")
+        for phrase in ("publish", "style", "lint_format", "fountain", "action", "dialogue"):
+            self.assertIn(phrase, grammar, phrase)
+
+    def test_the_readme_lists_the_screenplay(self):
+        self.assertIn("`shortstory`, `novel` and `screenplay`", text(ROOT, "README.md"))
 
 
 class Manifests(unittest.TestCase):

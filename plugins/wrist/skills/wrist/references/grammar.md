@@ -75,3 +75,5 @@ A profile (`profiles/<name>/profile.json`) decides the file shape and what every
 - **`sequence`**: each file of a family should link to the one before it with the relation `continues`; `check` warns when it does not.
 - **`heading_field`**: the field (for the novel, `Heading:`) whose value is the exact first line of the realized file, for example `# 7. The Long Wait`. `gate publishing` reports a realized file that starts with something else.
 - **`title_page`**: whether the published book has a separate title page (default true; the short story sets it false).
+- **`publish`**: an object with a `style` name that picks how the work is published: `story`, `book` or `screenplay`. Without it the style is inferred: `book` when the profile has a `sequence` function, otherwise `story`. A profile with `style: screenplay` is written in Fountain (see `fountain.md`) and published in screenplay layout.
+- **`lint_format`**: `prose` (the default) or `fountain`. It decides which scopes a lint pattern may use: `narration` or `anywhere` for prose; `action` (action lines only), `dialogue` (dialogue and parentheticals) or `anywhere` for Fountain.

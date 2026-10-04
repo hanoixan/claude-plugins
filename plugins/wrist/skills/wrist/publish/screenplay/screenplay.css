@@ -1,0 +1,13 @@
+body { font-family: "Courier Prime", "Courier New", Courier, monospace; font-size: 1em; line-height: 1.25; margin: 0 8%; }
+div.scene-heading { font-weight: bold; text-transform: uppercase; margin: 2em 0 0.5em; }
+div.action { margin: 1em 0 0; }
+div.character { margin: 1em 0 0 35%; text-transform: uppercase; }
+div.parenthetical { margin: 0 0 0 28%; }
+div.dialogue { margin: 0 20% 0 18%; }
+div.transition { margin: 1em 0 0; text-align: right; text-transform: uppercase; }
+div.centered { margin: 1em 0 0; text-align: center; }
+div.act-marker { margin: 3em 0 1em; text-align: center; font-weight: bold; text-transform: uppercase; page-break-before: always; }
+div.pagebreak { page-break-after: always; }
+div p { margin: 0; text-indent: 0; text-align: left; }
+#script > h1 { display: none; }
+div.title-line { margin: 0.5em 0; text-align: center; }
