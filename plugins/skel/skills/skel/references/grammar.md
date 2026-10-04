@@ -67,6 +67,7 @@ unit: ./file_map.hpp.skel.md
 | `unit` | no | relative path to the stand-in this one is built together with |
 | `untested` | no | why no test stand-in links to this unit; goes on the unit's primary, `role: product` only |
 | `kind` | no | overrides the kind inferred from the extension, as above |
+| `stamp` | no | written by `skel_check.py stamp`: `source <8 hex>, stand-in <8 hex>`, the hashes of the file and of this stand-in when they last agreed; never edit it by hand |
 
 - **product** is anything delivered: code, data, infrastructure, resources, documents.
 - **test** is test code and whatever only tests use: fixtures, test data, helper programs.
@@ -220,7 +221,7 @@ A `Referred by:` with no matching `Depends on:` is an error that is not auto-fix
 
 Deeper typed nesting (for example a function inside a function) is not allowed. Describe closures and inner helpers in prose under their owner. Untyped headings (`#### Algorithm`, `## Notes`) may appear anywhere for organization.
 
-A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `skel_check.py status` lists every heading whose name it cannot find in the implemented file. A code stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks. The stamp is the short hash of the stand-in that `skel_check.py stamp` writes into a code file's `Spec:` header; `implementing.md` says when to write it.
+A typed heading names exactly one symbol that will exist in the code under that name. Don't gather several accessors under one invented heading: `skel_check.py status` lists every heading whose name it cannot find in the implemented file. A stand-in whose file is written by a generator says so with a file-level `- **Source:** generated — <by what>`, and `status` then leaves it out of the stamp and name checks. The stamp is the `stamp:` front matter line that `skel_check.py stamp` writes into the stand-in; `implementing.md` says when to write it.
 
 ### Prose
 

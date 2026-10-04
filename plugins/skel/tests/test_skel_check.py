@@ -7,6 +7,7 @@ Run from the repository root:
 
     python3 -m unittest discover -s plugins/skel/tests
 """
+import hashlib
 import json
 import os
 import re
@@ -723,7 +724,7 @@ class Roles(TreeCase):
         self.front(TRANSACTION, "role: product", "untestd: no need")
         code, out = self.check()
         self.assertEqual(code, 0, out)
-        self.assertIn("warning: unknown front matter key 'untestd' (known: kind, role, unit, untested)", out)
+        self.assertIn("warning: unknown front matter key 'untestd' (known: kind, role, unit, untested, stamp)", out)
 
     def test_quotes_and_a_trailing_comment_are_ignored(self):
         self.front(TRANSACTION, 'role: "product"   # delivered')
@@ -1332,12 +1333,13 @@ class CodeCase(TreeCase):
     HEADER = "# Spec: skel/src/command.py.skel.md\n"
     BODY = ("class Command:\n    def apply(self): ...\n    def revert(self): ...\n"
             "    def merge_with(self, other): ...\n    def describe(self): ...\n")
+    STAMP_LINE = r"(?m)^stamp: source ([0-9a-f]{8}), stand-in ([0-9a-f]{8})$"
 
     def setUp(self):
         super().setUp()
         self.run_script(MV, "skel", COMMAND, self.UNIT)
         os.makedirs(self.path("src"))
-        self.write_code(self.HEADER + self.BODY)
+        self.write_code(self.BODY)
 
     def write_code(self, text, rel=None):
         with open(self.path(rel or self.CODE), "w", encoding="utf-8") as fh:
@@ -1347,61 +1349,91 @@ class CodeCase(TreeCase):
         with open(self.path(self.CODE), encoding="utf-8") as fh:
             return fh.read()
 
+    def read_unit(self, rel=None):
+        with open(self.path(rel or self.UNIT), encoding="utf-8") as fh:
+            return fh.read()
+
+    def stamp_of(self, rel=None):
+        """(source hash, stand-in hash) written in the stand-in, or None."""
+        m = re.search(self.STAMP_LINE, self.read_unit(rel))
+        return m.groups() if m else None
+
     def stamp(self, *args):
         return self.run_script(CHECK, "stamp", "skel", "--root", ".", *args)
 
 
 class Stamp(CodeCase):
-    STAMPED = r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\n"
-
-    def test_stamp_adds_a_hash_to_the_header(self):
+    def test_stamp_writes_both_hashes_into_the_stand_in_and_leaves_the_code_alone(self):
         code, out = self.stamp(self.CODE)
         self.assertEqual(code, 0, out)
-        self.assertRegex(self.read_code(), self.STAMPED)
-        self.assertTrue(self.read_code().endswith(self.BODY))
+        source, stand_in = self.stamp_of()
+        self.assertEqual(source, hashlib.sha256(self.BODY.encode()).hexdigest()[:8])
+        self.assertIn(f"stamped src/command.py: source {source}, stand-in {stand_in}", out)
+        self.assertEqual(self.read_code(), self.BODY)
+
+    def test_the_stamp_goes_in_the_front_matter(self):
+        self.stamp(self.CODE)
+        self.assertTrue(self.read_unit().startswith("---\nrole: product\nstamp: source "), self.read_unit()[:80])
+
+    def test_stamping_twice_is_current_because_the_stamp_is_not_part_of_its_own_hash(self):
+        self.stamp(self.CODE)
+        first = self.read_unit()
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+        self.assertEqual(self.read_unit(), first)
+
+    def test_a_restamp_replaces_the_line_in_place(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("1 stamped, 0 already current", out)
+        self.assertEqual(self.read_unit().count("stamp: "), 1)
+
+    def test_a_stand_in_without_front_matter_gets_a_block(self):
+        self.front(self.UNIT)
+        self.stamp(self.CODE)
+        self.assertRegex(self.read_unit(), r"^---\nstamp: source [0-9a-f]{8}, stand-in [0-9a-f]{8}\n---\n")
+
+    def test_review_a_stand_in_given_a_new_block_is_current_at_once(self):
+        self.front(self.UNIT)
+        self.stamp(self.CODE)
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+        _, status = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.assertIn("Implemented (1):\n  src/command.py\n", status)
+
+    def test_review_an_unclosed_front_matter_is_refused_not_doubled(self):
+        self.replace(self.UNIT, FRONT, "---\nrole: product\n")
+        before = self.read_unit()
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("skel/src/command.py.skel.md: front matter opens with `---` and is not closed; fix it by hand", out)
+        self.assertEqual(self.read_unit(), before)
 
     def test_stamp_needs_paths_or_all(self):
         code, out = self.stamp()
         self.assertNotEqual(code, 0)
         self.assertIn("stamp needs the implemented files to stamp, or --all", out)
 
-    def test_stamp_keeps_the_rest_of_the_header_line(self):
-        self.write_code("/* Spec: skel/src/command.py.skel.md */\n" + self.BODY)
-        self.stamp(self.CODE)
-        self.assertRegex(self.read_code(), r"^/\* Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8} \*/\n")
-
-    def test_stamp_replaces_an_old_hash_and_then_reports_it_current(self):
-        self.write_code("# Spec: skel/src/command.py.skel.md @ 00000000\n" + self.BODY)
-        _, first = self.stamp(self.CODE)
-        self.assertIn("stamped src/command.py @ ", first)
-        self.assertNotIn("@ 00000000", self.read_code())
-        _, second = self.stamp(self.CODE)
-        self.assertIn("0 stamped, 1 already current", second)
-
-    def test_named_file_without_a_header_fails(self):
-        self.write_code(self.BODY)
+    def test_a_missing_file_is_refused_when_named_and_skipped_by_all(self):
+        os.remove(self.path(self.CODE))
         code, out = self.stamp(self.CODE)
         self.assertEqual(code, 1, out)
-        self.assertIn("src/command.py: no `Spec: skel/src/command.py.skel.md` header in its first 10 lines", out)
-        self.assertEqual(self.read_code(), self.BODY)
-
-    def test_header_past_the_tenth_line_is_not_found(self):
-        self.write_code("\n" * 10 + self.HEADER + self.BODY)
-        code, out = self.stamp(self.CODE)
-        self.assertEqual(code, 1, out)
-        self.assertIn("no `Spec: skel/src/command.py.skel.md` header", out)
-
-    def test_all_reports_a_file_without_a_header_and_still_succeeds(self):
-        self.write_code(self.BODY)
+        self.assertIn("src/command.py: not implemented yet", out)
         code, out = self.stamp("--all")
         self.assertEqual(code, 0, out)
-        self.assertIn("src/command.py: no `Spec: skel/src/command.py.skel.md` header", out)
+        self.assertIsNone(self.stamp_of())
 
     def test_path_with_no_stand_in_fails(self):
         self.write_code("# anything\n", rel="src/orphan.py")
         code, out = self.stamp("src/orphan.py")
         self.assertEqual(code, 1, out)
         self.assertIn("src/orphan.py: no stand-in in this tree", out)
+
+    def test_paths_and_all_together_are_refused(self):
+        code, out = self.stamp("--all", self.CODE)
+        self.assertNotEqual(code, 0)
+        self.assertIn("give the files to stamp or --all, not both", out)
 
     def test_new_backlink_does_not_change_the_hash(self):
         self.stamp(self.CODE)
@@ -1415,13 +1447,29 @@ class Stamp(CodeCase):
         _, out = self.stamp(self.CODE)
         self.assertIn("0 stamped, 1 already current", out)
 
-    def test_changed_contract_changes_the_hash(self):
+    def test_changed_contract_changes_the_stand_in_hash(self):
         self.stamp(self.CODE)
-        before = self.read_code()
+        before = self.stamp_of()
         self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
         _, out = self.stamp(self.CODE)
         self.assertIn("1 stamped, 0 already current", out)
-        self.assertNotEqual(self.read_code(), before)
+        self.assertEqual(self.stamp_of()[0], before[0])
+        self.assertNotEqual(self.stamp_of()[1], before[1])
+
+    def test_changed_code_changes_the_source_hash(self):
+        self.stamp(self.CODE)
+        before = self.stamp_of()
+        self.write_code(self.BODY + "# more\n")
+        self.stamp(self.CODE)
+        self.assertNotEqual(self.stamp_of()[0], before[0])
+        self.assertEqual(self.stamp_of()[1], before[1])
+
+    def test_reformatting_the_code_changes_the_source_hash(self):
+        self.stamp(self.CODE)
+        before = self.stamp_of()
+        self.write_code(self.BODY.replace("    ", "  "))
+        self.stamp(self.CODE)
+        self.assertNotEqual(self.stamp_of()[0], before[0])
 
     BLOCK = ("- **Referred by:**\n"
              "  - [Transaction](./undo/transaction.code.skel.md#class-transaction)\n"
@@ -1453,79 +1501,84 @@ class Stamp(CodeCase):
         _, out = self.stamp(self.CODE)
         self.assertIn("1 stamped, 0 already current", out)
 
-    def raw(self, data=None):
+    def test_a_stamp_looking_line_outside_the_front_matter_counts(self):
+        self.stamp(self.CODE)
+        self.replace(self.UNIT, "## class: Command\n", "## class: Command\n\nstamp: source 00000000, stand-in 00000000\n")
+        _, out = self.stamp(self.CODE)
+        self.assertIn("1 stamped, 0 already current", out)
+
+    def unit_bytes(self, data=None):
         if data is None:
-            with open(self.path(self.CODE), "rb") as fh:
+            with open(self.path(self.UNIT), "rb") as fh:
                 return fh.read()
-        with open(self.path(self.CODE), "wb") as fh:
+        with open(self.path(self.UNIT), "wb") as fh:
             fh.write(data)
 
-    def test_stamp_keeps_carriage_returns(self):
-        self.raw(b"# Spec: skel/src/command.py.skel.md\r\nclass Command:\r\n    pass\r\n")
-        self.stamp(self.CODE)
-        data = self.raw()
-        self.assertRegex(data, rb"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\r\nclass Command:\r\n    pass\r\n$")
-
-    def test_stamp_keeps_a_missing_final_newline_and_other_bytes(self):
-        self.raw(b"# Spec: skel/src/command.py.skel.md\n# \xa9 someone\nclass Command: ...")
+    def test_the_stand_in_keeps_carriage_returns_and_every_other_byte(self):
+        crlf = self.unit_bytes().replace(b"\n", b"\r\n") + b"# \xc2\xa9 someone"
+        self.unit_bytes(crlf)
         code, out = self.stamp(self.CODE)
         self.assertEqual(code, 0, out)
-        self.assertTrue(self.raw().endswith(b"\n# \xa9 someone\nclass Command: ..."))
+        data = self.unit_bytes()
+        self.assertRegex(data, rb"^---\r\nrole: product\r\nstamp: source [0-9a-f]{8}, stand-in [0-9a-f]{8}\r\n---\r\n")
+        self.assertEqual(re.sub(rb"stamp: [^\r]*\r\n", b"", data), crlf)
 
-    def test_header_on_the_tenth_line_is_found_and_rewritten_there(self):
-        self.write_code("#\n" * 9 + self.HEADER + self.BODY)
-        code, out = self.stamp(self.CODE)
-        self.assertEqual(code, 0, out)
-        lines = self.read_code().splitlines()
-        self.assertEqual(lines[0], "#")
-        self.assertRegex(lines[9], r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}$")
-
-    def test_only_the_first_spec_on_the_line_is_stamped(self):
-        self.write_code("# Spec: skel/src/command.py.skel.md (not Spec: skel/other.skel.md)\n" + self.BODY)
+    def test_a_byte_order_mark_is_kept(self):
+        self.unit_bytes(b"\xef\xbb\xbf" + self.unit_bytes())
         self.stamp(self.CODE)
-        self.assertRegex(self.read_code(),
-                         r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8} \(not Spec: skel/other\.skel\.md\)\n")
+        self.assertTrue(self.unit_bytes().startswith(b"\xef\xbb\xbf---\nrole: product\nstamp: source "))
 
-    def test_header_naming_another_stand_in_is_not_stamped(self):
-        text = "# Spec: skel/src/other.py.skel.md\n" + self.BODY
-        self.write_code(text)
+    def test_data_and_infrastructure_files_are_stamped_too(self):
+        self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
+        os.makedirs(self.path("infra"))
+        self.write_code("resource {}\n", rel="infra/main.tf")
+        code, out = self.stamp("infra/main.tf")
+        self.assertEqual(code, 0, out)
+        self.assertIsNotNone(self.stamp_of("skel/infra/main.tf.skel.md"))
+        self.assertEqual(open(self.path("infra/main.tf"), encoding="utf-8").read(), "resource {}\n")
+
+    def test_a_generated_stand_in_is_never_stamped(self):
+        self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
+                     "- **Owns:** the `Command` contract.\n- **Source:** generated by a tool\n")
         code, out = self.stamp(self.CODE)
         self.assertEqual(code, 1, out)
-        self.assertIn("src/command.py: its Spec: header names skel/src/other.py.skel.md, "
-                      "not skel/src/command.py.skel.md", out)
-        self.assertEqual(self.read_code(), text)
+        self.assertIn("src/command.py: generated and abstract stand-ins are not stamped", out)
+        self.stamp("--all")
+        self.assertIsNone(self.stamp_of())
 
-    def test_over_long_or_upper_case_hash_is_replaced_whole(self):
-        self.write_code("# Spec: skel/src/command.py.skel.md @ ABCDEF123\n" + self.BODY)
+    def test_an_old_spec_header_is_not_touched_by_stamp(self):
+        self.write_code(self.HEADER + self.BODY)
         self.stamp(self.CODE)
-        self.assertRegex(self.read_code(), r"^# Spec: skel/src/command\.py\.skel\.md @ [0-9a-f]{8}\n")
+        self.assertEqual(self.read_code(), self.HEADER + self.BODY)
 
-    def test_read_only_file_is_reported_not_a_crash(self):
-        os.chmod(self.path(self.CODE), 0o444)
-        self.addCleanup(os.chmod, self.path(self.CODE), 0o644)
-        if os.access(self.path(self.CODE), os.W_OK):
+    def test_read_only_stand_in_is_reported_not_a_crash(self):
+        os.chmod(self.path(self.UNIT), 0o444)
+        self.addCleanup(os.chmod, self.path(self.UNIT), 0o644)
+        if os.access(self.path(self.UNIT), os.W_OK):
             self.skipTest("running as a user who can write read-only files")
         code, out = self.stamp(self.CODE)
         self.assertEqual(code, 1, out)
-        self.assertIn("src/command.py: cannot be rewritten", out)
+        self.assertIn("skel/src/command.py.skel.md: cannot be rewritten", out)
         self.assertNotIn("Traceback", out)
 
-    def test_paths_and_all_together_are_refused(self):
-        code, out = self.stamp("--all", self.CODE)
-        self.assertNotEqual(code, 0)
-        self.assertIn("give the files to stamp or --all, not both", out)
 
-    def test_non_code_file_is_never_stamped(self):
-        self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
-        os.makedirs(self.path("infra"))
-        text = "# Spec: skel/infra/main.tf.skel.md\n"
-        self.write_code(text, rel="infra/main.tf")
-        code, out = self.stamp("infra/main.tf")
-        self.assertEqual(code, 1, out)
-        self.assertIn("infra/main.tf: only code stand-ins that are not generated carry a stamp", out)
-        self.stamp("--all")
-        with open(self.path("infra/main.tf"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), text)
+class StampCheck(CodeCase):
+    def test_a_written_stamp_passes_check(self):
+        self.stamp(self.CODE)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_malformed_stamp_is_an_error(self):
+        self.front(self.UNIT, "role: product", "stamp: source abc, stand-in 1234")
+        self.assertCheckFails("`stamp:` must read `source <8 hex digits>, stand-in <8 hex digits>`")
+
+    def test_a_stamp_on_a_generated_stand_in_is_a_warning(self):
+        self.front(self.UNIT, "role: product", "stamp: source 00000000, stand-in 00000000")
+        self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
+                     "- **Owns:** the `Command` contract.\n- **Source:** generated by a tool\n")
+        code, out = self.check()
+        self.assertIn("warning", out)
+        self.assertIn("`stamp:` on a generated or abstract stand-in", out)
 
 
 class Status(CodeCase):
@@ -1549,8 +1602,8 @@ class Status(CodeCase):
 
     def test_stamped_file_is_implemented(self):
         self.assertEqual(self.section("Implemented"), ("Implemented (1):", ["src/command.py"]))
-        self.assertEqual(self.section("Stale")[1], [])
-        self.assertEqual(self.section("Unstamped")[1], [])
+        for group in ("Stale", "Edited", "Diverged", "Unstamped", "Legacy"):
+            self.assertEqual(self.section(group)[1], [], group)
 
     def test_missing_concrete_file_is_pending(self):
         self.assertEqual(self.section("Pending"), ("Pending (1):", ["src/transaction.py"]))
@@ -1566,8 +1619,26 @@ class Status(CodeCase):
     def test_changed_stand_in_makes_its_code_stale(self):
         self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
         self.assertEqual(self.section("Stale"),
-                         ("Stale, stand-in changed since stamped (1):", ["src/command.py"]))
+                         ("Stale, stand-in changed since stamped: update the file (1):", ["src/command.py"]))
         self.assertEqual(self.section("Implemented")[1], [])
+
+    def test_changed_code_makes_its_stand_in_edited(self):
+        self.write_code(self.BODY + "    def extra(self): ...\n")
+        self.assertEqual(self.section("Edited"),
+                         ("Edited, file changed since stamped: update the stand-in (1):", ["src/command.py"]))
+        self.assertEqual(self.section("Implemented")[1], [])
+
+    def test_both_changed_is_diverged(self):
+        self.write_code(self.BODY + "    def extra(self): ...\n")
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        self.assertEqual(self.section("Diverged"),
+                         ("Diverged, both changed since stamped: reconcile (1):", ["src/command.py"]))
+
+    def test_restamping_brings_each_back_to_implemented(self):
+        self.write_code(self.BODY + "    def extra(self): ...\n")
+        self.replace(self.UNIT, "- **Returns:** success or failure.", "- **Returns:** nothing.")
+        self.stamp(self.CODE)
+        self.assertEqual(self.section("Implemented")[1], ["src/command.py"])
 
     def test_new_backlink_does_not_make_code_stale(self):
         self.append(self.UNIT, "- **Referred by:** none known\n")
@@ -1577,31 +1648,37 @@ class Status(CodeCase):
         self.replace(self.UNIT, "## class: Command\n", "## class: Command   \n\n\n")
         self.assertEqual(self.section("Stale")[1], [])
 
-    def test_file_without_a_header_is_unstamped(self):
-        self.write_code(self.BODY)
-        self.assertEqual(self.section("Unstamped"), ("Unstamped (1):", ["src/command.py  (no Spec: header)"]))
+    def test_rewrapped_stand_in_does_not_make_code_stale(self):
+        self.replace(self.UNIT, "- **Required:** always.", "- **Required:**\n    always.")
+        self.assertEqual(self.section("Stale")[1], [])
 
-    def test_header_without_a_hash_is_unstamped(self):
+    def test_a_stand_in_without_a_stamp_is_unstamped(self):
+        self.replace(self.UNIT, re.search(r"stamp: [^\n]*\n", self.read_unit()).group(), "")
+        self.assertEqual(self.section("Unstamped"), ("Unstamped (1):", ["src/command.py"]))
+
+    def test_an_old_spec_header_without_a_stamp_is_legacy(self):
+        self.replace(self.UNIT, re.search(r"stamp: [^\n]*\n", self.read_unit()).group(), "")
         self.write_code(self.HEADER + self.BODY)
-        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no hash; run stamp)"])
+        self.assertEqual(self.section("Legacy"), ("Legacy Spec: header, run stamp --migrate (1):",
+                                                  ["src/command.py  (old Spec: header; run stamp --migrate)"]))
 
-    def test_header_naming_another_stand_in_is_unstamped(self):
+    def test_a_header_naming_another_stand_in_is_just_unstamped(self):
+        self.replace(self.UNIT, re.search(r"stamp: [^\n]*\n", self.read_unit()).group(), "")
         self.write_code("# Spec: skel/src/other.py.skel.md @ 00000000\n" + self.BODY)
-        self.assertEqual(self.section("Unstamped")[1],
-                         ["src/command.py  (Spec: header names skel/src/other.py.skel.md)"])
+        self.assertEqual(self.section("Unstamped")[1], ["src/command.py"])
 
     def test_all_names_present_lists_nothing(self):
         self.assertEqual(self.section("Names not found in code"), ("Names not found in code (0):", []))
 
     def test_names_missing_from_the_code_are_listed(self):
-        self.write_code(self.HEADER + "class Command:\n    def apply(self): ...\n")
+        self.write_code("class Command:\n    def apply(self): ...\n")
         self.assertEqual(self.section("Names not found in code"),
                          ("Names not found in code (3):",
                           ["src/command.py: function revert", "src/command.py: function merge_with",
                            "src/command.py: function describe"]))
 
     def test_a_name_inside_a_longer_identifier_does_not_count(self):
-        self.write_code(self.HEADER + "class Command:\n    def reapply(self): ...\n    def revert(self): ...\n"
+        self.write_code("class Command:\n    def reapply(self): ...\n    def revert(self): ...\n"
                         "    def merge_with(self, o): ...\n    def describe_all(self): ...\n")
         self.assertEqual(self.section("Names not found in code")[1],
                          ["src/command.py: function apply", "src/command.py: function describe"])
@@ -1613,38 +1690,45 @@ class Status(CodeCase):
         self.assertEqual(self.section("Implemented")[1], ["src/command.py  (generated)"])
         self.assertEqual(self.section("Names not found in code")[1], [])
 
-    def test_data_file_is_implemented_without_a_stamp(self):
+    def test_data_file_needs_a_stamp_now(self):
+        self.run_script(MV, "skel", SNAPSHOT, "skel/data/history.json.skel.md")
+        self.replace("skel/data/history.json.skel.md", "- **Source:** generated, written at runtime",
+                     "- **Source:** hand-written seed data, read at runtime")
+        os.makedirs(self.path("data"))
+        self.write_code("{}\n", rel="data/history.json")
+        self.assertIn("data/history.json", self.section("Unstamped")[1])
+        self.stamp("data/history.json")
+        self.assertIn("data/history.json", self.section("Implemented")[1])
+
+    def test_a_generated_data_file_is_implemented_without_a_stamp(self):
         self.run_script(MV, "skel", SNAPSHOT, "skel/data/history.json.skel.md")
         os.makedirs(self.path("data"))
         self.write_code("{}\n", rel="data/history.json")
-        self.assertIn("data/history.json", self.section("Implemented")[1])
+        self.assertIn("data/history.json  (generated)", self.section("Implemented")[1])
 
-    def test_header_on_line_ten_counts_and_on_line_eleven_does_not(self):
-        self.write_code("#\n" * 9 + self.HEADER + self.BODY)
-        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no hash; run stamp)"])
-        self.write_code("#\n" * 10 + self.HEADER + self.BODY)
-        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
-
-    def test_rewrapped_stand_in_does_not_make_code_stale(self):
-        self.replace(self.UNIT, "- **Required:** always.", "- **Required:**\n    always.")
-        self.assertEqual(self.section("Stale")[1], [])
-
-    def test_infrastructure_file_is_implemented_without_a_stamp(self):
+    def test_infrastructure_file_needs_a_stamp_now(self):
         self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
         os.makedirs(self.path("infra"))
         self.write_code("resource {}\n", rel="infra/main.tf")
+        self.assertIn("infra/main.tf", self.section("Unstamped")[1])
+        self.stamp("infra/main.tf")
         self.assertIn("infra/main.tf", self.section("Implemented")[1])
+
+    def test_names_are_checked_in_code_only(self):
+        self.run_script(MV, "skel", STORE, "skel/infra/main.tf.skel.md")
+        os.makedirs(self.path("infra"))
+        self.write_code("resource {}\n", rel="infra/main.tf")
+        self.stamp("infra/main.tf")
+        self.assertEqual(self.section("Names not found in code")[1], [])
 
     def test_source_field_that_only_mentions_generation_is_not_an_exemption(self):
         self.replace(self.UNIT, "- **Owns:** the `Command` contract.\n",
                      "- **Owns:** the `Command` contract.\n- **Source:** hand-written, never generated\n")
-        self.write_code("X = 1\n")
-        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
+        self.assertEqual(self.section("Stale")[1], ["src/command.py"])
 
     def test_source_generated_below_file_level_is_not_an_exemption(self):
         self.replace(self.UNIT, "### function: describe\n", "### function: describe\n\n- **Source:** generated ids\n")
-        self.write_code("X = 1\n")
-        self.assertEqual(self.section("Unstamped")[1], ["src/command.py  (no Spec: header)"])
+        self.assertEqual(self.section("Stale")[1], ["src/command.py"])
 
     def test_stale_primary_lists_the_rest_of_its_unit(self):
         member = "skel/src/command_impl.py.skel.md"
@@ -1672,6 +1756,7 @@ class Status(CodeCase):
     def test_non_utf8_bytes_do_not_stop_status(self):
         with open(self.path(self.CODE), "ab") as fh:
             fh.write(b"# \xa9 someone\n")
+        self.stamp(self.CODE)
         self.assertEqual(self.section("Implemented")[1], ["src/command.py"])
 
     def test_heading_with_a_signature_or_backticks_is_matched_by_its_name(self):
@@ -1685,10 +1770,154 @@ class Status(CodeCase):
 
     def test_missing_class_and_symbol_are_listed(self):
         self.append(self.UNIT, "\n## symbol: MAX_DEPTH\n\n- **Access:** public.\n")
-        self.write_code(self.HEADER + "def apply(): ...\ndef revert(): ...\ndef merge_with(): ...\ndef describe(): ...\n")
+        self.write_code("def apply(): ...\ndef revert(): ...\ndef merge_with(): ...\ndef describe(): ...\n")
         self.assertEqual(self.section("Names not found in code")[1],
                          ["src/command.py: class Command", "src/command.py: symbol MAX_DEPTH"])
 
+
+class Migrate(CodeCase):
+    """Old trees: a `Spec:` header in the code, holding the stand-in's hash."""
+
+    def stand_in_hash(self):
+        self.stamp(self.CODE)              # the stamp records the current stand-in hash; take it, then drop it
+        digest = self.stamp_of()[1]
+        self.replace(self.UNIT, re.search(r"stamp: [^\n]*\n", self.read_unit()).group(), "")
+        return digest
+
+    def migrate(self, *paths):
+        return self.stamp("--migrate", *paths)
+
+    def test_a_matching_header_moves_into_the_stand_in_and_leaves_the_code(self):
+        self.write_code(f"# Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY)
+        code, out = self.migrate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("migrated src/command.py: source ", out)
+        self.assertIn("1 migrated, 0 left", out)
+        self.assertEqual(self.read_code(), self.BODY)
+        self.assertEqual(self.stamp_of()[0], hashlib.sha256(self.BODY.encode()).hexdigest()[:8])
+        _, status = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.assertIn("Implemented (1):\n  src/command.py\n", status)
+
+    def test_removal_keeps_every_other_byte_and_carriage_returns(self):
+        body = self.BODY.replace("\n", "\r\n").encode() + b"# \xa9 someone"
+        with open(self.path(self.CODE), "wb") as fh:
+            fh.write(b"#!/usr/bin/env python3\r\n/* Spec: skel/src/command.py.skel.md @ "
+                     + self.stand_in_hash().encode() + b" */\r\n" + body)
+        code, out = self.migrate(self.CODE)
+        self.assertEqual(code, 0, out)
+        with open(self.path(self.CODE), "rb") as fh:
+            self.assertEqual(fh.read(), b"#!/usr/bin/env python3\r\n" + body)
+
+    def test_a_header_whose_hash_no_longer_matches_is_left(self):
+        text = "# Spec: skel/src/command.py.skel.md @ 00000000\n" + self.BODY
+        self.write_code(text)
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: its Spec: header no longer matches the stand-in; left", out)
+        self.assertEqual(self.read_code(), text)
+        self.assertIsNone(self.stamp_of())
+
+    def test_a_header_without_a_hash_is_left(self):
+        self.write_code(self.HEADER + self.BODY)
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: its Spec: header has no hash; left", out)
+
+    def test_a_header_naming_another_stand_in_is_left(self):
+        text = "# Spec: skel/src/other.py.skel.md @ 00000000\n" + self.BODY
+        self.write_code(text)
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: its Spec: header names skel/src/other.py.skel.md; left as it is", out)
+        self.assertEqual(self.read_code(), text)
+
+    def test_a_header_sharing_its_line_with_code_is_left(self):
+        text = f"X = 1  # Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY
+        self.write_code(text)
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: its Spec: header shares line 1 with code; left as it is", out)
+        self.assertEqual(self.read_code(), text)
+
+    def test_a_file_without_a_header_is_not_migrated_and_not_reported_unless_named(self):
+        code, out = self.migrate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 migrated, 0 left", out)
+        _, out = self.migrate(self.CODE)
+        self.assertIn("src/command.py: no Spec: header to migrate", out)
+
+    def test_review_a_header_opening_a_docstring_or_block_comment_is_left(self):
+        digest = self.stand_in_hash()
+        for opener, rest in (('"""Spec: skel/src/command.py.skel.md @ ' + digest, 'More text.\n"""\n'),
+                             ("/* Spec: skel/src/command.py.skel.md @ " + digest, " * more\n */\n")):
+            text = opener + "\n" + rest + self.BODY
+            self.write_code(text)
+            code, out = self.migrate()
+            self.assertEqual(code, 1, out)
+            self.assertIn("src/command.py: its Spec: header shares line 1 with code; left as it is", out)
+            self.assertEqual(self.read_code(), text)
+
+    def test_review_a_one_line_block_comment_header_is_removed(self):
+        self.write_code(f"<!-- Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()} -->\n" + self.BODY)
+        code, out = self.migrate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read_code(), self.BODY)
+
+    def test_review_a_read_only_stand_in_leaves_both_files_untouched(self):
+        text = f"# Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY
+        self.write_code(text)
+        os.chmod(self.path(self.UNIT), 0o444)
+        self.addCleanup(os.chmod, self.path(self.UNIT), 0o644)
+        if os.access(self.path(self.UNIT), os.W_OK):
+            self.skipTest("running as a user who can write read-only files")
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("skel/src/command.py.skel.md: cannot be rewritten", out)
+        self.assertEqual(self.read_code(), text)
+        self.assertIsNone(self.stamp_of())
+
+    def test_review_a_read_only_file_leaves_both_files_untouched(self):
+        text = f"# Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY
+        self.write_code(text)
+        unit = self.read_unit()
+        os.chmod(self.path(self.CODE), 0o444)
+        self.addCleanup(os.chmod, self.path(self.CODE), 0o644)
+        if os.access(self.path(self.CODE), os.W_OK):
+            self.skipTest("running as a user who can write read-only files")
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: cannot be rewritten", out)
+        self.assertEqual(self.read_code(), text)
+        self.assertEqual(self.read_unit(), unit)
+
+    def test_migrate_refuses_all(self):
+        code, out = self.stamp("--migrate", "--all")
+        self.assertNotEqual(code, 0)
+        self.assertIn("--migrate takes the files to migrate, or none for all; not --all", out)
+
+
+class StampDocs(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(SKILL, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_docs_describe_two_way_stamps_and_no_header_in_code(self):
+        impl = self.read("references", "implementing.md")
+        self.assertNotIn("add a one-line header comment", impl)
+        for phrase in ("stamp: source <hash>, stand-in <hash>", "**Stale**", "**Edited**", "**Diverged**", "--migrate"):
+            self.assertIn(phrase, impl, phrase)
+        self.assertIn("| `stamp` | no |", self.read("references", "grammar.md"))
+        skill = self.read("SKILL.md")
+        self.assertIn("--migrate", skill)
+        self.assertIn("stale / edited / diverged", skill)
+
+    def test_review_the_docs_warn_that_data_and_infrastructure_now_need_a_stamp(self):
+        impl = self.read("references", "implementing.md")
+        self.assertIn("nothing of yours under Stale, Edited, Diverged, Unstamped, Legacy, or Names not found in code", impl)
+        self.assertIn("Data and infrastructure files, which skel 2 counted as implemented once they existed, now show "
+                      "as Unstamped", impl)
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            self.assertIn("data and infrastructure files now need a stamp too", fh.read())
 
 
 class AgentNeutralPaths(unittest.TestCase):

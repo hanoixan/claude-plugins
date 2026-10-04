@@ -68,7 +68,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence, what it unlocks, and its proposal if it has one.
    2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
    3. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
-   4. **Code that now trails the plan:** the Stale group from `skel_check.py status skel --root .`. Leave this out when nothing is implemented yet.
+   4. **Files out of step with the plan:** the Stale, Edited and Diverged groups from `skel_check.py status skel --root .`. Leave this out when nothing is implemented yet.
 
    The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
 
@@ -91,8 +91,9 @@ All scripts use only the Python standard library.
 python3 "SKILL_DIR/scripts/skel_check.py" check SKEL_DIR [--lenient]   # grammar, traits, links, bidirectionality, SYSTEM.md links
 python3 "SKILL_DIR/scripts/skel_check.py" unknowns SKEL_DIR [--json]   # open decisions by kind, each once, with followers
 python3 "SKILL_DIR/scripts/skel_check.py" order SKEL_DIR [--json]      # dependency sort (not a build plan), cycles grouped
-python3 "SKILL_DIR/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / unstamped / pending / abstract; names missing from code
-python3 "SKILL_DIR/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record your claim that code matches its stand-in; checks nothing
+python3 "SKILL_DIR/scripts/skel_check.py" status SKEL_DIR --root .     # implemented / stale / edited / diverged / unstamped / legacy / pending / abstract; names missing from code
+python3 "SKILL_DIR/scripts/skel_check.py" stamp SKEL_DIR --root . PATH... | --all   # record in the stand-in that it and its file agree now; checks nothing
+python3 "SKILL_DIR/scripts/skel_check.py" stamp SKEL_DIR --root . --migrate [PATH...]   # move old `Spec:` header stamps into the stand-ins
 python3 "SKILL_DIR/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
 python3 "SKILL_DIR/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
 python3 "SKILL_DIR/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
