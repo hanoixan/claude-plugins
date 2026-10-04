@@ -277,3 +277,5 @@ Choices I made that were not given by you, to confirm during review:
 7. Advisory syllable and rhyme heuristics are English only.
 8. A stanza stays whole on a page only when it fits one.
 9. The byline is printed above an untitled poem.
+10. Found in the build and trials: the heading fields reach the PDF as Plain blocks (so a title like `1. Snow` is text, not a list); a stanza is kept whole on a page only when its measured height fits a page (the line count alone let a tall stanza overflow); the rhyme estimate joins the commonest alternative spellings of the oo and air sounds (you, through, few, queue; there, bare, chair) and still misses others and counts eye rhymes as rhymes.
+11. Known limits left in place: a stanza written `tercet, 5` shares one line spec across its repeats, so one enjambed line in it cannot be marked `run` (the `stop`-without-punctuation estimate fires); a refrain inside a `fresh` stanza cannot be written; `breaks flexible;` has effect only in a catalog entry; a huge stanza count is not capped.
