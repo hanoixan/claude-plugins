@@ -15,13 +15,14 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUESTION_RE = re.compile(r"^-\s+\[(required|deferrable)\]\s+([a-z0-9]+(?:-[a-z0-9]+)*):\s+(\S.*)$")
 TOP_KEYS = {"name", "files", "functions", "relations", "limits"}
-OPTIONAL_KEYS = {"title_page", "premise_keys"}    # title_page: a separate title page when published (default true)
+OPTIONAL_KEYS = {"title_page", "premise_keys", "publish", "lint_format"}    # title_page: a separate title page when published (default true)
 FUNCTION_KEYS = {"heading", "fields", "children", "prose", "required_when_realized", "sequence", "heading_field"}
 FILE_KEYS = {"path", "function", "order", "when", "family"}
 KEY_SETTINGS = {"type", "min", "max", "required"}
 KEY_TYPES = ("bool", "int")
 BOOL_WORDS = {"yes": True, "true": True, "no": False, "false": False}
-SCOPES = ("narration", "anywhere")
+LINT_FORMATS = ("prose", "fountain")
+SCOPES = {"prose": ("narration", "anywhere"), "fountain": ("action", "dialogue", "anywhere")}
 LINT_KEYS = ("id", "pattern", "label", "note", "scope", "positive", "negative")
 
 
@@ -72,6 +73,12 @@ def validate(data):
         raise ProfileError(f"profile.json has unknown key {extra[0]!r}")
     if not isinstance(data.get("title_page", True), bool):
         raise ProfileError("'title_page' must be true or false")
+    publish = data.get("publish")
+    if publish is not None and not (isinstance(publish, dict) and set(publish) == {"style"}
+                                    and isinstance(publish["style"], str) and NAME_RE.match(publish["style"])):
+        raise ProfileError("'publish' must be an object with only a 'style' name")
+    if data.get("lint_format", "prose") not in LINT_FORMATS:
+        raise ProfileError(f"'lint_format' must be one of {', '.join(LINT_FORMATS)}")
     if not (isinstance(data["name"], str) and NAME_RE.match(data["name"])):
         raise ProfileError("'name' must be lower-case letters, digits and hyphens")
     keys = data.get("premise_keys", {})
@@ -163,6 +170,8 @@ class Profile:
         self.limits = data["limits"]
         self.title_page = data.get("title_page", True)
         self.premise_keys = data.get("premise_keys", {})
+        self.publish_style = (data.get("publish") or {}).get("style")
+        self.lint_format = data.get("lint_format", "prose")
         self.questions = questions
         self.directory = directory
         self.options = {}              # resolved premise values; filled by set_premise
@@ -271,8 +280,9 @@ class Profile:
             if not NAME_RE.match(item["id"]) or item["id"] in seen:
                 raise ProfileError(f"lint item id '{item['id']}' must be unique lower-case words")
             seen.add(item["id"])
-            if item["scope"] not in SCOPES:
-                raise ProfileError(f"lint item '{item['id']}': scope must be one of {', '.join(SCOPES)}")
+            scopes = SCOPES[self.lint_format]
+            if item["scope"] not in scopes:
+                raise ProfileError(f"lint item '{item['id']}': scope must be one of {', '.join(scopes)}")
             try:
                 re.compile(item["pattern"])
             except re.error as exc:

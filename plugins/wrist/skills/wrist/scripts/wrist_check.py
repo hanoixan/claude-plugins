@@ -1171,7 +1171,7 @@ def cmd_lint(args):
         if not profile.functions[function]["prose"] or not os.path.isfile(impl):
             continue
         with open(impl, encoding="utf-8", errors="replace") as fh:
-            found = wrist_lint.lint_text(fh.read(), items)
+            found = wrist_lint.lint_text(fh.read(), items, profile.lint_format)
         for h in found:
             print(f"{path}:{h['line']}: [{h['id']}] {h['label']}: \"{h['text']}\" ({h['note']})")
         hits += len(found)
