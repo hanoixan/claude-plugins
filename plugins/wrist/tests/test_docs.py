@@ -6,7 +6,7 @@ import unittest
 from support import HERE, SKILL
 
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
-COMMANDS = ("check", "unknowns", "order", "status", "stamp", "fix-backlinks", "gate", "lint", "publish")
+COMMANDS = ("check", "unknowns", "order", "status", "stamp", "fix-backlinks", "gate", "lint", "verse", "publish")
 
 
 def text(*parts):
@@ -96,8 +96,42 @@ class SkillText(unittest.TestCase):
         for phrase in ("publish", "style", "lint_format", "fountain", "action", "dialogue"):
             self.assertIn(phrase, grammar, phrase)
 
-    def test_the_readme_lists_the_screenplay(self):
-        self.assertIn("`shortstory`, `novel` and `screenplay`", text(ROOT, "README.md"))
+    def test_the_readme_lists_the_four_profiles(self):
+        self.assertIn("`shortstory`, `novel`, `screenplay` and `poem` exist", text(ROOT, "README.md"))
+
+    def test_skill_covers_the_poem(self):
+        skill = text(SKILL, "SKILL.md")
+        for phrase in ("`poem`", "references/psg.md", "references/verse.md", "assets/templates/poem/", "titled:",
+                       "profiles/poem/forms/", "revise the line, not the skeleton", "deleting the last line",
+                       "Four profiles exist"):
+            self.assertIn(phrase, skill, phrase)
+        self.assertNotIn("not built yet", skill)
+
+    def test_every_poem_template_exists_and_the_skeleton_template_is_valid(self):
+        import wrist_verse
+        for name in ("PREMISE.md", "structure.wrist.md", "poem.wrist.md", "skeleton.md"):
+            self.assertTrue(os.path.isfile(os.path.join(SKILL, "assets", "templates", "poem", name)), name)
+        poem = wrist_verse.parse_poem(text(SKILL, "assets", "templates", "poem", "skeleton.md"))
+        self.assertEqual(wrist_verse.skeleton_problems(poem), [])
+
+    def test_the_grammar_reference_explains_the_form_setting(self):
+        grammar = text(SKILL, "references", "grammar.md")
+        for phrase in ("`form`", "psg.md", "verse.md", "`poem`"):
+            self.assertIn(phrase, grammar, phrase)
+
+    def test_the_psg_reference_covers_the_grammar_and_every_rule(self):
+        ref = text(SKILL, "references", "psg.md")
+        for phrase in ["refrain NAME at", "ends @list[k]", "fresh", "strict roles", "breaks flexible", "named",
+                       "syllables", "stress", "## What changed from PSGv2"] + [f"**R{n} " for n in range(13)]:
+            self.assertIn(phrase, ref, phrase)
+
+    def test_the_verse_reference_covers_the_format_and_the_command(self):
+        ref = text(SKILL, "references", "verse.md")
+        for phrase in ("titled: yes", "# Title", "half an em", "wrist_check.py verse", "estimate", "gate publishing"):
+            self.assertIn(phrase, ref, phrase)
+
+    def test_the_publishing_reference_describes_a_poem(self):
+        self.assertIn("## A poem", text(SKILL, "references", "publishing.md"))
 
 
 class Manifests(unittest.TestCase):

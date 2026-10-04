@@ -309,8 +309,7 @@ and `output/<slug>.epub` through pandoc and typst). Each phase is preceded by a 
 a gate.
 
 A profile is data: the file shape, the headings and required fields, the questions, the reference
-structures and a list of clichés to avoid. `shortstory`, `novel` and `screenplay` exist; the
-poem profile is planned.
+structures and a list of clichés to avoid. `shortstory`, `novel`, `screenplay` and `poem` exist.
 
 wrist needs `python3` for its scripts (standard library only) and, to publish, `pandoc` 3.2+ and
 `typst` 0.12+. A complete worked example is in
