@@ -6,8 +6,10 @@ Subcommands
   unknowns SKEL_DIR [--json]          list open decisions by kind, each once, with its followers
   order SKEL_DIR [--json]             implementation order (dependencies first; cycles grouped)
   batches SKEL_DIR [--json]           buildable batches of units; manifests are set aside
-  status SKEL_DIR --root PROJECT      implemented, stale, unstamped, pending, abstract; names missing from code
-  stamp SKEL_DIR --root PROJECT PATH... | --all   record in each file's Spec: header that it matches its stand-in
+  status SKEL_DIR --root PROJECT      implemented, stale, edited, diverged, unstamped, legacy, pending, abstract;
+                                      names missing from code
+  stamp SKEL_DIR --root PROJECT PATH... | --all   record in each stand-in that it and its file agree now
+  stamp SKEL_DIR --root PROJECT --migrate [PATH...]   move old `Spec:` header stamps into the stand-ins
   fix-backlinks SKEL_DIR [--write]    insert missing `Referred by:` lines (dry-run by default)
   infer-roles SKEL_DIR [--write]      propose role: and unit: front matter (dry-run by default)
 
@@ -61,7 +63,7 @@ CLAUSE_RE = re.compile(r"(?:^|(?<=[.!?;)`*]\s))\**(Kind|Proposed|Consequence|Unl
 KINDS = ("blocking", "local")
 ROLES = ("product", "test", "manifest")
 META_RE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*)$")
-FRONT_KEYS = ("kind", "role", "unit", "untested")
+FRONT_KEYS = ("kind", "role", "unit", "untested", "stamp")
 MANIFEST_NAMES = {"CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json", "Makefile", "makefile",
                   "GNUmakefile", "Justfile", "Rakefile", "Gemfile", "Gemfile.lock", "package.json",
                   "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json", "pyproject.toml",
@@ -81,6 +83,7 @@ SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
 HEADER_EXT = {"h", "hh", "hpp", "hxx"}
 SPEC_RE = re.compile(r"Spec:\s*(\S+?\.skel\.md)(?:\s*@\s*([0-9A-Fa-f]+)\b)?")
 SPEC_LINES = 10
+STAMP_RE = re.compile(r"^source ([0-9A-Fa-f]{8}), stand-in ([0-9A-Fa-f]{8})$")
 
 LEVEL_FIELDS = {
     "module": ["Owns", "Access"],
@@ -385,6 +388,12 @@ def validate_file(sf, lenient):
             sf.err(ln, "`untested:` is only for `role: product` stand-ins")
         elif not reason:
             sf.err(ln, "`untested:` needs a reason")
+    if "stamp" in sf.meta:
+        ln, value = sf.meta["stamp"]
+        if not STAMP_RE.match(value):
+            sf.err(ln, "`stamp:` must read `source <8 hex digits>, stand-in <8 hex digits>`; `stamp` writes it")
+        elif not stampable(sf):
+            sf.warn(ln, "`stamp:` on a generated or abstract stand-in, which is never stamped")
     # naming
     if not sf.ext and sf.base not in EXTLESS:
         sf.err(1, f"stand-in name must be <file>.<ext>{SKEL_SUFFIX} (got '{sf.base}{SKEL_SUFFIX}')")
@@ -872,7 +881,11 @@ def stand_in_hash(sf):
     """Eight hex digits over the stand-in's words. Backlinks are left out, and so is how the text
     is wrapped, indented or spaced, so only a change to what it says moves the hash."""
     kept, in_backlinks, fence = [], False, None
-    for line in sf.lines:
+    close = front_matter_end(sf.lines)
+    for idx, line in enumerate(sf.lines):
+        meta = META_RE.match(line) if 0 < idx < close else None
+        if meta and meta.group(1).lower() == "stamp":      # the stamp records this hash, so it is not part of it
+            continue
         fm = FENCE_RE.match(line)
         if fence:                                   # fenced text is content, whatever it looks like
             if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence) and not fm.group(2).strip():
@@ -904,9 +917,52 @@ def is_generated(sf):
     return any(value.strip().lower().startswith("generated") for _, value in sources)
 
 
-def drift_checked(sf):
-    """Stamps and name checks apply to code stand-ins that a person or agent writes."""
+def stampable(sf):
+    """Every stand-in whose file a person or agent writes carries a stamp: code, data and infrastructure.
+    Generated files and abstract stand-ins do not."""
+    return not sf.abstract and not is_generated(sf)
+
+
+def names_checked(sf):
+    """Names are looked for in code stand-ins that a person or agent writes."""
     return sf.kind == "code" and not is_generated(sf)
+
+
+def source_hash(path):
+    """Eight hex digits over the file's exact bytes."""
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:8]
+
+
+def read_stamp(sf):
+    """(source hash, stand-in hash) from the stand-in's `stamp:` line, or None when it has no valid one."""
+    m = STAMP_RE.match(sf.meta.get("stamp", (0, ""))[1])
+    return (m.group(1).lower(), m.group(2).lower()) if m else None
+
+
+def write_stamp(sf, source, stand_in):
+    """Write or replace the stand-in's `stamp:` line. Every other byte and line ending is kept; a stand-in
+    with no front matter gets a block at the top."""
+    with open(sf.path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        text = fh.read()
+    bom = "\ufeff" if text.startswith("\ufeff") else ""
+    lines = text[len(bom):].splitlines(True)
+    eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    stamp = f"stamp: source {source}, stand-in {stand_in}"
+    close = front_matter_end([l.rstrip("\r\n") for l in lines])
+    for idx in range(1, max(close, 0)):
+        m = META_RE.match(lines[idx])
+        if m and m.group(1).lower() == "stamp":
+            ending = lines[idx][len(lines[idx].rstrip("\r\n")):]
+            lines[idx] = stamp + ending
+            break
+    else:
+        if close > 0:
+            lines.insert(close, stamp + eol)
+        else:
+            lines[0:0] = ["---" + eol, stamp + eol, "---" + eol]
+    with open(sf.path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        fh.write(bom + "".join(lines))
 
 
 def spec_path(sf, root):
@@ -927,15 +983,21 @@ def read_spec_header(path):
 
 
 def stamp_state(sf, impl, root):
-    """('implemented' | 'stale' | 'unstamped', reason or None) for an implemented code file."""
-    header = read_spec_header(impl)
-    if header is None:
-        return "unstamped", "no Spec: header"
-    if header[0] != spec_path(sf, root):
-        return "unstamped", f"Spec: header names {header[0]}"
-    if header[1] is None:
-        return "unstamped", "no hash; run stamp"
-    return ("implemented" if header[1].lower() == stand_in_hash(sf) else "stale"), None
+    """(group, reason or None) for a stampable stand-in whose file exists: implemented, stale (the stand-in
+    changed), edited (the file changed), diverged (both), unstamped, or legacy (an old `Spec:` header)."""
+    stamp = read_stamp(sf)
+    if stamp is None:
+        header = read_spec_header(impl)
+        if header is not None and header[0] == spec_path(sf, root):
+            return "legacy", "old Spec: header; run stamp --migrate"
+        return "unstamped", None
+    source_same = source_hash(impl) == stamp[0]
+    stand_in_same = stand_in_hash(sf) == stamp[1]
+    if source_same and stand_in_same:
+        return "implemented", None
+    if source_same:
+        return "stale", None
+    return ("edited" if stand_in_same else "diverged"), None
 
 
 def heading_name(sec):
@@ -960,6 +1022,10 @@ def missing_names(sf, impl):
 def cmd_stamp(args):
     skel_root, files = load_tree(args.skel_dir)
     root = os.path.abspath(args.root)
+    if args.migrate:
+        if args.all:
+            sys.exit("--migrate takes the files to migrate, or none for all; not --all")
+        return migrate(files, root, args.paths)
     if not args.paths and not args.all:
         sys.exit("stamp needs the implemented files to stamp, or --all")
     if args.paths and args.all:
@@ -974,39 +1040,85 @@ def cmd_stamp(args):
             print(f"{shown}: no stand-in in this tree")
             failed += 1
             continue
-        if not os.path.exists(impl) or not drift_checked(sf):
+        if not os.path.exists(impl) or not stampable(sf):
             if not args.all:
                 reason = "not implemented yet" if not os.path.exists(impl) else \
-                    "only code stand-ins that are not generated carry a stamp"
+                    "generated and abstract stand-ins are not stamped"
                 print(f"{shown}: {reason}")
                 failed += 1
             continue
-        want, header = spec_path(sf, root), read_spec_header(impl)
-        if header is None or header[0] != want:
-            if header is None:
-                print(f"{shown}: no `Spec: {want}` header in its first {SPEC_LINES} lines")
-            else:
-                print(f"{shown}: its Spec: header names {header[0]}, not {want}")
-            failed += not args.all
-            continue
-        digest = stand_in_hash(sf)
-        if (header[1] or "").lower() == digest:
-            current += 1
-            continue
-        try:    # bytes and line endings outside the header line are written back exactly as read
-            with open(impl, encoding="utf-8", errors="surrogateescape", newline="") as fh:
-                lines = fh.readlines()
-            lines[header[2]] = SPEC_RE.sub(lambda m: f"Spec: {m.group(1)} @ {digest}", lines[header[2]], count=1)
-            with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
-                fh.writelines(lines)
+        try:
+            stamp = (source_hash(impl), stand_in_hash(sf))
         except OSError as exc:
-            print(f"{shown}: cannot be rewritten ({exc.strerror})")
+            print(f"{shown}: cannot be read ({exc.strerror})")
             failed += 1
             continue
-        print(f"stamped {shown} @ {digest}")
+        if read_stamp(sf) == stamp:
+            current += 1
+            continue
+        try:
+            write_stamp(sf, *stamp)
+        except OSError as exc:
+            print(f"{os.path.relpath(sf.path, root)}: cannot be rewritten ({exc.strerror})")
+            failed += 1
+            continue
+        print(f"stamped {shown}: source {stamp[0]}, stand-in {stamp[1]}")
         stamped += 1
     print(f"\n{stamped} stamped, {current} already current")
     return 1 if failed else 0
+
+
+def migrate(files, root, paths):
+    """Move each old `Spec:` header stamp that still matches its stand-in into the stand-in, and delete the
+    header line from the file. Anything else is reported and left for a person to settle."""
+    by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
+    targets = [os.path.normpath(os.path.abspath(p)) for p in paths] if paths else sorted(by_impl)
+    migrated = left = 0
+    for impl in targets:
+        shown = os.path.relpath(impl, root)
+        sf = by_impl.get(impl)
+        if sf is None:
+            print(f"{shown}: no stand-in in this tree")
+            left += 1
+            continue
+        if not os.path.isfile(impl) or not stampable(sf):
+            continue
+        header = read_spec_header(impl)
+        if header is None:
+            if paths:
+                print(f"{shown}: no Spec: header to migrate")
+            continue
+        if header[0] != spec_path(sf, root):
+            print(f"{shown}: its Spec: header names {header[0]}; left as it is")
+            left += 1
+            continue
+        if not header[1] or header[1].lower() != stand_in_hash(sf):
+            state = "has no hash" if not header[1] else "no longer matches the stand-in"
+            print(f"{shown}: its Spec: header {state}; left. Settle the file and the stand-in, then remove "
+                  f"the header and run stamp")
+            left += 1
+            continue
+        try:
+            with open(impl, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                lines = fh.readlines()
+            rest = SPEC_RE.sub("", lines[header[2]], count=1)
+            if re.search(r"[A-Za-z0-9]", rest):
+                print(f"{shown}: its Spec: header shares line {header[2] + 1} with code; left as it is")
+                left += 1
+                continue
+            del lines[header[2]]
+            with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.writelines(lines)
+            stamp = (source_hash(impl), stand_in_hash(sf))
+            write_stamp(sf, *stamp)
+        except OSError as exc:
+            print(f"{shown}: cannot be rewritten ({exc.strerror})")
+            left += 1
+            continue
+        print(f"migrated {shown}: source {stamp[0]}, stand-in {stamp[1]}")
+        migrated += 1
+    print(f"\n{migrated} migrated, {left} left")
+    return 1 if left else 0
 
 
 def cmd_batches(args):
@@ -1081,7 +1193,8 @@ IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "target
 def cmd_status(args):
     skel_root, files = load_tree(args.skel_dir)
     root = os.path.abspath(args.root)
-    groups = {"implemented": [], "stale": [], "unstamped": [], "pending": [], "abstract": []}
+    groups = {"implemented": [], "stale": [], "edited": [], "diverged": [], "unstamped": [], "legacy": [],
+              "pending": [], "abstract": []}
     missing, specified = [], set()
     members = unit_members(files, resolve_units(files, report=False))
     for sf in sorted(files.values(), key=lambda f: f.rel):
@@ -1092,15 +1205,16 @@ def cmd_status(args):
             groups["abstract" if sf.abstract else "pending"].append(f"{sf.impl_rel}{unk}")
         elif not (os.path.isfile(impl) and os.access(impl, os.R_OK)):
             groups["unstamped"].append(f"{sf.impl_rel}  (cannot be read)")
-        elif not drift_checked(sf):
-            groups["implemented"].append(f"{sf.impl_rel}  (generated)" if sf.kind == "code" else sf.impl_rel)
+        elif not stampable(sf):
+            groups["implemented"].append(f"{sf.impl_rel}  (generated)")
         else:
             group, reason = stamp_state(sf, impl, root)
             rest = [m.impl_rel for m in members.get(sf.path, [])[1:]]
             if group == "stale" and rest:       # a stale primary puts its whole unit on the work list
                 reason = "unit: also " + ", ".join(rest)
             groups[group].append(f"{sf.impl_rel}  ({reason})" if reason else sf.impl_rel)
-            missing.extend(f"{sf.impl_rel}: {name}" for name in missing_names(sf, impl))
+            if names_checked(sf):
+                missing.extend(f"{sf.impl_rel}: {name}" for name in missing_names(sf, impl))
     unspecified = []
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in IGNORE_DIRS and not d.startswith(".")
@@ -1112,8 +1226,11 @@ def cmd_status(args):
                 if p not in specified:
                     unspecified.append(os.path.relpath(p, root))
     listing = [("Implemented", groups["implemented"]),
-               ("Stale, stand-in changed since stamped", groups["stale"]),
+               ("Stale, stand-in changed since stamped: update the file", groups["stale"]),
+               ("Edited, file changed since stamped: update the stand-in", groups["edited"]),
+               ("Diverged, both changed since stamped: reconcile", groups["diverged"]),
                ("Unstamped", groups["unstamped"]),
+               ("Legacy Spec: header, run stamp --migrate", groups["legacy"]),
                ("Pending", groups["pending"]),
                ("Abstract, adapt before implementing", groups["abstract"]),
                ("Code/IaC files with no stand-in", sorted(unspecified)),
@@ -1320,6 +1437,7 @@ def main():
     p = sub.add_parser("batches"); p.add_argument("skel_dir"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("stamp"); p.add_argument("skel_dir"); p.add_argument("--root", required=True)
     p.add_argument("paths", nargs="*"); p.add_argument("--all", action="store_true")
+    p.add_argument("--migrate", action="store_true")
     # argparse will not take positionals on both sides of an option, so `stamp DIR --root . PATH...`
     # leaves its paths over; collect them here.
     args, extra = ap.parse_known_args()
