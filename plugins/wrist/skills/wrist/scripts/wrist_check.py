@@ -1199,23 +1199,40 @@ def cmd_publish(args):
         return 1
     wrist_root, files, profile, pm, slug = load_all(args)
     root = project_root(args)
+    try:
+        style = wrist_publish.style_for(profile)
+    except wrist_publish.PublishError as exc:
+        print(f"publish failed: {exc}")
+        return 1
     expected = profile.expected_files(slug)
     sources = [path for path, function in expected if profile.functions[function]["prose"]]
-    first_body = next((path for path, function in expected if profile.functions[function]["sequence"]), None)
+    sequence_files = [path for path, function in expected if profile.functions[function]["sequence"]]
     meta = {"title": pm.front["title"][1], "author": pm.front["author"][1],
             "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
-            "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page,
-            "front_matter": first_body is not None}
-    for key in wrist_publish.FRONT_KEYS:
-        meta[key] = pm.front.get(key, (0, ""))[1]
-    inputs, marker = wrist_publish.with_marker(sources, first_body, "output", root)
+            "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page}
+    markers = []
+    if style == "screenplay":
+        for key in wrist_publish.SCREENPLAY_KEYS:
+            meta[key] = pm.front.get(key, (0, ""))[1]
+        inputs = list(sources)
+        if profile.options.get("act_headings"):
+            inputs, markers = wrist_publish.with_act_markers(sources, sequence_files, "output", root)
+        plan = wrist_publish.plan_screenplay(inputs, meta, "output", slug, PUBLISH_DIR)
+    else:
+        first_body = sequence_files[0] if style == "book" and sequence_files else None
+        meta["front_matter"] = style == "book"
+        for key in wrist_publish.FRONT_KEYS:
+            meta[key] = pm.front.get(key, (0, ""))[1]
+        inputs, marker = wrist_publish.with_marker(sources, first_body, "output", root)
+        markers = [marker] if marker else []
+        plan = wrist_publish.plan_commands(inputs, meta, "output", slug, PUBLISH_DIR)
     try:
-        wrist_publish.run_commands(wrist_publish.plan_commands(inputs, meta, "output", slug, PUBLISH_DIR), root)
+        wrist_publish.run_commands(plan, root)
     except wrist_publish.PublishError as exc:
         print(f"publish failed: {exc}")
         return 1
     finally:
-        wrist_publish.remove_marker(marker, root)
+        wrist_publish.remove_markers(markers, root)
     print(f"published output/{slug}.epub and output/{slug}.pdf")
     return 0
 

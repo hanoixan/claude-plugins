@@ -100,3 +100,63 @@ def run_commands(commands, cwd):
         if proc.returncode != 0:
             raise PublishError(f"{kind} build failed (exit {proc.returncode}): "
                                f"{proc.stderr.strip() or proc.stdout.strip()}")
+
+
+STYLES = ("story", "book", "screenplay")
+NUMBER_WORDS = ("ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN")
+SCREENPLAY_KEYS = ("based_on", "draft", "contact")
+
+
+def style_for(profile):
+    """The publishing style: the profile's own, else `book` when it has a sequence function, else `story`."""
+    style = getattr(profile, "publish_style", None)
+    if style is None:
+        return "book" if any(spec["sequence"] for spec in profile.functions.values()) else "story"
+    if style not in STYLES:
+        raise PublishError(f"unknown publishing style '{style}' (known: {', '.join(STYLES)})")
+    return style
+
+
+def with_act_markers(sources, act_files, out_dir, cwd):
+    """The pandoc inputs with a one-line marker file before each act file, so the script can print
+    ACT ONE, ACT TWO... Returns (inputs, marker paths)."""
+    markers, inputs = [], []
+    os.makedirs(os.path.join(cwd, out_dir), exist_ok=True)
+    for source in sources:
+        if source in act_files:
+            n = act_files.index(source)
+            marker = f"{out_dir}/.wrist-act-{n + 1}.md"
+            with open(os.path.join(cwd, marker), "w", encoding="utf-8") as fh:
+                fh.write(f"@@ACT {NUMBER_WORDS[n]}@@\n")
+            markers.append(marker)
+            inputs.append(marker)
+        inputs.append(source)
+    return inputs, markers
+
+
+def remove_markers(markers, cwd):
+    for marker in markers:
+        remove_marker(marker, cwd)
+
+
+def plan_screenplay(inputs, meta, out_dir, slug, publish_dir):
+    """[(kind, argv)] for a screenplay: Fountain read by the custom reader, the Typst filter for the PDF.
+    `meta` has title, author, optional language, trim, font, based_on, draft and contact."""
+    folder = os.path.join(publish_dir, "screenplay")
+    common = ["pandoc", "--from", os.path.join(folder, "fountain.lua"), *inputs,
+              "--metadata", f"title={meta['title']}",
+              "--metadata", f"author={meta['author']}",
+              "--metadata", f"lang={meta.get('language') or 'en'}"]
+    for key in SCREENPLAY_KEYS:
+        if meta.get(key):
+            common += ["--metadata", f"{key}={meta[key]}"]
+    filt = ["--lua-filter", os.path.join(folder, "screenplay.lua")]
+    epub = common + ["--to", "epub3", "--css", os.path.join(folder, "screenplay.css")] + filt \
+        + ["-o", f"{out_dir}/{slug}.epub"]
+    pdf = common + filt + ["--template", os.path.join(folder, "screenplay.typ"), "--pdf-engine=typst"]
+    if meta.get("trim"):
+        pdf += ["-V", f"papersize={meta['trim']}"]
+    if meta.get("font"):
+        pdf += ["-V", f"mainfont={meta['font']}"]
+    pdf += ["-o", f"{out_dir}/{slug}.pdf"]
+    return [("epub", epub), ("pdf", pdf)]
