@@ -1,0 +1,8 @@
+body { font-family: "Libertinus Serif", Georgia, serif; line-height: 1.5; margin: 0 10%; }
+.line-block { margin: 0 0 1.4em 0; }
+div.stanza { page-break-inside: avoid; }
+div.dedication { text-align: right; font-style: italic; margin-bottom: 2em; }
+div.byline { font-style: italic; margin-bottom: 1.6em; }
+div.epigraph { font-style: italic; margin: 0 0 1.8em 1.5em; }
+#poem-title > h1 { font-size: 1.3em; margin-bottom: 0.4em; }
+#poem-hidden-title > h1 { display: none; }

@@ -102,9 +102,10 @@ def run_commands(commands, cwd):
                                f"{proc.stderr.strip() or proc.stdout.strip()}")
 
 
-STYLES = ("story", "book", "screenplay")
+STYLES = ("story", "book", "screenplay", "poem")
 NUMBER_WORDS = ("ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN")
 SCREENPLAY_KEYS = ("based_on", "draft", "contact")
+POEM_KEYS = ("dedication", "epigraph")
 
 
 def style_for(profile):
@@ -154,6 +155,31 @@ def plan_screenplay(inputs, meta, out_dir, slug, publish_dir):
     epub = common + ["--to", "epub3", "--css", os.path.join(folder, "screenplay.css")] + filt \
         + ["-o", f"{out_dir}/{slug}.epub"]
     pdf = common + filt + ["--template", os.path.join(folder, "screenplay.typ"), "--pdf-engine=typst"]
+    if meta.get("trim"):
+        pdf += ["-V", f"papersize={meta['trim']}"]
+    if meta.get("font"):
+        pdf += ["-V", f"mainfont={meta['font']}"]
+    pdf += ["-o", f"{out_dir}/{slug}.pdf"]
+    return [("epub", epub), ("pdf", pdf)]
+
+
+def plan_poem(inputs, meta, out_dir, slug, publish_dir):
+    """[(kind, argv)] for a poem: verse read by the custom reader, the Typst filter for the PDF. `meta` has
+    title, author, optional language, trim, font, titled (print the title), dedication and epigraph."""
+    folder = os.path.join(publish_dir, "poem")
+    common = ["pandoc", "--from", os.path.join(folder, "verse.lua"), *inputs,
+              "--metadata", f"title={meta['title']}",
+              "--metadata", f"author={meta['author']}",
+              "--metadata", f"lang={meta.get('language') or 'en'}"]
+    if meta.get("titled"):
+        common += ["--metadata", "titled=true"]
+    for key in POEM_KEYS:
+        if meta.get(key):
+            common += ["--metadata", f"{key}={meta[key]}"]
+    filt = ["--lua-filter", os.path.join(folder, "poem.lua")]
+    epub = common + ["--to", "epub3", "--epub-title-page=false", "--css", os.path.join(folder, "poem.css")] + filt \
+        + ["-o", f"{out_dir}/{slug}.epub"]
+    pdf = common + filt + ["--template", os.path.join(folder, "poem.typ"), "--pdf-engine=typst"]
     if meta.get("trim"):
         pdf += ["-V", f"papersize={meta['trim']}"]
     if meta.get("font"):

@@ -1212,7 +1212,12 @@ def cmd_publish(args):
             "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
             "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page}
     markers = []
-    if style == "screenplay":
+    if style == "poem":
+        for key in wrist_publish.POEM_KEYS:
+            meta[key] = pm.front.get(key, (0, ""))[1]
+        meta["titled"] = bool(profile.options.get("titled"))
+        plan = wrist_publish.plan_poem(sources, meta, "output", slug, PUBLISH_DIR)
+    elif style == "screenplay":
         for key in wrist_publish.SCREENPLAY_KEYS:
             meta[key] = pm.front.get(key, (0, ""))[1]
         inputs = list(sources)
