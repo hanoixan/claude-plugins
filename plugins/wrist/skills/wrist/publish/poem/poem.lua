@@ -29,13 +29,46 @@ local function split_indent(inlines)
   return out, lead * 0.5
 end
 
+-- The heading fields go into the document as Plain blocks, so pandoc escapes a leading list or heading
+-- marker ("- ", "1. ", "= ") as it does in a verse line, instead of the template reading it as markup.
+local function words(text)
+  local out = {}
+  for w in text:gmatch("%S+") do
+    if #out > 0 then out[#out + 1] = pandoc.Space() end
+    out[#out + 1] = pandoc.Str(w)
+  end
+  return out
+end
+
+local function heading_blocks(meta)
+  local out = {}
+  local function emit(fn, text)
+    if text ~= "" then
+      out[#out + 1] = pandoc.RawBlock("typst", "#" .. fn .. "[")
+      out[#out + 1] = pandoc.Plain(words(text))
+      out[#out + 1] = pandoc.RawBlock("typst", "]")
+    end
+  end
+  emit("poem-dedication", text_of(meta, "dedication"))
+  if titled(meta) then emit("poem-title", text_of(meta, "title")) end
+  local authors = {}
+  if meta.author and meta.author.t == "MetaList" then
+    for _, a in ipairs(meta.author) do authors[#authors + 1] = pandoc.utils.stringify(a) end
+  else
+    authors[1] = text_of(meta, "author")
+  end
+  emit("poem-byline", table.concat(authors, ", "))
+  emit("poem-epigraph", text_of(meta, "epigraph"))
+  return out
+end
+
 function Pandoc(doc)
   local blocks = {}
   for _, b in ipairs(doc.blocks) do
     if not (b.t == "Div" and b.classes[1] == "title") then blocks[#blocks + 1] = b end
   end
   if FORMAT:match("typst") then
-    local out = {}
+    local out = heading_blocks(doc.meta)
     for _, b in ipairs(blocks) do
       if b.t == "Div" and b.classes[1] == "stanza" then
         local lines = b.content[1].content

@@ -16,21 +16,19 @@
   },
 )
 
-#let stanza(keep, body) = block(breakable: not keep, above: 0pt, below: 1.4em, width: 100%)[#body]
+#let stanza(keep, body) = context {
+  // Keep a stanza whole on a page only when it can fit on one; a taller one must be allowed to break.
+  let fits = measure(block(width: page.width - 4.4cm, body)).height <= page.height - 4.8cm
+  block(breakable: not (keep and fits), above: 0pt, below: 1.4em, width: 100%)[#body]
+}
 #let vl(lead, body) = block(above: 0pt, below: 0.55em, width: 100%)[#par(hanging-indent: lead + 1.5em)[#h(lead)#body]]
 
-$if(dedication)$
-#align(right)[#emph[$dedication$]]
-#v(2em)
-$endif$
-$if(titled)$
-#block(below: 0.6em)[#text(weight: "bold", size: 1.3em)[$title$]]
-$endif$
-$if(author)$
-#block(below: 1.6em)[#emph[$for(author)$$author$$sep$, $endfor$]]
-$endif$
-$if(epigraph)$
-#block(below: 1.8em, inset: (left: 1.5em))[#emph[$epigraph$]]
-$endif$
+#let poem-dedication(body) = {
+  align(right)[#emph[#body]]
+  v(2em)
+}
+#let poem-title(body) = block(below: 0.6em)[#text(weight: "bold", size: 1.3em)[#body]]
+#let poem-byline(body) = block(below: 1.6em)[#emph[#body]]
+#let poem-epigraph(body) = block(below: 1.8em, inset: (left: 1.5em))[#emph[#body]]
 
 $body$
