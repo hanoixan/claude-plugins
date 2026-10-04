@@ -10,7 +10,10 @@ belongs) with a hook (which re-states the short form on every turn, at the end o
 context window, where recency works in its favour).
 
 The fifth, [skel](#skel), is a different kind of thing: a design format with its own
-grammar, checker and templates, loaded when you ask for it.
+grammar, checker and templates, loaded when you ask for it. The sixth, [wrist](#wrist), is
+skel adapted for writing: the same stand-in tree, checker and unknowns, applied to a short
+story, novel, screenplay or poem instead of a codebase, and carried through to a published
+PDF and EPUB.
 
 ---
 
@@ -41,6 +44,10 @@ degrades to its skill rather than erroring.
 skel has no hooks and needs `python3` instead, for its two scripts. They use only the
 standard library.
 
+wrist has no hooks either. Its scripts need `python3` (standard library only); publishing
+also needs `pandoc` 3.2+ and `typst` 0.12+, and wrist prints install steps if either is
+missing.
+
 ---
 
 ## The plugins at a glance
@@ -52,7 +59,7 @@ standard library.
 | [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
 | [skel](#skel) | Designing a codebase before writing it | none | yes | none |
-| [wrist](#wrist) | Writing a short story from a checked outline | none | yes | none |
+| [wrist](#wrist) | Writing a story, novel, screenplay or poem from a checked outline | none | yes | none |
 
 ---
 
@@ -253,6 +260,95 @@ point, so nothing depends on the model still remembering them.
 
 ---
 
+## wrist
+
+Writes a story, novel, screenplay or poem in four phases, from a checked outline to a
+published PDF and EPUB.
+
+**Based on skel.** wrist began as a copy of [skel](#skel) and keeps its core: a folder that
+mirrors the files to be written, one prose stand-in per file, `Depends on:` links with
+checked backlinks, formal `*UNKNOWN*:` entries for anything not yet decided, a checker that
+runs at any point, and stamps that tell you when a file has drifted from its stand-in. What
+changed is the subject. Where skel describes modules, classes and functions, wrist describes
+a synopsis, an outline, characters, places and scenes; where skel's tree becomes code,
+wrist's becomes prose, verse or a script, written by the model one file at a time.
+
+```
+wrist/synopsis.md.wrist.md       ->  synopsis.md
+wrist/work/the-lamp.md.wrist.md  ->  work/the-lamp.md
+```
+
+A stand-in holds notes, facts, rules and open questions, never the final text. The work is
+only written once the stand-ins pass the checker, and it must not add a fact the stand-ins
+do not hold.
+
+**The four phases**
+
+| Phase | What happens | Gate |
+| --- | --- | --- |
+| Premise | The profile's questions, answered or recorded as unknowns, in `wrist/PREMISE.md` | `gate generation` |
+| Generation | The stand-in tree: every file the work will contain, with links and the quality rules that apply | `gate realization` |
+| Realization | Each file written from its stand-in and stamped, then linted for clichés and reviewed against a checklist | `gate publishing` |
+| Publishing | `output/<slug>.pdf` and `output/<slug>.epub`, through pandoc and typst | none |
+
+Each phase opens with a question phase, so nothing in it is a guess, and its gate stays
+closed until `PREMISE.md` records that the questions were asked.
+
+**Profiles**
+
+A profile is data: the file shape, the headings and required fields, the premise questions,
+reference structures or forms, a list of clichés and marks of low quality, a judgment
+checklist, and searchable lint patterns. `shortstory`, `novel`, `screenplay` and `poem` exist.
+
+| Profile | Files | Written as | Published as |
+| --- | --- | --- | --- |
+| `shortstory` | synopsis, outline, characters, misc, the story | Markdown prose | a story with a byline under its title |
+| `novel` | the same registries, one file per chapter, optional forward, prologue, afterward and index | Markdown prose, one chapter at a time, each recording what it `Established:` | a book: title page, front matter, contents, chapters |
+| `screenplay` | the same registries, one file per act | Fountain, read by a custom pandoc reader | screenplay layout: Courier, title page, page numbers |
+| `poem` | a skeleton and the poem | the skeleton in a poem grammar (PSGv2.1), the poem as plain verse | set verse: line breaks and indentation kept, never reflowed |
+
+The poem profile adds a `verse` command. It parses the skeleton, compares it with the form it
+names from a catalog of 13 (sonnets, villanelle, sestina, pantoum, haiku, ballad and others),
+and checks the poem against it: stanza and line counts, refrains word for word and sestina end
+words are errors, while syllables and rhyme are labelled estimates that never block.
+
+**What ships**
+
+| Piece | Role |
+| --- | --- |
+| `/wrist` skill | The four phases, the rules for each profile, and how to write a good stand-in. 2113 words. |
+| `profiles/` | One folder per profile: `profile.json`, `questions.md`, structures or forms, `quality.md`, `lint.json`. |
+| `references/` | The stand-in grammar, publishing, the Fountain dialect, the poem grammar and the verse format. |
+| `scripts/wrist_check.py` | The checker, below. |
+| `scripts/wrist_mv.py` | Moves or renames stand-ins and rewrites every link to them. |
+| `publish/` | Pandoc readers and filters, Typst templates and EPUB stylesheets for each publishing style. |
+| `assets/templates/` | Starting stand-ins for each profile. |
+| `assets/examples/` | A complete worked example per profile: `the-lamp` (story), `salt-road` (novel), `the-third-bell` (screenplay), `counting` (villanelle). Each passes every gate. |
+
+**The checker**
+
+```
+wrist_check.py check WRIST_DIR          grammar, the profile's file shape, links and backlinks, unknowns, PREMISE.md
+wrist_check.py unknowns WRIST_DIR       open decisions, blocking and local, each listed once
+wrist_check.py order WRIST_DIR          realization order from the profile
+wrist_check.py status WRIST_DIR         realized, stale, edited, unstamped, pending
+wrist_check.py stamp WRIST_DIR PATH...  record that a file was written from its stand-in
+wrist_check.py fix-backlinks WRIST_DIR  insert missing `Referred by:` lines
+wrist_check.py gate WRIST_DIR PHASE     what blocks generation, realization or publishing
+wrist_check.py lint WRIST_DIR           the profile's searchable clichés in the written work
+wrist_check.py verse WRIST_DIR          poem only: the poem against its skeleton
+wrist_check.py publish WRIST_DIR        build output/<slug>.pdf and output/<slug>.epub
+```
+
+Like skel, wrist has no hook: the rules that have to hold are enforced by the checker and the
+gates, so nothing depends on the model still remembering them.
+
+```
+/plugin install wrist@hanoixan-claude-plugins
+```
+
+---
+
 ## Editing a plugin's injected text
 
 Every hook reads `${CLAUDE_PLUGIN_DATA}/<file>.txt` first and falls back to the copy
@@ -272,17 +368,19 @@ Find the data directory under `~/.claude/plugins/data/<plugin>-<marketplace>/`.
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json     the five plugin entries
+.claude-plugin/marketplace.json     the six plugin entries
 plugins/<name>/
   .claude-plugin/plugin.json        manifest
   hooks/hooks.json                  hook registrations
   hooks/*.sh                        hook scripts
   hooks/*.txt                       the injected text, editable
   skills/<name>/SKILL.md            the long form
-  skills/skel/references/           skel only: grammar and guides
-  skills/skel/scripts/              skel only: the checker and the mover
-  skills/skel/assets/               skel only: templates and a worked example
-  tests/                            skel only: tests for the two scripts
+  skills/<name>/references/         skel and wrist: grammar and guides
+  skills/<name>/scripts/            skel and wrist: the checker, the mover and helpers
+  skills/<name>/assets/             skel and wrist: templates and worked examples
+  tests/                            skel and wrist: tests for their scripts
+  skills/wrist/profiles/            wrist only: one folder of data per profile
+  skills/wrist/publish/             wrist only: pandoc and typst files per publishing style
 ```
 
 ---
@@ -290,27 +388,3 @@ plugins/<name>/
 ## License
 
 MIT
-
-## wrist
-
-Writes a prose work in four phases, using the same idea as skel. A `wrist/` folder mirrors the
-files the work will contain, each as a `.wrist.md` stand-in that holds notes, facts, rules and
-open questions, never the final text:
-
-```
-wrist/synopsis.md.wrist.md       ->  synopsis.md
-wrist/work/the-lamp.md.wrist.md  ->  work/the-lamp.md
-```
-
-The phases are premise (the profile's questions, recorded in `wrist/PREMISE.md`), generation (the
-stand-in tree, checked for structure, links and unknowns), realization (each file written from its
-stand-in, linted for clichés, reviewed against a checklist) and publishing (`output/<slug>.pdf`
-and `output/<slug>.epub` through pandoc and typst). Each phase is preceded by a question phase and
-a gate.
-
-A profile is data: the file shape, the headings and required fields, the questions, the reference
-structures and a list of clichés to avoid. `shortstory`, `novel`, `screenplay` and `poem` exist.
-
-wrist needs `python3` for its scripts (standard library only) and, to publish, `pandoc` 3.2+ and
-`typst` 0.12+. A complete worked example is in
-`plugins/wrist/skills/wrist/assets/examples/the-lamp/`.
