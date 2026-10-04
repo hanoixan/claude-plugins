@@ -213,3 +213,9 @@ Choices made without an explicit instruction, to confirm during review:
 7. The Python classifier and the Lua reader are checked against one shared case file rather than sharing code.
 8. The EPUB of a screenplay is a reading copy in a monospace layout, not a formatted-script exchange format.
 9. No page count is reported, although a page is about a minute.
+10. Premise key names may contain underscores (`act_headings`), because PREMISE.md front matter reads underscores and not hyphens. A question id is written with hyphens (`act-headings`) and `Profile.question_key` maps it to the key, so the front matter answers the question.
+11. The EPUB of a screenplay gets the title lines (`based_on`, `draft`, `contact`) as centered paragraphs at the top of the script section, because pandoc's own EPUB title page has no fields for them. Its contents list only "Title Page": the script section has a hidden, unlisted heading so pandoc does not file the script under the book's title.
+12. The PDF template resets the page counter at the end of the title page, so the first script page is page 1 (unnumbered) and the next is "2.".
+13. The Fountain classifier masks notes and boneyard with spaces for lint (so line numbers stay true) and removes them for the shared element cases (as the reader does); the two differ only for a multi-line note in the middle of a paragraph.
+14. Dialogue that crosses a page break carries no "(MORE)" or "(CONT'D)" marker; real scripts add them, and the trial noted it as a candidate for a later cycle.
+
