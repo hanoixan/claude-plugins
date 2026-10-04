@@ -34,6 +34,11 @@ N_OUTLINE = "wrist/outline.md.wrist.md"
 N_CHAPTER1 = "wrist/work/chapter-1.md.wrist.md"
 N_CHAPTER2 = "wrist/work/chapter-2.md.wrist.md"
 N_CHAPTER3 = "wrist/work/chapter-3.md.wrist.md"
+SCRIPT_EXAMPLE = os.path.join(SKILL, "assets", "examples", "the-third-bell")
+S_PREMISE = "wrist/PREMISE.md"
+S_ACT1 = "wrist/work/act-1.md.wrist.md"
+S_ACT2 = "wrist/work/act-2.md.wrist.md"
+S_ACT3 = "wrist/work/act-3.md.wrist.md"
 NO_UNKNOWNS = "- **Unknowns:** none\n"
 
 
@@ -86,3 +91,7 @@ class TreeCase(unittest.TestCase):
 
 class NovelCase(TreeCase):
     example = NOVEL
+
+
+class ScriptCase(TreeCase):
+    example = SCRIPT_EXAMPLE

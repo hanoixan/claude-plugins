@@ -1,0 +1,37 @@
+{
+  "character.md": {
+    "date": "2026-10-03",
+    "realized": "1636d329",
+    "stand_in": "913a8a5b"
+  },
+  "misc.md": {
+    "date": "2026-10-03",
+    "realized": "b40ea4d7",
+    "stand_in": "68ed82bb"
+  },
+  "outline.md": {
+    "date": "2026-10-03",
+    "realized": "61f079dc",
+    "stand_in": "79162e9f"
+  },
+  "synopsis.md": {
+    "date": "2026-10-03",
+    "realized": "fffdacef",
+    "stand_in": "3e44183b"
+  },
+  "work/act-1.md": {
+    "date": "2026-10-03",
+    "realized": "7f83f428",
+    "stand_in": "13be811e"
+  },
+  "work/act-2.md": {
+    "date": "2026-10-03",
+    "realized": "e8f85dae",
+    "stand_in": "75fc9a80"
+  },
+  "work/act-3.md": {
+    "date": "2026-10-03",
+    "realized": "1b407873",
+    "stand_in": "277c058b"
+  }
+}
