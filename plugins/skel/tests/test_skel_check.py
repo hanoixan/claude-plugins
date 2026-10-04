@@ -1394,6 +1394,22 @@ class Stamp(CodeCase):
         self.stamp(self.CODE)
         self.assertRegex(self.read_unit(), r"^---\nstamp: source [0-9a-f]{8}, stand-in [0-9a-f]{8}\n---\n")
 
+    def test_review_a_stand_in_given_a_new_block_is_current_at_once(self):
+        self.front(self.UNIT)
+        self.stamp(self.CODE)
+        _, out = self.stamp(self.CODE)
+        self.assertIn("0 stamped, 1 already current", out)
+        _, status = self.run_script(CHECK, "status", "skel", "--root", ".")
+        self.assertIn("Implemented (1):\n  src/command.py\n", status)
+
+    def test_review_an_unclosed_front_matter_is_refused_not_doubled(self):
+        self.replace(self.UNIT, FRONT, "---\nrole: product\n")
+        before = self.read_unit()
+        code, out = self.stamp(self.CODE)
+        self.assertEqual(code, 1, out)
+        self.assertIn("skel/src/command.py.skel.md: front matter opens with `---` and is not closed; fix it by hand", out)
+        self.assertEqual(self.read_unit(), before)
+
     def test_stamp_needs_paths_or_all(self):
         code, out = self.stamp()
         self.assertNotEqual(code, 0)
@@ -1830,6 +1846,50 @@ class Migrate(CodeCase):
         _, out = self.migrate(self.CODE)
         self.assertIn("src/command.py: no Spec: header to migrate", out)
 
+    def test_review_a_header_opening_a_docstring_or_block_comment_is_left(self):
+        digest = self.stand_in_hash()
+        for opener, rest in (('"""Spec: skel/src/command.py.skel.md @ ' + digest, 'More text.\n"""\n'),
+                             ("/* Spec: skel/src/command.py.skel.md @ " + digest, " * more\n */\n")):
+            text = opener + "\n" + rest + self.BODY
+            self.write_code(text)
+            code, out = self.migrate()
+            self.assertEqual(code, 1, out)
+            self.assertIn("src/command.py: its Spec: header shares line 1 with code; left as it is", out)
+            self.assertEqual(self.read_code(), text)
+
+    def test_review_a_one_line_block_comment_header_is_removed(self):
+        self.write_code(f"<!-- Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()} -->\n" + self.BODY)
+        code, out = self.migrate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read_code(), self.BODY)
+
+    def test_review_a_read_only_stand_in_leaves_both_files_untouched(self):
+        text = f"# Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY
+        self.write_code(text)
+        os.chmod(self.path(self.UNIT), 0o444)
+        self.addCleanup(os.chmod, self.path(self.UNIT), 0o644)
+        if os.access(self.path(self.UNIT), os.W_OK):
+            self.skipTest("running as a user who can write read-only files")
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("skel/src/command.py.skel.md: cannot be rewritten", out)
+        self.assertEqual(self.read_code(), text)
+        self.assertIsNone(self.stamp_of())
+
+    def test_review_a_read_only_file_leaves_both_files_untouched(self):
+        text = f"# Spec: skel/src/command.py.skel.md @ {self.stand_in_hash()}\n" + self.BODY
+        self.write_code(text)
+        unit = self.read_unit()
+        os.chmod(self.path(self.CODE), 0o444)
+        self.addCleanup(os.chmod, self.path(self.CODE), 0o644)
+        if os.access(self.path(self.CODE), os.W_OK):
+            self.skipTest("running as a user who can write read-only files")
+        code, out = self.migrate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/command.py: cannot be rewritten", out)
+        self.assertEqual(self.read_code(), text)
+        self.assertEqual(self.read_unit(), unit)
+
     def test_migrate_refuses_all(self):
         code, out = self.stamp("--migrate", "--all")
         self.assertNotEqual(code, 0)
@@ -1850,6 +1910,14 @@ class StampDocs(unittest.TestCase):
         skill = self.read("SKILL.md")
         self.assertIn("--migrate", skill)
         self.assertIn("stale / edited / diverged", skill)
+
+    def test_review_the_docs_warn_that_data_and_infrastructure_now_need_a_stamp(self):
+        impl = self.read("references", "implementing.md")
+        self.assertIn("nothing of yours under Stale, Edited, Diverged, Unstamped, Legacy, or Names not found in code", impl)
+        self.assertIn("Data and infrastructure files, which skel 2 counted as implemented once they existed, now show "
+                      "as Unstamped", impl)
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            self.assertIn("data and infrastructure files now need a stamp too", fh.read())
 
 
 class AgentNeutralPaths(unittest.TestCase):

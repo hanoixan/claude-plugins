@@ -27,7 +27,7 @@ For each file in order:
 3. Write nothing about skel into the file: no header comment pointing at the stand-in, no hash. The link is the mirrored path. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent.
 4. Write tests from the stand-in. Every failure mode and every `State changes` statement is a test case, and data `## Schema` blocks become validation fixtures.
 5. When a file (and, for code, its tests) matches the stand-in, stamp it: `skel_check.py stamp skel/ --root . a/b.py` writes `stamp: source <hash>, stand-in <hash>` into the stand-in's front matter: a hash of the file's exact bytes and a hash of the stand-in (which leaves the stamp line out). A stamp records your claim that the two agree. It checks nothing, so stamp one file at a time, and only what you have just brought in step. `--all` is for adopting stamps on a tree whose files already match. Code, data and infrastructure files are all stamped; generated files and abstract stand-ins are not.
-6. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Edited, Diverged, Unstamped, or Names not found in code.
+6. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Edited, Diverged, Unstamped, Legacy, or Names not found in code.
 
 ## When implementation reveals something
 
@@ -61,7 +61,7 @@ git diff <last commit where code and skel agreed> -- skel
 
 ## Old `Spec:` headers
 
-Trees stamped before skel 3 carry the stamp in a `# Spec: skel/<path>.skel.md @ <hash>` header comment in the code. `status` lists such files under **Legacy**. Run `skel_check.py stamp skel/ --root . --migrate` once: for each header whose hash still matches its stand-in, it writes the new stamp into the stand-in and deletes the header line from the file, keeping every other byte. A header whose hash no longer matches, that has no hash, that names another stand-in, or that shares its line with code is left and reported; settle those files, remove the header by hand, and stamp them. `--migrate` exits non-zero while anything is left.
+Trees stamped before skel 3 carry the stamp in a `# Spec: skel/<path>.skel.md @ <hash>` header comment in the code. `status` lists such files under **Legacy**. Run `skel_check.py stamp skel/ --root . --migrate` once: for each header whose hash still matches its stand-in, it writes the new stamp into the stand-in and deletes the header line from the file, keeping every other byte. A header whose hash no longer matches, that has no hash, that names another stand-in, or that shares its line with code is left and reported; settle those files, remove the header by hand, and stamp them. `--migrate` exits non-zero while anything is left. Data and infrastructure files, which skel 2 counted as implemented once they existed, now show as Unstamped: check each against its stand-in and stamp it.
 
 ## Existing code
 
@@ -73,7 +73,7 @@ After each implementation batch, report in this shape:
 
 1. **Decisions needed:** blocking unknowns that remain or that this batch raised, and what each blocks.
 2. **Proposals to accept or change:** local unknowns, each with its proposal, saying which ones this batch was built to.
-3. **What was built:** which batches and files were realized, the test results, any cycles that `batches` flagged, and anything `status` still lists under Stale, Unstamped, or Names not found in code.
+3. **What was built:** which batches and files were realized, the test results, any cycles that `batches` flagged, and anything `status` still lists under Stale, Edited, Diverged, Unstamped, Legacy, or Names not found in code.
 4. **Changes to the plan:** every stand-in you changed and why, including contract changes that rippled to referrers.
 
 The report lists no choice that is not in the tree. If you made a choice the stand-ins did not dictate, it is in the tree as an unknown with a `Proposed:` before it appears in the report.

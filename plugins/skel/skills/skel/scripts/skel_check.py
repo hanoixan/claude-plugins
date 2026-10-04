@@ -83,6 +83,10 @@ SOURCE_EXT = {"c", "cc", "cpp", "cxx", "m", "mm"}
 HEADER_EXT = {"h", "hh", "hpp", "hxx"}
 SPEC_RE = re.compile(r"Spec:\s*(\S+?\.skel\.md)(?:\s*@\s*([0-9A-Fa-f]+)\b)?")
 SPEC_LINES = 10
+# What may be left of a `Spec:` header line for migration to delete the whole line: a line-comment marker, or
+# a block comment opened and closed on the same line. Anything else (code, an opened docstring or block
+# comment) means the line is not the header's alone.
+WHOLE_COMMENT_RE = re.compile(r"(#+|//+|--|;+|%+|'|REM|/\*\s*\*/|<!--\s*-->|\(\*\s*\*\)|\{-\s*-\}|\s*)", re.I)
 STAMP_RE = re.compile(r"^source ([0-9A-Fa-f]{8}), stand-in ([0-9A-Fa-f]{8})$")
 
 LEVEL_FIELDS = {
@@ -965,6 +969,25 @@ def write_stamp(sf, source, stand_in):
         fh.write(bom + "".join(lines))
 
 
+UNCLOSED = "front matter opens with `---` and is not closed; fix it by hand"
+
+
+def stamp_stand_in(sf, skel_root, source):
+    """Write the stamp for `source` into the stand-in and return the stand-in hash it records. A stand-in
+    with no front matter gains a `---` block, whose lines count in its hash, so it is hashed again after."""
+    if front_matter_end(sf.lines) == -1:
+        raise ValueError(UNCLOSED)
+    had_block = front_matter_end(sf.lines) > 0
+    stand_in = stand_in_hash(sf)
+    write_stamp(sf, source, stand_in)
+    if not had_block:
+        after = stand_in_hash(parse(sf.path, skel_root))
+        if after != stand_in:
+            write_stamp(sf, source, after)
+            stand_in = after
+    return stand_in
+
+
 def spec_path(sf, root):
     return os.path.relpath(sf.path, root).replace(os.sep, "/")
 
@@ -1025,7 +1048,7 @@ def cmd_stamp(args):
     if args.migrate:
         if args.all:
             sys.exit("--migrate takes the files to migrate, or none for all; not --all")
-        return migrate(files, root, args.paths)
+        return migrate(files, skel_root, root, args.paths)
     if not args.paths and not args.all:
         sys.exit("stamp needs the implemented files to stamp, or --all")
     if args.paths and args.all:
@@ -1047,6 +1070,10 @@ def cmd_stamp(args):
                 print(f"{shown}: {reason}")
                 failed += 1
             continue
+        if front_matter_end(sf.lines) == -1:
+            print(f"{os.path.relpath(sf.path, root)}: {UNCLOSED}")
+            failed += 1
+            continue
         try:
             stamp = (source_hash(impl), stand_in_hash(sf))
         except OSError as exc:
@@ -1057,7 +1084,7 @@ def cmd_stamp(args):
             current += 1
             continue
         try:
-            write_stamp(sf, *stamp)
+            stamp = (stamp[0], stamp_stand_in(sf, skel_root, stamp[0]))
         except OSError as exc:
             print(f"{os.path.relpath(sf.path, root)}: cannot be rewritten ({exc.strerror})")
             failed += 1
@@ -1068,7 +1095,7 @@ def cmd_stamp(args):
     return 1 if failed else 0
 
 
-def migrate(files, root, paths):
+def migrate(files, skel_root, root, paths):
     """Move each old `Spec:` header stamp that still matches its stand-in into the stand-in, and delete the
     header line from the file. Anything else is reported and left for a person to settle."""
     by_impl = {os.path.normpath(os.path.join(root, sf.impl_rel)): sf for sf in files.values()}
@@ -1098,25 +1125,50 @@ def migrate(files, root, paths):
                   f"the header and run stamp")
             left += 1
             continue
+        if front_matter_end(sf.lines) == -1:
+            print(f"{os.path.relpath(sf.path, root)}: {UNCLOSED}")
+            left += 1
+            continue
         try:
             with open(impl, encoding="utf-8", errors="surrogateescape", newline="") as fh:
                 lines = fh.readlines()
-            rest = SPEC_RE.sub("", lines[header[2]], count=1)
-            if re.search(r"[A-Za-z0-9]", rest):
-                print(f"{shown}: its Spec: header shares line {header[2] + 1} with code; left as it is")
-                left += 1
-                continue
-            del lines[header[2]]
-            with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
-                fh.writelines(lines)
-            stamp = (source_hash(impl), stand_in_hash(sf))
-            write_stamp(sf, *stamp)
         except OSError as exc:
-            print(f"{shown}: cannot be rewritten ({exc.strerror})")
+            print(f"{shown}: cannot be read ({exc.strerror})")
             left += 1
             continue
-        print(f"migrated {shown}: source {stamp[0]}, stand-in {stamp[1]}")
-        migrated += 1
+        if not WHOLE_COMMENT_RE.fullmatch(SPEC_RE.sub("", lines[header[2]], count=1).strip()):
+            print(f"{shown}: its Spec: header shares line {header[2] + 1} with code; left as it is")
+            left += 1
+            continue
+        del lines[header[2]]
+        text = "".join(lines)
+        source = hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()[:8]
+        for rel, path in ((os.path.relpath(sf.path, root), sf.path), (shown, impl)):
+            if not os.access(path, os.W_OK):
+                print(f"{rel}: cannot be rewritten (Permission denied)")
+                break
+        else:
+            with open(sf.path, "rb") as fh:
+                original = fh.read()
+            try:
+                stamp = (source, stamp_stand_in(sf, skel_root, source))
+            except OSError as exc:
+                print(f"{os.path.relpath(sf.path, root)}: cannot be rewritten ({exc.strerror})")
+                left += 1
+                continue
+            try:
+                with open(impl, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                    fh.write(text)
+            except OSError as exc:                  # put the stand-in back, so neither file has changed
+                with open(sf.path, "wb") as fh:
+                    fh.write(original)
+                print(f"{shown}: cannot be rewritten ({exc.strerror})")
+                left += 1
+                continue
+            print(f"migrated {shown}: source {stamp[0]}, stand-in {stamp[1]}")
+            migrated += 1
+            continue
+        left += 1
     print(f"\n{migrated} migrated, {left} left")
     return 1 if left else 0
 

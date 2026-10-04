@@ -284,7 +284,8 @@ the tree, in either direction.
 
 **Upgrading a tree stamped with skel 2.x.** Stamps now live in the stand-in, with a hash of each side, so
 `status` reports both a stand-in that changed (stale) and a file that changed (edited). Run
-`stamp --migrate` once to move the old `Spec:` header stamps out of the code.
+`stamp --migrate` once to move the old `Spec:` header stamps out of the code. Hand-written
+data and infrastructure files now need a stamp too: check each and stamp it.
 
 **Upgrading a tree written for skel 1.x.** `check` now needs a `role:` on every stand-in
 and a `Kind:` on every unknown. Run `infer-roles --write` and settle the ones it marks
