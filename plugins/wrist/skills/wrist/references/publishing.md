@@ -29,6 +29,10 @@ When a profile has a `sequence` function (a novel's chapters), the book is assem
 
 A screenplay is read with the Fountain reader and laid out as a script: US letter (A4 with `trim: a4`), a 12 pt monospace font taken from the list Courier Prime, Courier New, DejaVu Sans Mono (the last is bundled with typst), margins 1.5 inches left and 1 inch elsewhere, about 55 lines and about a minute a page. The title page has the title, "Written by", the author, and the optional `based_on`, `draft` and `contact` lines; it carries no number and neither does the first script page; later pages show "2." and so on at the top right. With `act_headings: yes` each act starts a new page with a centered "ACT ONE"-style heading. The EPUB is a monospace reading copy of the same elements. No copyright page, dedication, epigraph or contents page is built.
 
+## A poem
+
+A poem is read with the verse reader and set as verse: A5 (any Typst paper with `trim:`), 11 pt Libertinus Serif with generous leading, flush left, never justified or reflowed, each leading space of a line half an em of indent, a line too long for the page wrapped with a hanging indent, a stanza that fits on a page kept whole. A `dedication:` (italic, right) comes first, then the title when `titled: yes`, the author as an italic byline and an optional `epigraph:`. An untitled poem prints the byline and the verse with no title. The page number shows from the second page. The EPUB has the same elements; its contents list the working title, and an untitled poem's heading is hidden on the page. No title page, copyright page or contents page is built.
+
 ## When the build fails
 
 Pandoc's error is printed. The usual cause is a Typst helper that a newer pandoc emits and `book.typ` does not define; run `pandoc -D typst` and copy the missing `#let` or `#show` definitions into `publish/book.typ`.

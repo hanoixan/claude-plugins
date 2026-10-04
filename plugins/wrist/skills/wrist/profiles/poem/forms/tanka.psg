@@ -1,0 +1,11 @@
+(* Tanka: five lines of 5, 7, 5, 7 and 7 syllables; the third line often turns. *)
+poem {
+  named "tanka";
+  stanza (quintain, 1, none) {
+    line (syllables 5, stop, x) { }
+    line (syllables 7, stop, x) { }
+    line (syllables 5, stop, x) { }
+    line (syllables 7, stop, x) { }
+    line (syllables 7, stop, x) { }
+  }
+}

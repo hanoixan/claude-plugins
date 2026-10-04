@@ -1,0 +1,157 @@
+{
+ "items": [
+  {
+   "id": "lofty-noun",
+   "pattern": "\\b(?:starlight|thresholds?|void|cathedrals?|hymns?|cradl(?:e|es|ed|ing)|luminous|tapestr(?:y|ies)|infinite|sacred)\\b",
+   "label": "glamorous poem word",
+   "note": "The word that sounds like it belongs in a poem is a reason to cut it; name a specific object.",
+   "scope": "anywhere",
+   "positive": "A cathedral of starlight.",
+   "negative": "A kitchen with a cracked sink."
+  },
+  {
+   "id": "unfold-becoming",
+   "pattern": "\\b(?:unfold(?:s|ed|ing)?|becoming)\\b",
+   "label": "glamorous poem word",
+   "note": "Say what physically happens.",
+   "scope": "anywhere",
+   "positive": "Her grief unfolds.",
+   "negative": "Her grief is a chair."
+  },
+  {
+   "id": "whisper",
+   "pattern": "\\bwhisper(?:s|ed|ing)?\\b",
+   "label": "glamorous poem word",
+   "note": "Say who spoke, how quietly, and what was said.",
+   "scope": "anywhere",
+   "positive": "The wind whispered.",
+   "negative": "The wind stopped."
+  },
+  {
+   "id": "echo",
+   "pattern": "\\becho(?:es|ed|ing)?\\b",
+   "label": "glamorous poem word",
+   "note": "An echo is a stock effect; give the sound its source.",
+   "scope": "anywhere",
+   "positive": "Her name echoed.",
+   "negative": "Her name was shouted twice."
+  },
+  {
+   "id": "shatter",
+   "pattern": "\\bshatter(?:s|ed|ing)?\\b",
+   "label": "glamorous poem word",
+   "note": "Break the thing in a specific way.",
+   "scope": "anywhere",
+   "positive": "The glass shattered.",
+   "negative": "The glass cracked in two."
+  },
+  {
+   "id": "dance",
+   "pattern": "\\bdanc(?:e|es|ed|ing)\\b",
+   "label": "glamorous poem word",
+   "note": "Things in poems dance too often; describe the movement.",
+   "scope": "anywhere",
+   "positive": "Light dances on the water.",
+   "negative": "Light lay on the water."
+  },
+  {
+   "id": "ache",
+   "pattern": "\\bach(?:e|es|ed|ing)\\b",
+   "label": "named feeling",
+   "note": "Withhold the emotion; show what the body or the room does.",
+   "scope": "anywhere",
+   "positive": "My heart aches.",
+   "negative": "I achieved little."
+  },
+  {
+   "id": "silence",
+   "pattern": "\\bsilen(?:ce|ces|t)\\b",
+   "label": "named profundity",
+   "note": "Silence as a noun of profundity is a ban-list word; say what is actually quiet.",
+   "scope": "anywhere",
+   "positive": "The silence of her leaving.",
+   "negative": "The radio was off."
+  },
+  {
+   "id": "moment",
+   "pattern": "\\bmoments?\\b",
+   "label": "announced significance",
+   "note": "Do not announce that a moment matters.",
+   "scope": "anywhere",
+   "positive": "In that moment I knew.",
+   "negative": "On Tuesday I knew."
+  },
+  {
+   "id": "simile-like",
+   "pattern": "\\blike (?:a|an|the|some|my|your|his|her)\\b",
+   "label": "simile",
+   "note": "At most one simile in the poem; prefer describing the thing until it carries its own weight.",
+   "scope": "anywhere",
+   "positive": "Like a bird she left.",
+   "negative": "I like birds."
+  },
+  {
+   "id": "simile-as-if",
+   "pattern": "\\bas (?:if|though)\\b",
+   "label": "simile",
+   "note": "A reflexive simile; cut it or keep it only if the poem cannot survive without it.",
+   "scope": "anywhere",
+   "positive": "As if the room breathed.",
+   "negative": "As the room emptied, I left."
+  },
+  {
+   "id": "told-emotion",
+   "pattern": "\\b(?:wept|weeping|sobbed|trembled|trembling)\\b",
+   "label": "told emotion",
+   "note": "Describe the chairs left behind and stop.",
+   "scope": "anywhere",
+   "positive": "She wept at the gate.",
+   "negative": "She locked the gate."
+  },
+  {
+   "id": "tears-fall",
+   "pattern": "\\btears (?:fell|fall|ran|run|streamed|welled|spilled)\\b",
+   "label": "stock reaction",
+   "note": "Let the reader supply the tears.",
+   "scope": "anywhere",
+   "positive": "Tears fell on the page.",
+   "negative": "Rain fell on the page."
+  },
+  {
+   "id": "abstraction",
+   "pattern": "\\b(?:souls?|eternity|destiny|darkness)\\b",
+   "label": "abstraction in place of an image",
+   "note": "Name the thing the abstraction stands for.",
+   "scope": "anywhere",
+   "positive": "Into the darkness of eternity.",
+   "negative": "Into the cellar."
+  },
+  {
+   "id": "archaic",
+   "pattern": "\\b(?:thee|thou|thy|thine|doth|hath)\\b|\\b(?:o|ne)['’]er\\b|['’]t(?:was|is)\\b",
+   "label": "archaic diction",
+   "note": "Archaic words are a fingerprint of the borrowed poem; use the speaker's own.",
+   "scope": "anywhere",
+   "positive": "O'er the hill thou goest.",
+   "negative": "Over the hill you go."
+  },
+  {
+   "id": "sunset-ending",
+   "pattern": "\\b(?:sunsets?|setting sun|sun (?:sank|sinks|set|fades|faded))\\b",
+   "label": "stock ending",
+   "note": "The sunset ending is the oldest closing image; find the one only this poem has.",
+   "scope": "anywhere",
+   "positive": "The sunset closed the day.",
+   "negative": "The shop closed at six."
+  },
+  {
+   "id": "stock-rhyme-pair",
+   "pattern": "\\b(?:moon and june|heart and part|fire and desire|love and above)\\b",
+   "label": "stock rhyme",
+   "note": "These pairs are decades worn; change one end word and the line it ends.",
+   "scope": "anywhere",
+   "positive": "her heart and part of mine",
+   "negative": "her coat and her keys"
+  }
+ ]
+}

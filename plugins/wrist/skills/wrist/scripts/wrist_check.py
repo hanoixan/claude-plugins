@@ -13,6 +13,7 @@ Subcommands
   fix-backlinks    insert missing `Referred by:` lines (dry-run by default)
   gate PHASE       list what blocks the generation, realization or publishing phase
   lint             scan realized prose for the profile's clichés (advisory)
+  verse            check a poem against its skeleton (poem profiles): exact errors, advisory estimates
   publish          build output/<slug>.epub and output/<slug>.pdf
 
 Standard library only. Exit code 1 if `check` finds errors.
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wrist_lint
 import wrist_profile
 import wrist_publish
+import wrist_verse
 
 WRIST_SUFFIX = ".wrist.md"
 PREMISE_FILE = "PREMISE.md"
@@ -1134,6 +1136,9 @@ def gate_blockers(args, phase):
             with open(impl, encoding="utf-8", errors="replace") as fh:
                 if not fh.read().split():
                     blockers.append(f"{path} is empty; there is nothing to publish")
+    if profile.form:
+        blockers.extend(f"{rel}:{line}: {message}" for severity, rel, line, message
+                        in verse_problems(files, profile, pm, slug, root) if severity == "error")
     if pm.front.get("review_done", (0, ""))[1].lower() != "yes":
         blockers.append(f"the review pass is not recorded; do it, then set `review_done: yes` in {PREMISE_FILE}")
     if not pm.front.get("author", (0, ""))[1]:
@@ -1183,6 +1188,81 @@ def cmd_lint(args):
     return 0
 
 
+def forms_dir(profile):
+    return os.path.join(profile.directory, "forms")
+
+
+def verse_problems(files, profile, pm, slug, root):
+    """[(severity, file, line, message)] for a poem profile: the skeleton's own rules, its agreement with the
+    structure stand-in and with the catalog form it names, then the poem against the skeleton. Severity is
+    `error` or `estimate`."""
+    structure_rel, poem_rel = profile.form_paths(slug)
+    out = []
+
+    def add(rel, problems):
+        out.extend((p.severity, rel, p.line, p.message) for p in problems)
+
+    paths = {rel: os.path.join(root, rel) for rel in (structure_rel, poem_rel)}
+    if not os.path.isfile(paths[structure_rel]):
+        return [("error", structure_rel, 1, "the file does not exist yet; realize it first")]
+    try:
+        poem = wrist_verse.parse_poem(read_text(paths[structure_rel], "utf-8-sig"))
+    except wrist_verse.ParseError as exc:
+        return [("error", structure_rel, exc.line, f"column {exc.col}: {exc.message}")]
+    rules = wrist_verse.skeleton_problems(poem)
+    add(structure_rel, rules)
+    stand_in = next((sf for sf in files.values() if sf.impl_rel == structure_rel), None)
+    top = top_section(stand_in) if stand_in else None
+    if top is not None:
+        want_form = poem.named or "custom"
+        have = field_text(stand_in, top, "Form").strip("` ")
+        if have and have != want_form:
+            out.append(("error", stand_in.rel, 1, f"`Form:` says '{have}' but {structure_rel} says '{want_form}'"))
+        for label, actual in (("Lines", wrist_verse.total_lines(poem)), ("Stanzas", wrist_verse.stanza_count(poem))):
+            m = re.match(r"\d+", field_text(stand_in, top, label))
+            if m and int(m.group()) != actual:
+                out.append(("error", stand_in.rel, 1, f"`{label}:` says {m.group()} but {structure_rel} has {actual}"))
+    if poem.named:
+        catalog = wrist_verse.load_catalog(poem.named, forms_dir(profile))
+        if catalog is None:
+            known = ", ".join(wrist_verse.list_catalog(forms_dir(profile)))
+            out.append(("error", structure_rel, 1, f"named form '{poem.named}' is not in the catalog ({known})"))
+        else:
+            add(structure_rel, wrist_verse.catalog_problems(poem, catalog, poem.named))
+    if not os.path.isfile(paths[poem_rel]):
+        out.append(("error", poem_rel, 1, "the file does not exist yet; realize it first"))
+        return out
+    if any(p.severity == "error" for p in rules):
+        out.append(("error", poem_rel, 1, f"the poem was not checked: fix the errors in {structure_rel} first"))
+        return out
+    verse = wrist_verse.read_verse(read_text(paths[poem_rel], "utf-8-sig"))
+    titled = bool(profile.options.get("titled"))
+    add(poem_rel, wrist_verse.poem_problems(poem, verse, titled, pm.front.get("title", (0, ""))[1]))
+    add(poem_rel, wrist_verse.estimates(poem, verse))
+    return out
+
+
+def setup_verse(p):
+    p.add_argument("--root")
+    p.add_argument("--json", action="store_true")
+
+
+@command("verse", setup_verse)
+def cmd_verse(args):
+    wrist_root, files, profile, pm, slug = load_all(args)
+    if not profile.form:
+        sys.exit(f"profile '{profile.name}' has no poem form; `verse` is for poem profiles")
+    found = verse_problems(files, profile, pm, slug, project_root(args))
+    if args.json:
+        print(json.dumps([{"severity": s, "file": f, "line": ln, "message": m} for s, f, ln, m in found], indent=1))
+    else:
+        for severity, rel, line, message in sorted(found, key=lambda r: (r[0] != "error", r[1], r[2])):
+            print(f"{rel}:{line}: {severity}: {message}")
+        errors = sum(1 for r in found if r[0] == "error")
+        print(f"\n{errors} errors, {len(found) - errors} estimates (estimates are advisory and never block)")
+    return 1 if any(r[0] == "error" for r in found) else 0
+
+
 PUBLISH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "publish"))
 
 
@@ -1212,7 +1292,12 @@ def cmd_publish(args):
             "language": pm.front.get("language", (0, "en"))[1], "trim": pm.front.get("trim", (0, ""))[1],
             "font": pm.front.get("font", (0, ""))[1], "title_page": profile.title_page}
     markers = []
-    if style == "screenplay":
+    if style == "poem":
+        for key in wrist_publish.POEM_KEYS:
+            meta[key] = pm.front.get(key, (0, ""))[1]
+        meta["titled"] = bool(profile.options.get("titled"))
+        plan = wrist_publish.plan_poem(sources, meta, "output", slug, PUBLISH_DIR)
+    elif style == "screenplay":
         for key in wrist_publish.SCREENPLAY_KEYS:
             meta[key] = pm.front.get(key, (0, ""))[1]
         inputs = list(sources)

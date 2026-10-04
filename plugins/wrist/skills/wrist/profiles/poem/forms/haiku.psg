@@ -1,0 +1,9 @@
+(* Haiku: three lines of 5, 7 and 5 syllables. *)
+poem {
+  named "haiku";
+  stanza (tercet, 1, none) {
+    line (syllables 5, stop, x) { }
+    line (syllables 7, stop, x) { }
+    line (syllables 5, stop, x) { }
+  }
+}

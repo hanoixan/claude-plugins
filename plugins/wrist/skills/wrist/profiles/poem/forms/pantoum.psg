@@ -1,0 +1,18 @@
+(* Pantoum: four quatrains in which lines 2 and 4 of each stanza return as lines 1 and 3 of the next, and the last stanza closes the circle with lines 3 and 1 of the first. Unrhymed here, because a repeated line must keep its tag. *)
+poem {
+  named "pantoum";
+  refrain P1 at 1, 16;
+  refrain P2 at 2, 5;
+  refrain P3 at 3, 14;
+  refrain P4 at 4, 7;
+  refrain P5 at 6, 9;
+  refrain P6 at 8, 11;
+  refrain P7 at 10, 13;
+  refrain P8 at 12, 15;
+  stanza (quatrain, 4, x x x x) {
+    line (free, stop, x) { }
+    line (free, stop, x) { }
+    line (free, stop, x) { }
+    line (free, stop, x) { }
+  }
+}

@@ -1,0 +1,183 @@
+[
+ {
+  "name": "two stanzas",
+  "text": "one\ntwo\n\nthree\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one",
+    "two"
+   ],
+   [
+    "three"
+   ]
+  ]
+ },
+ {
+  "name": "a title",
+  "text": "# Counting Down\n\nI count.\n",
+  "title": "Counting Down",
+  "stanzas": [
+   [
+    "I count."
+   ]
+  ]
+ },
+ {
+  "name": "a title line with no blank after it is verse",
+  "text": "# Counting\nI count.\n",
+  "title": null,
+  "stanzas": [
+   [
+    "# Counting",
+    "I count."
+   ]
+  ]
+ },
+ {
+  "name": "a hash line later is verse",
+  "text": "one\n\n# two\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one"
+   ],
+   [
+    "# two"
+   ]
+  ]
+ },
+ {
+  "name": "a title with nothing after it",
+  "text": "# Alone",
+  "title": "Alone",
+  "stanzas": []
+ },
+ {
+  "name": "only a title",
+  "text": "# T\n",
+  "title": "T",
+  "stanzas": []
+ },
+ {
+  "name": "indentation: each space and four per tab",
+  "text": "a\n  b\n\tc\n",
+  "title": null,
+  "stanzas": [
+   [
+    "a",
+    "  b",
+    "    c"
+   ]
+  ]
+ },
+ {
+  "name": "internal runs of spaces read as one",
+  "text": "a   b    c\n",
+  "title": null,
+  "stanzas": [
+   [
+    "a b c"
+   ]
+  ]
+ },
+ {
+  "name": "trailing space is dropped",
+  "text": "a  \nb\t\n",
+  "title": null,
+  "stanzas": [
+   [
+    "a",
+    "b"
+   ]
+  ]
+ },
+ {
+  "name": "nothing is markup",
+  "text": "*a* _b_ #c 1. d\n> e\n[f](g) `h`\n",
+  "title": null,
+  "stanzas": [
+   [
+    "*a* _b_ #c 1. d",
+    "> e",
+    "[f](g) `h`"
+   ]
+  ]
+ },
+ {
+  "name": "leading blank lines and runs of blank lines",
+  "text": "\n\none\n\n\n\ntwo\n\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one"
+   ],
+   [
+    "two"
+   ]
+  ]
+ },
+ {
+  "name": "a white-space-only line separates stanzas",
+  "text": "one\n   \ntwo\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one"
+   ],
+   [
+    "two"
+   ]
+  ]
+ },
+ {
+  "name": "carriage returns",
+  "text": "one\r\ntwo\r\n\r\nthree\r\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one",
+    "two"
+   ],
+   [
+    "three"
+   ]
+  ]
+ },
+ {
+  "name": "a byte order mark",
+  "text": "﻿one\n",
+  "title": null,
+  "stanzas": [
+   [
+    "one"
+   ]
+  ]
+ },
+ {
+  "name": "a no-break space is text, not white space",
+  "text": "a b\n",
+  "title": null,
+  "stanzas": [
+   [
+    "a b"
+   ]
+  ]
+ },
+ {
+  "name": "accents and quotes are kept",
+  "text": "café “quoted” — dash\n",
+  "title": null,
+  "stanzas": [
+   [
+    "café “quoted” — dash"
+   ]
+  ]
+ },
+ {
+  "name": "empty text",
+  "text": "",
+  "title": null,
+  "stanzas": []
+ }
+]

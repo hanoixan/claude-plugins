@@ -16,7 +16,7 @@ KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")       # premise key names; PREMISE.md 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUESTION_RE = re.compile(r"^-\s+\[(required|deferrable)\]\s+([a-z0-9]+(?:-[a-z0-9]+)*):\s+(\S.*)$")
 TOP_KEYS = {"name", "files", "functions", "relations", "limits"}
-OPTIONAL_KEYS = {"title_page", "premise_keys", "publish", "lint_format"}    # title_page: a separate title page when published (default true)
+OPTIONAL_KEYS = {"title_page", "premise_keys", "publish", "lint_format", "form"}    # title_page: a separate title page when published (default true)
 FUNCTION_KEYS = {"heading", "fields", "children", "prose", "required_when_realized", "sequence", "heading_field"}
 FILE_KEYS = {"path", "function", "order", "when", "family"}
 KEY_SETTINGS = {"type", "min", "max", "required"}
@@ -140,6 +140,14 @@ def validate(data):
             raise ProfileError(f"file '{f['path']}': 'family' must name an int premise key")
         if ("{n}" in f["path"]) != ("family" in f):
             raise ProfileError(f"file '{f['path']}': a family path must contain {{n}}, and only a family path may")
+    form = data.get("form")
+    if form is not None:
+        if not (isinstance(form, dict) and set(form) == {"structure", "poem"}
+                and all(isinstance(v, str) for v in form.values())):
+            raise ProfileError("'form' must be an object with only 'structure' and 'poem' paths")
+        for key, path in form.items():
+            if path not in seen:
+                raise ProfileError(f"'form' {key} path '{path}' is not listed in 'files'")
     if not _strings(data["relations"]):
         raise ProfileError("'relations' must be a list of words")
     limits = data["limits"]
@@ -173,6 +181,7 @@ class Profile:
         self.premise_keys = data.get("premise_keys", {})
         self.publish_style = (data.get("publish") or {}).get("style")
         self.lint_format = data.get("lint_format", "prose")
+        self.form = data.get("form")        # {"structure": path, "poem": path} for a poem profile, else None
         self.questions = questions
         self.directory = directory
         self.options = {}              # resolved premise values; filled by set_premise
@@ -254,6 +263,12 @@ class Profile:
             else:
                 out.append((path, f["function"]))
         return out
+
+    def form_paths(self, slug):
+        """(structure path, poem path) of a poem profile with {slug} filled in; None without a `form`."""
+        if not self.form:
+            return None
+        return self.form["structure"], self.form["poem"].replace("{slug}", slug)
 
     def function_for(self, rel, slug, options=None):
         return dict(self.expected_files(slug, options)).get(rel)

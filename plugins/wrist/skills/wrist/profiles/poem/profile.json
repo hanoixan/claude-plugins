@@ -1,0 +1,28 @@
+{
+  "name": "poem",
+  "title_page": false,
+  "publish": {"style": "poem"},
+  "lint_format": "prose",
+  "form": {"structure": "structure.md", "poem": "work/{slug}.md"},
+  "premise_keys": {
+    "titled": {"type": "bool"}
+  },
+  "files": [
+    {"path": "structure.md", "function": "structure", "order": 1},
+    {"path": "work/{slug}.md", "function": "poem", "order": 2}
+  ],
+  "functions": {
+    "structure": {
+      "heading": "structure",
+      "fields": ["Rhyme", "Meter"],
+      "required_when_realized": ["Form", "Lines", "Stanzas"]
+    },
+    "poem": {
+      "heading": "poem",
+      "fields": ["Subject", "Speaker", "Tone", "Turn", "Ending", "Must include", "Must avoid", "Must keep"],
+      "prose": true
+    }
+  },
+  "relations": ["appears", "mentions", "sets up", "pays off", "realizes"],
+  "limits": {"max_prose_words": 120}
+}

@@ -1,0 +1,27 @@
+(* Shakespearean sonnet: fourteen iambic pentameter lines, three quatrains and a couplet. The usual place for the turn is line 9 or the couplet. The stanza breaks may be moved. *)
+poem {
+  named "sonnet-shakespearean";
+  breaks flexible;
+  stanza (quatrain, 1, A B A B) {
+    line (iamb 5, stop, A) { }
+    line (iamb 5, stop, B) { }
+    line (iamb 5, stop, A) { }
+    line (iamb 5, stop, B) { }
+  }
+  stanza (quatrain, 1, C D C D) {
+    line (iamb 5, stop, C) { }
+    line (iamb 5, stop, D) { }
+    line (iamb 5, stop, C) { }
+    line (iamb 5, stop, D) { }
+  }
+  stanza (quatrain, 1, E F E F) {
+    line (iamb 5, stop, E) { }
+    line (iamb 5, stop, F) { }
+    line (iamb 5, stop, E) { }
+    line (iamb 5, stop, F) { }
+  }
+  stanza (couplet, 1, G G) {
+    line (iamb 5, stop, G) { }
+    line (iamb 5, stop, G) { }
+  }
+}

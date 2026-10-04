@@ -1,0 +1,8 @@
+(* Free verse: any number of unrhymed lines in any stanzas, with no meter and no repeated lines. A form that is only the absence of one; use it when the poem sets its own pattern. *)
+poem {
+  named "free-verse";
+  breaks flexible;
+  stanza (free, 1..*, none) {
+    line (free, stop, x) { }
+  }
+}
