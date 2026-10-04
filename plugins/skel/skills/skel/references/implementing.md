@@ -24,10 +24,10 @@ For each file in order:
    - Make `Inputs` and `Returns` the signature. `State changes` say which side effects are allowed; perform no others. `Access` decides visibility (public or private, exported or not).
    - Handle each listed failure mode explicitly.
    - Treat prose guidance as implementation instructions.
-3. In a code file, add a one-line header comment within the first ten lines pointing back to the stand-in, for example `# Spec: skel/a/b.py.skel.md`. Data, infrastructure and resource files take no header; they count as implemented once they exist. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent. A file written by a generator gets its header from the generator, or none; don't hand-edit generated output to add one.
+3. Write nothing about skel into the file: no header comment pointing at the stand-in, no hash. The link is the mirrored path. Keep docstrings short and derived from the stand-in. Don't paste the whole spec; the stand-in stays the source of intent.
 4. Write tests from the stand-in. Every failure mode and every `State changes` statement is a test case, and data `## Schema` blocks become validation fixtures.
-5. When a code file and its tests match the stand-in, stamp it: `skel_check.py stamp skel/ --root . a/b.py` adds a short hash of the stand-in to the file's `Spec:` header. A stamp records your claim that the code matches. It checks nothing, so stamp one file at a time, and only what you have just brought in step. `--all` is for adopting stamps on a tree whose code already matches.
-6. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Unstamped, or Names not found in code.
+5. When a file (and, for code, its tests) matches the stand-in, stamp it: `skel_check.py stamp skel/ --root . a/b.py` writes `stamp: source <hash>, stand-in <hash>` into the stand-in's front matter: a hash of the file's exact bytes and a hash of the stand-in (which leaves the stamp line out). A stamp records your claim that the two agree. It checks nothing, so stamp one file at a time, and only what you have just brought in step. `--all` is for adopting stamps on a tree whose files already match. Code, data and infrastructure files are all stamped; generated files and abstract stand-ins are not.
+6. Run `skel_check.py status skel/ --root .` to track progress. A file you have finished belongs under Implemented, with nothing of yours under Stale, Edited, Diverged, Unstamped, or Names not found in code.
 
 ## When implementation reveals something
 
@@ -41,15 +41,27 @@ Don't let code and skel drift. The skel is updated first:
 
 Rerun `check` after every batch of skel edits.
 
-## When the plan changes under existing code
+## When a stand-in or its file changes after stamping
 
-A new feature or a late decision changes stand-ins whose files are already implemented. `status` lists those files under **Stale**: the stand-in no longer matches the hash stamped in the code's `Spec:` header. A new backlink or a reflow does not make a file stale; any other edit to its stand-in does.
+The stamp holds two hashes, so `status` can tell which side moved:
 
-The Stale group is the work order. Bring each file back in step with its stand-in, then stamp it again. When the stale file is a unit's primary, `status` names the unit's other files beside it, because a changed contract usually means work in the source and not only the header. To see what changed in a stand-in:
+| Group | What changed | Work order |
+|---|---|---|
+| **Stale** | the stand-in | Verify the stand-in, then bring the file in step with it, then stamp. |
+| **Edited** | the file | Bring the stand-in in step with what the file now does (or revert the file), then stamp. |
+| **Diverged** | both | Reconcile the two by hand, then stamp. |
+
+A new backlink, a reflow or the stamp line itself does not change the stand-in hash; any other edit to the stand-in does. Any change to the file's bytes changes the source hash, a formatter run included.
+
+When a stale file is a unit's primary, `status` names the unit's other files beside it, because a changed contract usually means work in the whole unit. An edited file is a change made outside the skel: treat it as a new decision, so update the stand-in first and follow its `Referred by:` links as in the section above. To see what changed in a stand-in:
 
 ```bash
 git diff <last commit where code and skel agreed> -- skel
 ```
+
+## Old `Spec:` headers
+
+Trees stamped before skel 3 carry the stamp in a `# Spec: skel/<path>.skel.md @ <hash>` header comment in the code. `status` lists such files under **Legacy**. Run `skel_check.py stamp skel/ --root . --migrate` once: for each header whose hash still matches its stand-in, it writes the new stamp into the stand-in and deletes the header line from the file, keeping every other byte. A header whose hash no longer matches, that has no hash, that names another stand-in, or that shares its line with code is left and reported; settle those files, remove the header by hand, and stamp them. `--migrate` exits non-zero while anything is left.
 
 ## Existing code
 

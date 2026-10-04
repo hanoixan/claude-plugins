@@ -1836,6 +1836,22 @@ class Migrate(CodeCase):
         self.assertIn("--migrate takes the files to migrate, or none for all; not --all", out)
 
 
+class StampDocs(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(SKILL, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_docs_describe_two_way_stamps_and_no_header_in_code(self):
+        impl = self.read("references", "implementing.md")
+        self.assertNotIn("add a one-line header comment", impl)
+        for phrase in ("stamp: source <hash>, stand-in <hash>", "**Stale**", "**Edited**", "**Diverged**", "--migrate"):
+            self.assertIn(phrase, impl, phrase)
+        self.assertIn("| `stamp` | no |", self.read("references", "grammar.md"))
+        skill = self.read("SKILL.md")
+        self.assertIn("--migrate", skill)
+        self.assertIn("stale / edited / diverged", skill)
+
+
 class AgentNeutralPaths(unittest.TestCase):
     def test_skill_paths_are_agent_neutral(self):
         for dp, _, fns in os.walk(SKILL):

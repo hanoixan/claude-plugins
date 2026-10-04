@@ -265,19 +265,26 @@ agent can follow file by file.
 skel_check.py check SKEL_DIR            grammar, required fields, links and their backlinks, SYSTEM.md links
 skel_check.py unknowns SKEL_DIR         open decisions, blocking and local, each listed once
 skel_check.py order SKEL_DIR            dependency order (what must exist before what)
-skel_check.py status SKEL_DIR --root .  implemented, stale, unstamped, pending, abstract;
-                                        names missing from code
+skel_check.py status SKEL_DIR --root .  implemented, stale (stand-in changed), edited (file
+                                        changed), diverged (both), unstamped, legacy,
+                                        pending, abstract; names missing from code
 skel_check.py stamp SKEL_DIR --root . PATH... | --all
-                                        write the stand-in's hash into each code file's
-                                        `Spec:` header: your claim that it matches
+                                        record in each stand-in that it and its file agree:
+                                        a hash of each, kept in the stand-in, never in code
+skel_check.py stamp SKEL_DIR --root . --migrate
+                                        move stamps from old `Spec:` headers into stand-ins
 skel_check.py fix-backlinks SKEL_DIR    insert missing `Referred by:` lines
 skel_check.py infer-roles SKEL_DIR      propose each stand-in's role and its unit
 skel_check.py batches SKEL_DIR          buildable batches of units, manifests set aside
 ```
 
 `check` exits non-zero on errors, so it can run in CI or a pre-commit hook to keep the
-tree consistent. It never reads code; `status` is what reports code that has drifted from
-the tree.
+tree consistent. It never reads code; `status` is what reports files that have drifted from
+the tree, in either direction.
+
+**Upgrading a tree stamped with skel 2.x.** Stamps now live in the stand-in, with a hash of each side, so
+`status` reports both a stand-in that changed (stale) and a file that changed (edited). Run
+`stamp --migrate` once to move the old `Spec:` header stamps out of the code.
 
 **Upgrading a tree written for skel 1.x.** `check` now needs a `role:` on every stand-in
 and a `Kind:` on every unknown. Run `infer-roles --write` and settle the ones it marks
