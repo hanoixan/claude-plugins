@@ -1,6 +1,6 @@
 ---
 name: do-next
-description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once.
+description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once. Also use when the user asks for more of the queue while a run is already in flight - the new prompts join the live run without it losing its place.
 ---
 
 # do-next
@@ -13,7 +13,13 @@ finishes.
 **Announce at start:** "Using do-next to take the next prompt from NEXT.md."
 When taking several, say how many: "Using do-next to take the next 3 prompts
 from NEXT.md." When taking a section, name it and give its size: "Using do-next
-to take the 'Cleanup' section, 4 prompts, from NEXT.md."
+to take the 'Cleanup' section, 4 prompts, from NEXT.md." When a run is already
+live, say so: "Using do-next to add 2 prompts to the run in progress; prompt 2 of
+4 is paused at its next step."
+
+**Check for a live run first.** Before anything else, look for
+`./.claude/do-next-run.md` (see "The run file"). If it holds a live run, go to
+"Adding to a live run" instead of starting a new one.
 
 ## The argument
 
@@ -130,10 +136,12 @@ Show the user **every** prompt you are about to run, in order, grouped under its
 section name. Not a summary, not just the first, not just a count. Then ask
 whether to proceed.
 
-**This is a hard gate, and it is the only gate in the run.** Confirming the set
-authorises the questions in step 3, the plans in step 4, and all of the work
-that follows. Nothing after this point asks for approval again, so the set the
-user sees here is the whole of what they are agreeing to. Do not begin the
+**This is a hard gate, and it is the only approval of the set.** Confirming the
+set authorises the questions in step 3, the plans in step 4, and all of the work
+that follows. Nothing after this point asks the user to approve the set again,
+so the set the user sees here is the whole of what they are agreeing to. The
+run comes back to the user only for a decision above the threshold in step 6,
+an irreversible action, or something it cannot supply. Do not begin the
 questions, explore the codebase, or invoke another skill until they say yes.
 
 If they decline, stop. Leave `NEXT.md` untouched and run nothing.
@@ -165,13 +173,18 @@ wait for step 5.
 
 ### 4. Codify every plan, up front
 
-Write a plan for each prompt, in order, and put all of them in the scratch file
+Write a plan for each prompt, in order, and put all of them in the run file
 before any work starts.
 
 Each plan carries the prompt text, the answers from step 3, the steps to take,
 and how the result gets verified. Write plan N knowing what plans 1 through
 N-1 intend to leave behind, so plan N builds on their outcome instead of
 assuming the tree as it stands right now.
+
+With each plan, record its **baseline** (the git commit and changed-file list
+now) and its **assumptions** (the files, interfaces, behaviours and facts it
+relies on, each specific enough to check later). Step 5 checks them before the
+prompt starts, to catch what changed between planning and work.
 
 Still change nothing. This phase produces text, not commits.
 
@@ -184,42 +197,80 @@ usually depend on each other, and a batch is not permission to interleave them.
 Treat each prompt as if the user had typed it. That includes the normal skill
 rules: if a skill applies to what the prompt asks for, invoke it.
 
-**Re-read the plan when its turn arrives, and check it against the tree as it
-now stands.** The plan was written before the earlier prompts ran, so it may no
-longer fit.
+**Re-read the run file when each prompt's turn arrives,** not the conversation:
+the file is the record, and the conversation may have been compacted or
+interrupted since the plan was written. Mark the prompt `running`.
 
-- If it still fits, follow it.
-- If it does not, that is trouble under step 6. Stop and ask. Do not quietly
-  rewrite an approved plan into a different one.
+**Then check the plan against the project as it now stands.** The plan was
+written before the earlier prompts ran, and the project may also have changed
+from outside the run.
 
-The exception is an explicit instruction in this run to press through blockers,
-such as "don't stop for problems" or "improvise and keep going". Under that
-instruction, work out the best solution the prompt's stated intent and
-constraints allow, record in the scratch file what you changed and why, and carry
-on.
+1. List what changed since the plan's baseline: `git diff --stat <baseline commit>`
+   and `git status --porcelain`. Outside a git repository, compare the
+   modification times of the files the plan names.
+2. Sort each change. **Expected:** made by a prompt of this run, as its plan said
+   it would. **Outside the run:** the user's edits, another session, a tool, or a
+   prompt of this run that went beyond its plan.
+3. Take each of the plan's assumptions in turn and decide: still true, changed in
+   a way the plan absorbs, or broken.
+4. If every assumption holds, start. If any does not, the plan needs adjusting:
+   that is a decision after the question phase, and step 6 decides it. Write the
+   adjusted plan back to the run file before any work starts.
 
-### 6. Stop on any trouble
+**Keep the progress note current.** After each step of the plan, and always
+before pausing to ask anything, write into the prompt's entry what has been done,
+which step is next, and anything half-finished. If the run is interrupted, this
+note is how it resumes.
 
-If anything goes wrong, **stop and ask the user** before continuing. "Anything"
-means any point at which you would otherwise guess, work around a blocker,
-narrow the scope, or hand back something partial:
+### 6. Decide, or pause, after the question phase
 
-- a test fails, a build breaks, a command errors
-- the plan no longer matches the tree
-- a required file, credential, service, or dependency is missing
-- the work turns out much larger than the prompt and its plan implied
+Every question that matters should have been asked in step 3. Some cannot be:
+the project changes between planning and work, and some concerns, ambiguities and
+knowledge gaps only appear once the work starts. This step decides them all the
+same way, so the user is not called back for things that are cheap to change
+later.
 
-Do not press on and report the trouble afterwards. The gate in step 2 bought the
-user one decision up front, and this step is how they get another when the run
-diverges from what they approved.
+**Errors are work, not trouble.** A failing test, a broken build or a command
+that errors is part of the prompt's work: diagnose it and fix it. Only when
+fixing it needs a choice (which of two behaviours is intended, whether the test
+or the code is wrong) does it become a decision.
 
-A prompt stopped this way is **not** complete: leave it and everything after it
-in `NEXT.md`, and leave `DONE.md` alone for it.
+**For every decision after the question phase:** a broken plan assumption, an
+unknown met during the work, or an error whose fix needs a choice:
 
-**Trouble stops the run.** Do not skip the failed prompt and carry on with the
-next one, because the later prompts and their plans were written against a tree
-where this one succeeded. Report which prompts completed, which one stopped, and
-what remains.
+1. **Write the options** exactly as you would present them to the user, with one
+   marked recommended. The recommended option is "the most probable decision";
+   the two are the same thing. Never take an option you would not have
+   recommended.
+2. **Ask what reversing the recommended option would cost** if it later turned
+   out wrong. **Pause and ask the user only when reversing it would require:**
+   - **a major redesign:** changing an interface, data format, architecture or
+     user-visible behaviour that other prompts in the run, or existing code
+     outside it, depend on; or
+   - **lost work across items:** redoing more than one completed prompt, or most
+     of the work remaining in the run.
+3. **Otherwise take the recommended option without pausing,** record it in the
+   decision log (see "The run file"), and carry on.
+4. **When you do pause,** write the progress note first, then show the user the
+   same option list with the same recommendation, and wait. The run is paused,
+   not stopped: their answer resumes it.
+
+**Two things stay outside the threshold:**
+
+- **Irreversible or outward actions** (pushing, deleting data that has no copy,
+  publishing, sending messages, spending money) are always asked about, whatever
+  the threshold says.
+- **What you cannot supply stops the run.** A missing credential, service, file
+  or permission leaves no option to take. Mark the prompt `stopped`, set the run
+  file's state to `stopped`, and report what is needed. The stopped prompt and
+  everything after it stay in `NEXT.md`, and `DONE.md` is left alone for them.
+  Trouble of this kind stops the run: do not skip the prompt and carry on with
+  the next one, because the later plans assume this one landed.
+
+**Press through.** If this run was told to press through ("don't stop for
+problems", "improvise and keep going"), never pause, even when the threshold
+would ask. Take the recommended option, log it with `above threshold`, and list
+it first in the reports. The two exceptions above still apply.
 
 ### 7. Archive each finished prompt
 
@@ -239,24 +290,36 @@ leave a queue that says exactly what is left.
    timestamp onto the rest makes the log say something untrue.
 
 2. **Append** to `./DONE.md`: the timestamp on its own line in square brackets,
-   then the prompt text, then a `--` line. Create `DONE.md` if it does not exist.
+   then the prompt text, then, if any decision was taken without asking, a
+   `Decisions taken without asking:` line followed by one `- ` line per decision
+   (what was decided, and the main alternative), then a `--` line. Create
+   `DONE.md` if it does not exist.
 
    ```
    [2026-08-24 09:42:13 -0400]
    Do the first thing.
+   Decisions taken without asking:
+   - Kept the old config key as an alias rather than removing it outright.
    --
    ```
 
    The brackets keep the timestamp from being mistaken for part of the prompt,
    and the trailing `--` keeps `DONE.md` splittable the same way `NEXT.md` is.
 
-3. **Then** remove that prompt and its trailing `--` line from the top of
-   `./NEXT.md`, leaving the next prompt at the top.
+3. **Then** remove that prompt and its `--` line from `./NEXT.md`, **found by its
+   text, not by its position**: the prompt whose text, trimmed of leading and
+   trailing white space and compared line by line, equals the archived one. The
+   user may have added prompts above it or edited others during the run, so the
+   top of the file is not necessarily this prompt. If the text is no longer
+   there (the user edited or deleted it), remove nothing, and say so in the
+   report; the prompt is still archived.
 
-4. **When that prompt was the last one in its section**, move the section's `#`
-   line to `DONE.md` as well, directly after the prompt you just archived, and
-   remove it from `NEXT.md`. `DONE.md` then keeps the grouping that `NEXT.md`
+4. **When no prompt of that section is left in `NEXT.md`**, move the section's
+   `#` line to `DONE.md` as well, directly after the prompt you just archived,
+   and remove it from `NEXT.md`. `DONE.md` then keeps the grouping that `NEXT.md`
    had.
+
+5. Mark the prompt `done` in the run file.
 
 Append before removing, in that order. If something dies between the two steps,
 that ordering leaves a duplicate entry, which is a nuisance; the reverse order
@@ -267,32 +330,99 @@ the prompts and dividers still queued.
 
 ### 8. Report and offer what is next
 
-Report what was done, prompt by prompt, not as one lumped summary. Say how many
-prompts remain and how many sections they span, so the user knows the size of
-what is left. Then ask whether to keep going.
+After each prompt, say what it did and list the decisions it took without asking,
+each with its main alternative, so the user can reverse any of them.
 
-Delete the scratch file once every prompt in the run is archived.
+At the end of the run, report what was done, prompt by prompt, not as one lumped
+summary. List every decision taken without asking, grouped by prompt, with any
+`above threshold` ones first. Report any prompt whose text was no longer in
+`NEXT.md` when it was archived. Say how many prompts remain and how many sections
+they span, so the user knows the size of what is left. Then ask whether to keep
+going.
 
-## The scratch file
+Delete the run file once every prompt in the run is archived.
 
-The run's questions, answers and plans live in `./.claude/do-next-run.md`, one
-file per run. It exists because the plans are written long before some of them
+## Adding to a live run
+
+The user may ask for more of the queue while a run is in flight: they type
+`/do-next` (with any argument) while a prompt is running, or while the run is
+still asking its questions. The run must take the new prompts on without losing
+its place.
+
+1. **Reach a safe point.** Finish the tool call in progress and do not start
+   another step of the running prompt. Write its progress note.
+2. **Resolve the new set** from `NEXT.md` with the usual argument rules, leaving
+   out every prompt already in the run (matched by text). If nothing new is left,
+   say so and resume.
+3. **Confirm the new set.** Show every new prompt, grouped by section, and ask.
+   The prompts already in the run were approved before and are not shown again.
+   If the user declines, leave `NEXT.md` as it is and resume.
+4. **Ask the new prompts' questions,** cumulatively over every plan still pending
+   and the running prompt: the new prompts are planned against the project as
+   those prompts will leave it. If an answer conflicts with a pending plan, raise
+   it now. This is a question phase, so asking is expected and the threshold in
+   step 6 does not apply.
+5. **Write the new plans,** with their baselines and assumptions, and append them
+   to the run file after the prompts already pending, in queue order.
+6. **Resume.** Re-read the run file and continue the running prompt from its
+   progress note.
+
+If the run is still in its own question or planning phase when the new request
+comes, the new prompts join that set: confirm them, ask their questions with the
+rest, and plan everything together.
+
+## The run file
+
+The run's questions, answers, plans and progress live in `./.claude/do-next-run.md`,
+one file per run. It exists because the plans are written long before some of them
 run, and a plan that survives only in the conversation is lost to a compaction
-or a crash, which wastes the whole front-loaded phase.
+or a crash, which wastes the whole front-loaded phase. **It is the source of
+truth for the run:** re-read it whenever a prompt starts, whenever the run resumes
+after a pause or an added set, and whenever you are unsure where the run is.
 
-It holds, for each prompt in the run: its position, its section name, its text,
-the answers from step 3, the codified plan from step 4, a status of pending,
-running, done or stopped, and any deviation recorded under the press-through
-instruction in step 5.
+It starts with a header:
 
-Write it at the end of step 4, before any work begins. Update a prompt's status
-as it starts and as it is archived.
+```text
+state: active
+started: 2026-10-09 14:02:11 -0400
+```
 
-Delete it when the run completes with every prompt archived. **Leave it in place
-when a run stops**, so the user can see where the run halted and what the
-remaining plans said. A later `do-next` that finds one reports it before doing
-anything else, then starts its own run fresh; a stale plan file is a record, not
-a queue.
+and holds, for each prompt in the run:
+
+- its position, its section name, its text, and the answers from step 3;
+- its plan from step 4;
+- **baseline:** the git commit (`git rev-parse HEAD`) and the changed-file list
+  (`git status --porcelain`) when the plan was written; outside git, the paths and
+  modification times of the files the plan names;
+- **assumptions:** the files, interfaces, behaviours and facts the plan relies on,
+  one per line, each specific enough to check (a path, a signature, "the config
+  key `x` exists");
+- **status:** `pending`, `running`, `done` or `stopped`;
+- **progress** (the running prompt): what is done, which step is next, anything
+  half-finished;
+- **decision log:** one entry per decision taken without asking:
+
+  ```text
+  decision: <what was decided>
+  options: <option A (recommended, taken)> | <option B> | <option C>
+  why: <why the recommended option is the most probable>
+  reversal: <what changing it later would cost, and why that is below the threshold>
+  ```
+
+  An entry taken under press-through is marked `above threshold`.
+
+**A live run is never overwritten.** A file whose state is `active`, or that has
+any prompt `pending` or `running`, is a live run: a new `/do-next` adds to it (see
+"Adding to a live run"). Only a file whose state is `stopped`, or whose prompts are
+all `done` or `stopped`, is a record of an earlier run: report it before doing
+anything else, then start the new run fresh.
+
+Write it at the end of step 4, before any work begins, with the state `active`.
+Update a prompt's status as it starts, stops and is archived.
+
+Delete it when the run completes with every prompt archived. **When a run stops,
+set the state to `stopped` and leave the file in place**, so the user can see
+where it halted and what the remaining plans said.
 
 If the project has a `.gitignore`, add `.claude/do-next-run.md` to it. The file
 is a working note for one run, not part of the project's history.
@@ -309,17 +439,25 @@ is a working note for one run, not part of the project's history.
 | "I'll ask each prompt's questions on its own terms" | Ask cumulatively. Prompt 3's questions depend on what prompts 1 and 2 will have done. |
 | "The questions are done, so I can start the first prompt" | Step 4 writes every plan first. The plans are what make the later prompts coherent. |
 | "I'm only reading files, so a quick fix along the way is fine" | Steps 3 and 4 change nothing. Work starts at step 5. |
-| "The plan no longer fits, so I'll adjust it and move on" | Stop and ask, unless this run told you to press through blockers. An approved plan quietly rewritten is work the user never saw. |
-| "They said press through, so I don't need to record what I changed" | The scratch file records every deviation. Improvising is permitted; hiding it is not. |
+| "The plan no longer fits, so I'll adjust it and move on" | Write the options, mark the one you would recommend, and apply the threshold. Below it, take the recommendation and log it; above it, pause and ask. Never adjust a plan without a log entry. |
+| "This is ambiguous, so I'd better ask" | Only if reversing your recommended option would mean a major redesign or lost work across items. Otherwise take it and log it; the user answered once so they could leave. |
+| "Reversing this would mean a redesign, but I'm fairly sure, so I'll just do it" | Above the threshold you pause, however sure you are, unless this run said press through. |
+| "I'll take the safer option rather than the one I'd recommend" | The option taken is always the one you would have recommended to the user. If the safer option is better, recommend it. |
+| "The test failed, so the run stops" | Errors are work. Fix it; only a fix that needs a choice is a decision, and the threshold decides it. |
+| "They said press through, so I don't need to record what I changed" | Every decision taken without asking goes in the decision log, and press-through ones are reported first. Improvising is permitted; hiding it is not. |
 | "A batch means I can run them in parallel" | They share a working tree and usually depend on each other. One at a time, in order, each finished before the next starts. |
-| "Prompt 2 of 4 failed, I'll skip it and do 3" | The later prompts and plans assume the earlier ones landed. Trouble stops the run. |
+| "Prompt 2 of 4 stopped, I'll skip it and do 3" | The later prompts and plans assume the earlier ones landed. A stop stops the run. |
+| "A run file is here, so I'll start fresh" | Only a stopped or finished run is a record. A live one is added to, never overwritten. |
+| "I remember where the run was" | Re-read the run file. The conversation may have been compacted or interrupted since. |
+| "They called do-next mid-run, so I'll drop what I'm doing" | Reach a safe point, write the progress note, add the new prompts, then resume the running prompt where it was. |
+| "The top prompt in NEXT.md is the one I just finished" | Remove a prompt by its text. The user may have added or edited prompts during the run. |
 | "I'll archive the whole run at the end" | Then an interruption leaves a queue that lies about what is done. Archive each as it finishes. |
 | "One `date` reading is fine for the run" | They finished at different times. Re-run it per prompt. |
-| "It mostly worked; I'll archive it and flag the caveat" | A prompt with a caveat is not complete. Stop at step 6 and let the user decide. |
+| "It mostly worked; I'll archive it and flag the caveat" | A caveat is a decision: apply step 6. If it is below the threshold, finish the work and log the choice; a prompt is archived only when it is complete. |
 | "I'll archive it now so I don't forget" | Archiving before the work is done loses the prompt if the work then fails. |
 | "The section heading explains the prompt, so I'll pass it along" | A divider's text is a label, never part of a prompt. |
 | "This heading is inside a prompt, so it won't count as a divider" | It will. Any line starting with `#` divides, wherever it sits, so a prompt that needs a markdown heading in its body will be split. |
 | "`---` is close enough to `--`" | It is not. `---` is a horizontal rule, and splitting on it will cut a prompt in half. |
 | "I'll grep for the separator to read, and slice on `\n--\n` to archive" | Two matchers, one file. A separator with a trailing space passes the first and fails the second, and a prompt gets archived unrun. Use one rule in both places. |
 | "I know roughly what time it is" | You do not. Run `date`; a remembered timestamp is a made-up one. |
-| "The run stopped, so I'll clear the scratch file" | A stopped run leaves it, so the user can see where it halted. |
+| "The run stopped, so I'll clear the run file" | A stopped run leaves it, marked `stopped`, so the user can see where it halted. |
