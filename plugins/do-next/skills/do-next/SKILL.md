@@ -389,7 +389,8 @@ state: active
 started: 2026-10-09 14:02:11 -0400
 ```
 
-and holds, for each prompt in the run:
+(the `started` time read with `date '+%Y-%m-%d %H:%M:%S %z'`, never written from
+memory), and holds, for each prompt in the run:
 
 - its position, its section name, its text, and the answers from step 3;
 - its plan from step 4;
