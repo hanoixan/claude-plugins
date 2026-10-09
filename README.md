@@ -142,21 +142,26 @@ Both files live at the project root (the current directory).
 
 | Step | What happens |
 | --- | --- |
-| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval in the run. |
+| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval of the set; afterwards the run asks you only about a decision above the threshold, an irreversible action the prompt did not name, or something it cannot supply. |
 | Ask | Every prompt's clarifying questions are asked in one sitting, cumulatively: prompt 3's questions take into account what prompts 1 and 2 will do. Nothing is changed yet. |
-| Plan | A plan for every prompt (its text, your answers, the steps, how it is verified) is written to `./.claude/do-next-run.md` before any work starts, so a compaction or crash does not lose it. |
-| Run | One prompt at a time, in order, each re-checked against the tree as it then stands. |
-| Stop on trouble | A failing test, a plan that no longer fits, a missing dependency or work far larger than planned stops the run and asks you, unless this run told it to press through, in which case it records each deviation in the scratch file. A stopped prompt and everything after it stay queued. |
-| Archive | Each finished prompt is appended to `DONE.md` under a timestamp read from the system clock, then removed from `NEXT.md`; a finished section's `#` line moves with its last prompt. |
-| Report | What was done, prompt by prompt, and how much of the queue remains. |
+| Plan | A plan for every prompt (its text, your answers, the steps, how it is verified, the files and facts it relies on) is written to the run file, `./.do-next-run.md`, before any work starts, so a compaction or crash does not lose it. |
+| Run | One prompt at a time, in order. Before each starts, its plan is checked against what changed since it was written, by earlier prompts or from outside the run. |
+| Decide | Errors are fixed as part of the work. Any choice the questions could not settle is decided by a threshold: if reversing the option it would recommend would mean a major redesign or lost work across prompts, it pauses and asks you with that list of options; otherwise it takes the recommended option and logs it. Irreversible actions are always asked about, and something it cannot supply (a credential, a service) stops the run. |
+| Archive | Each finished prompt is appended to `DONE.md` under a timestamp read from the system clock, with any decisions it took without asking, then removed from `NEXT.md` by its text; a finished section's `#` line moves with its last prompt. |
+| Report | What was done, prompt by prompt, every decision taken without asking, and how much of the queue remains. |
+
+**Adding to a run in flight.** Run `/do-next` again while a run is going and the new
+prompts join it: the run pauses at a safe point, you confirm the new prompts and answer
+their questions (asked in light of everything still planned), their plans are appended,
+and the run resumes where it was. The run file is never overwritten while a run is live.
 
 **What a batch buys.** You answer once and can then leave: one confirmation and one round of
 questions instead of one per prompt. It does not buy parallelism. Prompts run in order, each
 finished and archived before the next starts, and a queue interrupted half way says exactly
 what is left.
 
-The scratch file is deleted when the run completes and kept when it stops, so you can see
-where it halted. Add `.claude/do-next-run.md` to your `.gitignore`.
+The run file is deleted when the run completes and kept, marked stopped, when it stops, so
+you can see where it halted. Add `.do-next-run.md` to your `.gitignore`.
 
 ```
 /plugin install do-next@hanoixan-claude-plugins
