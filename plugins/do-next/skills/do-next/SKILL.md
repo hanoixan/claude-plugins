@@ -17,9 +17,11 @@ to take the 'Cleanup' section, 4 prompts, from NEXT.md." When a run is already
 live, say so: "Using do-next to add 2 prompts to the run in progress; prompt 2 of
 4 is paused at its next step."
 
-**Check for a live run first.** Before anything else, look for
-`./.claude/do-next-run.md` (see "The run file"). If it holds a live run, go to
-"Adding to a live run" instead of starting a new one.
+**Check for a live run first,** before announcing anything: a run is live when
+`./.claude/do-next-run.md` says `state: active` (see "The run file"), or when this
+conversation is still in steps 1 to 4 of a run whose file is not written yet. If
+a run is live, go to "Adding to a live run" instead of starting a new one, and
+announce it that way.
 
 ## The argument
 
@@ -411,11 +413,11 @@ and holds, for each prompt in the run:
 
   An entry taken under press-through is marked `above threshold`.
 
-**A live run is never overwritten.** A file whose state is `active`, or that has
-any prompt `pending` or `running`, is a live run: a new `/do-next` adds to it (see
-"Adding to a live run"). Only a file whose state is `stopped`, or whose prompts are
-all `done` or `stopped`, is a record of an earlier run: report it before doing
-anything else, then start the new run fresh.
+**A live run is never overwritten.** A file whose state is `active` is a live
+run: a new `/do-next` adds to it (see "Adding to a live run"). A file whose state
+is `stopped`, or that has no state line (written by an earlier version of this
+skill), is a record of an earlier run, even though its later prompts are still
+`pending`: report it before doing anything else, then start the new run fresh.
 
 Write it at the end of step 4, before any work begins, with the state `active`.
 Update a prompt's status as it starts, stops and is archived.
