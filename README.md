@@ -114,7 +114,14 @@ time, archiving each to `./DONE.md` the moment it is finished.
 /do-next section          every prompt in the next section
 /do-next section 2        every prompt in the next two sections
 /do-next section Cleanup  every prompt in the section named Cleanup
+/do-next 3 --yes          the top three, shown but not asked about (also -y)
 ```
+
+**`--yes` (or `-y`)**, anywhere in the argument, skips the question that confirms the set:
+the prompts are still shown, so you can interrupt if it took the wrong ones, and then the
+run goes on. It skips nothing else. The clarifying questions are still asked, an argument it
+cannot resolve still stops and asks, and pauses for a decision above the threshold or an
+irreversible action still happen. It applies to that call only.
 
 Anything else as the argument (a zero, a decimal, an unknown word, a section name that
 matches nothing or more than one section) makes it stop and ask rather than guess. If the
@@ -142,7 +149,7 @@ Both files live at the project root (the current directory).
 
 | Step | What happens |
 | --- | --- |
-| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval of the set; afterwards the run asks you only about a decision above the threshold, an irreversible action the prompt did not name, or something it cannot supply. |
+| Confirm | Every prompt in the set is shown, grouped by section, and you approve it (with `--yes`, it is shown and the run goes on). This is the only approval of the set; afterwards the run asks you only about a decision above the threshold, an irreversible action the prompt did not name, or something it cannot supply. |
 | Ask | Every prompt's clarifying questions are asked in one sitting, cumulatively: prompt 3's questions take into account what prompts 1 and 2 will do. Nothing is changed yet. |
 | Plan | A plan for every prompt (its text, your answers, the steps, how it is verified, the files and facts it relies on) is written to the run file, `./.do-next-run.md`, before any work starts, so a compaction or crash does not lose it. |
 | Run | One prompt at a time, in order. Before each starts, its plan is checked against what changed since it was written, by earlier prompts or from outside the run. |
