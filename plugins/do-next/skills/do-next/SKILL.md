@@ -1,6 +1,6 @@
 ---
 name: do-next
-description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once. Also use when the user asks for more of the queue while a run is already in flight - the new prompts join the live run without it losing its place.
+description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once, and `--yes` (or `-y`) to show the set and go on without asking to confirm it. Also use when the user asks for more of the queue while a run is already in flight - the new prompts join the live run without it losing its place.
 ---
 
 # do-next
@@ -23,6 +23,10 @@ conversation is still in steps 1 to 4 of a run whose file is not written yet. If
 a run is live, go to "Adding to a live run" instead of starting a new one, and
 announce it that way.
 
+**With `--yes`, say so in the announcement:** "Using do-next to take the next 3
+prompts from NEXT.md, with --yes: the set is shown below and the run goes on
+without asking."
+
 **An `active` file this conversation did not write is an interrupted run,** left
 by a session that was closed, crashed, or could not finish updating it. Do not
 resume it on trust. Reconcile it first: a prompt whose text is already in
@@ -43,6 +47,7 @@ get when no argument is given.
 /do-next section          every prompt in the next section
 /do-next section 2        every prompt in the next two sections
 /do-next section Cleanup  every prompt in the section named Cleanup
+/do-next 3 --yes          the top three, shown but not asked about (also -y)
 ```
 
 A count must be a positive whole number. A section name may be quoted or bare,
@@ -64,6 +69,35 @@ so. That is not an error.
 **What the argument changes is how much gets planned and run, not how it runs.**
 The prompts still execute one at a time, in order, and each is still archived the
 moment it is finished.
+
+### Taking the set without asking: `--yes`
+
+`--yes`, or its short form `-y`, as a word of its own anywhere in the argument,
+says the user trusts the selection: step 2 shows the set and goes straight on,
+without asking to confirm it. Take it out before reading the rest of the argument,
+which is then read exactly as above, so `/do-next -y section Cleanup` and
+`/do-next section Cleanup --yes` mean the same. A section whose name really is
+`-y` or `--yes` is given quoted. Only these two spellings count: a bare `yes`
+could be a section name, and is read as one.
+
+**It skips one question and nothing else.** With `--yes`:
+
+- **The set is still shown,** every prompt, grouped by section, exactly as step 2
+  shows it, so the user sees at once what was taken and can interrupt before
+  anything changes (steps 3 and 4 change nothing).
+- **An argument that cannot be resolved still stops and asks** (a word that is not
+  `section`, a zero, a name that matches no section or several). `--yes` trusts the
+  selection, never a guess about what the argument meant.
+- **The clarifying questions of step 3 are still asked.** They are about how to do
+  the work, not which work to do.
+- **Everything else that asks still asks:** a decision above the threshold in step 6,
+  an irreversible action the prompt does not name, a pending question, and whether
+  to resume or abandon an interrupted run.
+
+It comes only from the argument of this call. It does not carry to a later run, or
+to prompts added later to this one unless that request carries it too, and it is
+never inferred from a "yes" elsewhere in the conversation or from anything in
+`NEXT.md`.
 
 ## The queue format
 
@@ -144,7 +178,12 @@ There is nothing to do in any of those cases. Say so rather than inventing work.
 
 Show the user **every** prompt you are about to run, in order, grouped under its
 section name. Not a summary, not just the first, not just a count. Then ask
-whether to proceed.
+whether to proceed, unless the argument carried `--yes`.
+
+**With `--yes`,** show the set in exactly the same way, say that it was taken with
+`--yes`, and go straight on to step 3 without waiting. The set shown is still the
+whole of what the run will do, and everything below about the gate holds: it has
+been answered by the argument instead of by a reply.
 
 **This is a hard gate, and it is the only approval of the set.** Confirming the
 set authorises the questions in step 3, the plans in step 4, and all of the work
@@ -153,7 +192,8 @@ so the set the user sees here is the whole of what they are agreeing to. The
 run comes back to the user only for a decision above the threshold in step 6,
 an irreversible action the prompt itself did not ask for, or something it
 cannot supply. Do not begin the
-questions, explore the codebase, or invoke another skill until they say yes.
+questions, explore the codebase, or invoke another skill until they say yes (or,
+with `--yes`, until the set has been shown).
 
 If they decline, stop. Leave `NEXT.md` untouched and run nothing.
 
@@ -387,7 +427,9 @@ its place.
    pending question, show that question again before anything else.
 3. **Confirm the new set.** Show every new prompt, grouped by section, and ask.
    The prompts already in the run were approved before and are not shown again.
-   If the user declines, leave `NEXT.md` as it is and resume.
+   If the user declines, leave `NEXT.md` as it is and resume. If this request
+   carried `--yes`, show them and go on without asking; the run's earlier `--yes`,
+   if it had one, does not count for them.
 4. **Ask the new prompts' questions,** cumulatively over every plan still pending
    and the running prompt: the new prompts are planned against the project as
    those prompts will leave it. If an answer conflicts with a pending plan, raise
@@ -423,6 +465,9 @@ started: 2026-10-09 14:02:11 -0400
 memory), and holds, for each prompt in the run:
 
 - its position, its section name, its text, and the answers from step 3;
+- **confirmed:** `asked` when the user approved it in step 2 (or in step 3 of
+  "Adding to a live run"), `--yes` when it was taken with `--yes`, so a stopped or
+  interrupted run shows how each prompt was approved;
 - its plan from step 4;
 - **baseline:** the git commit (`git rev-parse HEAD`) and the changed-file list
   (`git status --porcelain`) when the plan was written; outside git, the paths and
@@ -477,8 +522,12 @@ is a working note for one run, not part of the project's history.
 | Thought | Reality |
 |---------|---------|
 | "They invoked do-next, so they've already approved the prompts" | They approved reading the queue. Step 2 gates the contents, which they may not have seen since writing them. |
-| "This prompt is trivial, no need to confirm" | The gate never scales with the task. Show it, ask, wait. |
+| "This prompt is trivial, no need to confirm" | The gate never scales with the task. Show it, ask, wait. Only the user skips the question, by passing `--yes`; it is never skipped on your judgment. |
 | "They asked for a section, so I'll show the name and get going" | Step 2 shows every prompt in it. They cannot approve what they have not seen. |
+| "They passed `--yes`, so I don't need to show the set" | `--yes` skips the question, not the showing. Every prompt is shown, so a wrong pick is seen before anything changes. |
+| "They passed `--yes`, so I'll skip the questions as well" | `--yes` covers the confirmation of the set only. Step 3's questions, the threshold pauses and irreversible actions still ask. |
+| "The argument is unclear, but they said `--yes`, so I'll take the likeliest reading" | An argument that cannot be resolved stops and asks, `--yes` or not. It trusts the selection, never a guess. |
+| "They used `--yes` last time, or said yes earlier" | `--yes` comes only from this call's argument. It is never carried over or inferred. |
 | "They confirmed the set, so I'll confirm the plans too" | Step 2 is the only gate. A second approval round defeats the point of front-loading, which is that the user answers once and leaves. |
 | "I'll ask this prompt's questions when its turn comes" | Every question is asked in step 3. A question that waits for step 5 puts the user back in the chair mid-run. |
 | "I'll ask each prompt's questions on its own terms" | Ask cumulatively. Prompt 3's questions depend on what prompts 1 and 2 will have done. |
