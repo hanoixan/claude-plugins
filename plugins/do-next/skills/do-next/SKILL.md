@@ -18,7 +18,7 @@ live, say so: "Using do-next to add 2 prompts to the run in progress; prompt 2 o
 4 is paused at its next step."
 
 **Check for a live run first,** before announcing anything: a run is live when
-`./.claude/do-next-run.md` says `state: active` (see "The run file"), or when this
+`./.do-next-run.md` says `state: active` (see "The run file"), or when this
 conversation is still in steps 1 to 4 of a run whose file is not written yet. If
 a run is live, go to "Adding to a live run" instead of starting a new one, and
 announce it that way.
@@ -404,7 +404,8 @@ rest, and plan everything together.
 
 ## The run file
 
-The run's questions, answers, plans and progress live in `./.claude/do-next-run.md`,
+The run's questions, answers, plans and progress live in `./.do-next-run.md`, beside
+`NEXT.md`,
 one file per run. It exists because the plans are written long before some of them
 run, and a plan that survives only in the conversation is lost to a compaction
 or a crash, which wastes the whole front-loaded phase. **It is the source of
@@ -464,7 +465,11 @@ Delete it when the run completes with every prompt archived. **When a run stops,
 set the state to `stopped` and leave the file in place**, so the user can see
 where it halted and what the remaining plans said.
 
-If the project has a `.gitignore`, add `.claude/do-next-run.md` to it. The file
+Earlier versions of this skill kept the file at `./.claude/do-next-run.md`. A
+file found there is a record of an earlier run: report it as above, and never
+resume or overwrite it.
+
+If the project has a `.gitignore`, add `.do-next-run.md` to it. The file
 is a working note for one run, not part of the project's history.
 
 ## Red flags

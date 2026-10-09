@@ -144,7 +144,7 @@ Both files live at the project root (the current directory).
 | --- | --- |
 | Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval of the set; afterwards the run asks you only about a decision above the threshold, an irreversible action the prompt did not name, or something it cannot supply. |
 | Ask | Every prompt's clarifying questions are asked in one sitting, cumulatively: prompt 3's questions take into account what prompts 1 and 2 will do. Nothing is changed yet. |
-| Plan | A plan for every prompt (its text, your answers, the steps, how it is verified, the files and facts it relies on) is written to the run file, `./.claude/do-next-run.md`, before any work starts, so a compaction or crash does not lose it. |
+| Plan | A plan for every prompt (its text, your answers, the steps, how it is verified, the files and facts it relies on) is written to the run file, `./.do-next-run.md`, before any work starts, so a compaction or crash does not lose it. |
 | Run | One prompt at a time, in order. Before each starts, its plan is checked against what changed since it was written, by earlier prompts or from outside the run. |
 | Decide | Errors are fixed as part of the work. Any choice the questions could not settle is decided by a threshold: if reversing the option it would recommend would mean a major redesign or lost work across prompts, it pauses and asks you with that list of options; otherwise it takes the recommended option and logs it. Irreversible actions are always asked about, and something it cannot supply (a credential, a service) stops the run. |
 | Archive | Each finished prompt is appended to `DONE.md` under a timestamp read from the system clock, with any decisions it took without asking, then removed from `NEXT.md` by its text; a finished section's `#` line moves with its last prompt. |
@@ -161,7 +161,7 @@ finished and archived before the next starts, and a queue interrupted half way s
 what is left.
 
 The run file is deleted when the run completes and kept, marked stopped, when it stops, so
-you can see where it halted. Add `.claude/do-next-run.md` to your `.gitignore`.
+you can see where it halted. Add `.do-next-run.md` to your `.gitignore`.
 
 ```
 /plugin install do-next@hanoixan-claude-plugins
