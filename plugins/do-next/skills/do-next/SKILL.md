@@ -23,6 +23,14 @@ conversation is still in steps 1 to 4 of a run whose file is not written yet. If
 a run is live, go to "Adding to a live run" instead of starting a new one, and
 announce it that way.
 
+**An `active` file this conversation did not write is an interrupted run,** left
+by a session that was closed, crashed, or could not finish updating it. Do not
+resume it on trust. Reconcile it first: a prompt whose text is already in
+`DONE.md` is `done`, whatever the file says; a prompt still in `NEXT.md` and not in
+`DONE.md` is not done. Then show the user the reconciled state (what is done,
+what is left, any progress note and pending question) and ask whether to resume
+it or abandon it. Abandoning sets its state to `stopped` and leaves it as a record.
+
 ## The argument
 
 `do-next` takes one optional argument, which selects **how much of the queue to
@@ -143,7 +151,8 @@ set authorises the questions in step 3, the plans in step 4, and all of the work
 that follows. Nothing after this point asks the user to approve the set again,
 so the set the user sees here is the whole of what they are agreeing to. The
 run comes back to the user only for a decision above the threshold in step 6,
-an irreversible action, or something it cannot supply. Do not begin the
+an irreversible action the prompt itself did not ask for, or something it
+cannot supply. Do not begin the
 questions, explore the codebase, or invoke another skill until they say yes.
 
 If they decline, stop. Leave `NEXT.md` untouched and run nothing.
@@ -157,7 +166,9 @@ one went.
 ### 3. Ask every question, up front
 
 Walk the confirmed prompts in order and ask each one's clarifying questions
-before any prompt runs. The user answers once, in one sitting, and is then free
+before any prompt runs. Ask every question that matters, cheap or not: the
+threshold in step 6 is for what the question phase could not settle, never a
+reason to skip a question here. The user answers once, in one sitting, and is then free
 to leave.
 
 **Ask cumulatively, never in isolation.** By the time you reach prompt 3 you
@@ -244,26 +255,41 @@ unknown met during the work, or an error whose fix needs a choice:
    marked recommended. The recommended option is "the most probable decision";
    the two are the same thing. Never take an option you would not have
    recommended.
-2. **Ask what reversing the recommended option would cost** if it later turned
-   out wrong. **Pause and ask the user only when reversing it would require:**
-   - **a major redesign:** changing an interface, data format, architecture or
+2. **Ask what reversing the recommended option would cost** if the user turned
+   it down **after the run has finished**, with every later prompt built on it.
+   Judge by that cost, not by the kind of change. **Pause and ask the user only
+   when reversing it then would require:**
+   - **a major redesign:** reworking an interface, data format, architecture or
      user-visible behaviour that other prompts in the run, or existing code
-     outside it, depend on; or
-   - **lost work across items:** redoing more than one completed prompt, or most
-     of the work remaining in the run.
+     outside it, depend on, beyond a small, local edit to each dependent; or
+   - **lost work across items:** redoing more than one prompt of the run, or
+     most of the work remaining in it.
+   A choice that a few lines in one or two places would undo is below the
+   threshold, even if it touches an interface.
 3. **Otherwise take the recommended option without pausing,** record it in the
    decision log (see "The run file"), and carry on.
-4. **When you do pause,** write the progress note first, then show the user the
-   same option list with the same recommendation, and wait. The run is paused,
-   not stopped: their answer resumes it.
+4. **When you do pause,** write the progress note first, and with it the
+   **pending question**: the full option list and the recommendation, in the run
+   file. Then show the user the same list and wait. The run is paused, not
+   stopped: their answer resumes it, and clears the pending question. If they
+   end the run instead, set its state to `stopped`. If the conversation is
+   compacted, or another `/do-next` arrives, before they answer, show the pending
+   question again first; never take its recommendation by default.
 
 **Two things stay outside the threshold:**
 
 - **Irreversible or outward actions** (pushing, deleting data that has no copy,
   publishing, sending messages, spending money) are always asked about, whatever
-  the threshold says.
-- **What you cannot supply stops the run.** A missing credential, service, file
-  or permission leaves no option to take. Mark the prompt `stopped`, set the run
+  the threshold says, **unless the prompt itself asks for that action** ("commit
+  and push", "publish the release"): the user approved that prompt in step 2, and
+  that approval is the ask. An irreversible action the prompt does not name is
+  still asked about.
+- **What you cannot supply stops the run.** A secret or credential, an external
+  service, or a permission that you cannot obtain leaves no option to take, and
+  so does an error that survives three genuinely different fixes. Anything that
+  does have options (a file the plan relied on that has been deleted or moved, a
+  prompt that has grown well beyond its plan) is a decision for the threshold
+  above, not a stop. Mark the prompt `stopped`, set the run
   file's state to `stopped`, and report what is needed. The stopped prompt and
   everything after it stay in `NEXT.md`, and `DONE.md` is left alone for them.
   Trouble of this kind stops the run: do not skip the prompt and carry on with
@@ -353,9 +379,12 @@ its place.
 
 1. **Reach a safe point.** Finish the tool call in progress and do not start
    another step of the running prompt. Write its progress note.
-2. **Resolve the new set** from `NEXT.md` with the usual argument rules, leaving
-   out every prompt already in the run (matched by text). If nothing new is left,
-   say so and resume.
+2. **Resolve the new set** from `NEXT.md` **with every prompt already in the run
+   left out first** (matched by text), then apply the usual argument rules to
+   what remains: `/do-next 2` takes the next two prompts not yet in the run, and
+   `/do-next section` takes the next section that still has prompts not in the
+   run. If nothing new is left, say so and resume. If the run is paused on a
+   pending question, show that question again before anything else.
 3. **Confirm the new set.** Show every new prompt, grouped by section, and ask.
    The prompts already in the run were approved before and are not shown again.
    If the user declines, leave `NEXT.md` as it is and resume.
@@ -403,6 +432,9 @@ memory), and holds, for each prompt in the run:
 - **status:** `pending`, `running`, `done` or `stopped`;
 - **progress** (the running prompt): what is done, which step is next, anything
   half-finished;
+- **pending question** (only while paused in step 6): the option list and the
+  recommendation that were shown to the user, so the question survives a
+  compaction or an interruption;
 - **decision log:** one entry per decision taken without asking:
 
   ```text
@@ -421,6 +453,11 @@ skill), is a record of an earlier run, even though its later prompts are still
 `pending`: report it before doing anything else, then start the new run fresh.
 
 Write it at the end of step 4, before any work begins, with the state `active`.
+**If it cannot be written** (a permission prompt is declined, the folder is
+protected), stop before any work starts and tell the user: without the run file
+there is nothing to resume from and nothing to stop a second run starting
+alongside this one. Do the same if a later update to it fails: pause, say which
+update failed, and wait.
 Update a prompt's status as it starts, stops and is archived.
 
 Delete it when the run completes with every prompt archived. **When a run stops,
@@ -451,6 +488,9 @@ is a working note for one run, not part of the project's history.
 | "A batch means I can run them in parallel" | They share a working tree and usually depend on each other. One at a time, in order, each finished before the next starts. |
 | "Prompt 2 of 4 stopped, I'll skip it and do 3" | The later prompts and plans assume the earlier ones landed. A stop stops the run. |
 | "A run file is here, so I'll start fresh" | Only a stopped or finished run is a record. A live one is added to, never overwritten. |
+| "The file says active, so I'll pick up where it says" | If this conversation did not write it, reconcile it against DONE.md and NEXT.md, show the user, and ask whether to resume or abandon. |
+| "The run is paused, and they sent something else, so I'll take my recommendation" | A pending question is answered by the user. Show it again; never default it. |
+| "I can't write the run file, so I'll keep the state in my head" | Stop before any work. Without the file there is nothing to resume from. |
 | "I remember where the run was" | Re-read the run file. The conversation may have been compacted or interrupted since. |
 | "They called do-next mid-run, so I'll drop what I'm doing" | Reach a safe point, write the progress note, add the new prompts, then resume the running prompt where it was. |
 | "The top prompt in NEXT.md is the one I just finished" | Remove a prompt by its text. The user may have added or edited prompts during the run. |

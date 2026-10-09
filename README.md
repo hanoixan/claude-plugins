@@ -142,7 +142,7 @@ Both files live at the project root (the current directory).
 
 | Step | What happens |
 | --- | --- |
-| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval in the run. |
+| Confirm | Every prompt in the set is shown, grouped by section, and you approve it. This is the only approval of the set; afterwards the run asks you only about a decision above the threshold, an irreversible action the prompt did not name, or something it cannot supply. |
 | Ask | Every prompt's clarifying questions are asked in one sitting, cumulatively: prompt 3's questions take into account what prompts 1 and 2 will do. Nothing is changed yet. |
 | Plan | A plan for every prompt (its text, your answers, the steps, how it is verified, the files and facts it relies on) is written to the run file, `./.claude/do-next-run.md`, before any work starts, so a compaction or crash does not lose it. |
 | Run | One prompt at a time, in order. Before each starts, its plan is checked against what changed since it was written, by earlier prompts or from outside the run. |
