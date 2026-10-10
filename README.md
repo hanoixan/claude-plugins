@@ -115,6 +115,7 @@ time, archiving each to `./DONE.md` the moment it is finished.
 /do-next section 2        every prompt in the next two sections
 /do-next section Cleanup  every prompt in the section named Cleanup
 /do-next 3 --yes          the top three, shown but not asked about (also -y)
+/do-next section -s       the next section, run by a subagent (also --subagents)
 ```
 
 **`--yes` (or `-y`)**, anywhere in the argument, skips the question that confirms the set:
@@ -122,6 +123,16 @@ the prompts are still shown, so you can interrupt if it took the wrong ones, and
 run goes on. It skips nothing else. The clarifying questions are still asked, an argument it
 cannot resolve still stops and asks, and pauses for a decision above the threshold or an
 irreversible action still happen. It applies to that call only.
+
+**`--subagents` (or `-s`)** has one subagent run the set, so the work (edits, builds, test
+output) stays out of the main conversation. You confirm the set, answer its questions and
+get its plans in the main conversation as usual; the subagent then runs, archives and
+reports each prompt by the same rules, returning after each one with its report, and
+whenever it needs you: the main agent shows you the question and resumes it with your
+answer. While it works you can keep talking to the main agent, or add more with another
+`/do-next`. Each call's set is a **group**; groups run one after another, in the order they
+were added, whether a subagent or the main agent runs them. Without the flag, prompts run
+in the main conversation, and a prompt can still ask for subagents itself.
 
 Anything else as the argument (a zero, a decimal, an unknown word, a section name that
 matches nothing or more than one section) makes it stop and ask rather than guess. If the
