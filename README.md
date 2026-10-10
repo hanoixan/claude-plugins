@@ -115,7 +115,7 @@ time, archiving each to `./DONE.md` the moment it is finished.
 /do-next section 2        every prompt in the next two sections
 /do-next section Cleanup  every prompt in the section named Cleanup
 /do-next 3 --yes          the top three, shown but not asked about (also -y)
-/do-next section -s       the next section, run by a subagent (also --subagents)
+/do-next section -s       the next section, its heavy work in subagents (also --subagents)
 ```
 
 **`--yes` (or `-y`)**, anywhere in the argument, skips the question that confirms the set:
@@ -124,17 +124,20 @@ run goes on. It skips nothing else. The clarifying questions are still asked, an
 cannot resolve still stops and asks, and pauses for a decision above the threshold or an
 irreversible action still happen. It applies to that call only.
 
-**`--subagents` (or `-s`)** has one subagent run the set, so the work (edits, builds, test
-output) stays out of the main conversation. You confirm the set, answer its questions and
-get its plans in the main conversation as usual; the subagent then runs, archives and
-reports each prompt by the same rules, returning after each one with its report, and
-whenever it needs you: the main agent shows you the question and resumes it with your
-answer. Steps that shouldn't run unattended (deploys, live-data migrations, pushes,
-logins and credentials) stay with the main agent: the subagent stops before each, the main
-agent takes it, then resumes the subagent. While it works you can keep talking to the main agent, or add more with another
-`/do-next`. Each call's set is a **group**; groups run one after another, in the order they
-were added, whether a subagent or the main agent runs them. Without the flag, prompts run
-in the main conversation, and a prompt can still ask for subagents itself.
+**`--subagents` (or `-s`)** keeps the main conversation's context small, for long runs that
+would otherwise need a manual `/compact`. It is selective: broad code reading during the
+questions and plans goes to read-only Explore subagents, which return only their
+conclusions, and each prompt is marked `delegated` (builds, tests, many files, debugging)
+or `inline` (small edits, steps you need to be there for), with the marks listed for you
+after planning. Consecutive delegated prompts are run by one subagent, which archives and
+reports each by the same rules and returns after each one, and whenever it needs you: the
+main agent shows you the question and resumes it with your answer. Steps that shouldn't run
+unattended (deploys, live-data migrations, pushes, logins and credentials) stay with the
+main agent: the subagent stops before each, the main agent takes it, then resumes the
+subagent. While it works you can keep talking to the main agent, or add more with another
+`/do-next`. Groups of prompts run one after another, in queue order, whoever runs them.
+Without the flag, prompts run in the main conversation, and a prompt can still ask for
+subagents itself.
 
 Anything else as the argument (a zero, a decimal, an unknown word, a section name that
 matches nothing or more than one section) makes it stop and ask rather than guess. If the
