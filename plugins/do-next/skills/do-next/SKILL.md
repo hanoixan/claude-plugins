@@ -1,6 +1,6 @@
 ---
 name: do-next
-description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once, `--yes` (or `-y`) to show the set and go on without asking to confirm it, and `--subagents` (or `-s`) to have one subagent run the set, keeping its work out of the main conversation. Also use when the user asks for more of the queue while a run is already in flight - the new prompts join the live run without it losing its place.
+description: Use when the user asks to work through a queue of prompts stored in NEXT.md - confirms the set, asks every prompt's questions and codifies every plan up front, then runs them one at a time, archiving each to DONE.md. Takes an optional count of prompts, or a section to take a whole group at once, `--yes` (or `-y`) to show the set and go on without asking to confirm it, and `--subagents` (or `-s`) to keep the main conversation's context small by sending broad planning reads and the heavier prompts to subagents. Also use when the user asks for more of the queue while a run is already in flight - the new prompts join the live run without it losing its place.
 ---
 
 # do-next
@@ -28,7 +28,8 @@ prompts from NEXT.md, with --yes: the set is shown below and the run goes on
 without asking."
 
 **With `--subagents`, say so too:** "Using do-next to take the next 3 prompts from
-NEXT.md; a subagent will run them once their questions are answered."
+NEXT.md, with --subagents: work that would fill this conversation goes to
+subagents."
 
 **An `active` file this conversation did not write is an interrupted run,** left
 by a session that was closed, crashed, or could not finish updating it. Do not
@@ -51,7 +52,7 @@ get when no argument is given.
 /do-next section 2        every prompt in the next two sections
 /do-next section Cleanup  every prompt in the section named Cleanup
 /do-next 3 --yes          the top three, shown but not asked about (also -y)
-/do-next section -s       the next section, run by a subagent (also --subagents)
+/do-next section -s       the next section, its heavy work in subagents (also --subagents)
 ```
 
 A count must be a positive whole number. A section name may be quoted or bare,
@@ -103,24 +104,33 @@ to prompts added later to this one unless that request carries it too, and it is
 never inferred from a "yes" elsewhere in the conversation or from anything in
 `NEXT.md`.
 
-### Running the set in a subagent: `--subagents`
+### Saving the main context: `--subagents`
 
 `--subagents`, or its short form `-s`, as a word of its own anywhere in the
-argument, has the set run by **one subagent**, so the context of the work (the
-edits, builds, test output) stays out of the main conversation. It is read like
+argument, asks the run to **keep the main conversation's context small**, by
+handing work to subagents **where that saves more than it costs**. It is read like
 `--yes`: taken out before the rest of the argument is read, combined freely with a
 count, a section and `--yes` (`/do-next 3 -y -s`), and only these two spellings
 count; a section whose name really is `-s` or `--subagents` is given quoted.
 
-It changes **who runs the set, not how it is run.** The main agent still resolves
-and confirms the set (steps 1 and 2), asks every question (step 3) and writes every
-plan (step 4); the subagent then runs, archives and reports the prompts (steps 5 to
-7) by the same rules. See "Groups and subagents".
+Its purpose is the main context, nothing else, so it is applied selectively:
 
-Without it, the set is run in the main conversation, as each prompt describes,
-and a prompt may itself ask for subagents; that is the prompt's work, not this
-flag. Like `--yes`, it comes only from the argument of this call: it does not
-carry to a later run or to a set added later.
+- **Planning reads through Explore subagents.** In steps 3 and 4, broad code
+  reading (surveying a subsystem, finding every caller, tracing a flow across many
+  files) goes to read-only Explore subagents, which return their conclusions. A
+  targeted read of one known file stays in the main agent: delegating it would
+  cost more than reading it.
+- **Each prompt is marked `delegated` or `inline`** in step 4, by what it would
+  put into the context that a subagent could keep out.
+- **The delegated prompts are run by subagents,** one per group (see "Groups and
+  subagents"). The main agent still confirms the set, asks every question and
+  writes every plan; a subagent runs, archives and reports its prompts by the
+  same rules.
+
+Without it, nothing is delegated by the run: every prompt runs in the main
+conversation, as it describes, and a prompt may itself ask for subagents; that is
+the prompt's work, not this flag. Like `--yes`, it comes only from the argument of
+this call: it does not carry to a later run or to a set added later.
 
 ## The queue format
 
@@ -247,6 +257,11 @@ conflict with an earlier prompt, say so and ask whether to drop it.
 commands is how you form good questions. Edits, migrations, installs and commits
 wait for step 5.
 
+**With `--subagents`, send broad reading to Explore subagents** (read-only), and
+ask each for the conclusion you need, not the file contents: "which callers pass
+a null path, with file and line". Read one known file yourself. Independent
+surveys can run at once. The questions are still yours to form and ask.
+
 ### 4. Codify every plan, up front
 
 Write a plan for each prompt, in order, and put all of them in the run file
@@ -261,6 +276,22 @@ With each plan, record its **baseline** (the git commit and changed-file list
 now) and its **assumptions** (the files, interfaces, behaviours and facts it
 relies on, each specific enough to check later). Step 5 checks them before the
 prompt starts, to catch what changed between planning and work.
+
+**With `--subagents`, mark each prompt `delegated` or `inline`,** with a one-line
+reason, by what its work would put into the main context:
+
+- **delegated:** work that fills context: builds and test runs, many files read or
+  changed, debugging likely, long command output.
+- **inline:** work that is small (a few lines in a known place, where starting a
+  subagent that must re-read the skill, the run file and the code would cost more
+  than it saves); work that is mostly main-session steps (see "Groups and
+  subagents"); or work likely to need the user several times, since every pause
+  passes through the main agent anyway.
+
+When in doubt, mark it delegated: that is what the user asked for. In a delegated
+prompt, also tag the plan's **main-session steps**. After writing the plans, list
+the marks for the user, one line per prompt with its reason. This is not a gate:
+the run goes on, and the user can change a mark before its group starts.
 
 Still change nothing. This phase produces text, not commits.
 
@@ -342,7 +373,7 @@ unknown met during the work, or an error whose fix needs a choice:
    compacted, or another `/do-next` arrives, before they answer, show the pending
    question again first; never take its recommendation by default.
 
-**Two things stay outside the threshold:**
+**Three things stay outside the threshold:**
 
 - **Irreversible or outward actions** (pushing, deleting data that has no copy,
   publishing, sending messages, spending money) are always asked about, whatever
@@ -360,11 +391,17 @@ unknown met during the work, or an error whose fix needs a choice:
   everything after it stay in `NEXT.md`, and `DONE.md` is left alone for them.
   Trouble of this kind stops the run: do not skip the prompt and carry on with
   the next one, because the later plans assume this one landed.
+- **A refusal by the permission or safety check always pauses.** Never reword,
+  split or reroute a refused action to get it past the check. Write the progress
+  note and a pending question: what was refused, why the plan needs it, and the
+  options (the user runs it themselves, for instance with `! <command>`; the user
+  approves it and it is tried once more; the step is dropped and the plan
+  adjusted; the run stops). Then ask, as in 4 above.
 
 **Press through.** If this run was told to press through ("don't stop for
 problems", "improvise and keep going"), never pause, even when the threshold
 would ask. Take the recommended option, log it with `above threshold`, and list
-it first in the reports. The two exceptions above still apply.
+it first in the reports. The three exceptions above still apply.
 
 ### 7. Archive each finished prompt
 
@@ -463,27 +500,30 @@ its place.
    those prompts will leave it. If an answer conflicts with a pending plan, raise
    it now. This is a question phase, so asking is expected and the threshold in
    step 6 does not apply.
-5. **Write the new plans,** with their baselines and assumptions, as a **new
-   group** appended to the run file after every group already in it: a subagent
-   group if this request carried `--subagents`, inline otherwise (see "Groups and
-   subagents"). It runs when the groups before it are done.
+5. **Write the new plans,** with their baselines and assumptions (and, if this
+   request carried `--subagents`, their marks), as **new groups** appended to the
+   run file after every group already in it: one inline group without the flag,
+   or groups cut by mark with it (see "Groups and subagents"). They run when the
+   groups before them are done.
 6. **Resume.** Re-read the run file and continue the running prompt from its
    progress note. If a subagent is running the current group, there is nothing to
    resume in the main agent: it goes back to relaying that subagent's reports.
 
 If the run is still in its own question or planning phase when the new request
-comes, the new prompts join that set when the two agree on `--subagents` (both
-with it or both without): confirm them, ask their questions with the rest, and
-plan everything together. When they differ, the new prompts become the next group
-instead, still asked and planned in this same sitting.
+comes, the new prompts join that set: confirm them, ask their questions with the
+rest, and plan everything together. Each prompt keeps its own call's flag: the new
+prompts are marked only if their request carried `--subagents`, and are inline
+otherwise, whatever the first call said.
 
 ## Groups and subagents
 
-**A group is the set taken by one `/do-next` call:** the first call's set, and each
-set added later to the live run. A group is run either by the main agent
-(**inline**, the default) or, when its call carried `--subagents`, by one
-**subagent**. Sections are within groups: a group holds whichever prompts, of
-whichever sections, its call took.
+**A group is a run of consecutive prompts that share a runner:** the main agent
+(**inline**) or one **subagent**. Without `--subagents`, a call's set is one inline
+group. With it, the set is cut wherever the step 4 mark changes: consecutive
+`delegated` prompts form one subagent group, consecutive `inline` prompts one
+inline group, in queue order. A set added later to the live run forms groups of
+its own the same way. Sections are within groups: a group holds whichever
+prompts, of whichever sections, fall in it.
 
 **Groups run one after another, in the order they were added.** They share one
 working tree, so a group starts only when the one before it has finished, every
@@ -491,6 +531,21 @@ prompt archived. The main agent asks a new group's questions and writes its plan
 at once, even while an earlier group is still running, and plans it against the
 project as the earlier groups will leave it. An inline group after a subagent
 group is run by the main agent when the subagent's group finishes.
+
+**Main-session steps.** Some steps must not be left to a background agent that
+nobody is watching, and the permission and safety checks may refuse them there,
+or refuse to start a subagent whose brief hands them over:
+
+- **irreversible or outward actions:** writing or migrating live or production
+  data, deploying, publishing, pushing to a shared branch, deleting data that has
+  no copy, sending messages, spending money;
+- **steps that need the user present:** an interactive login, a secret or
+  credential only they have, anything that would ask them for permission.
+
+Step 4 tags these in each delegated plan. They stay the main agent's even when
+the prompt names them: the subagent does the reversible work around them, and the
+main agent takes each one itself (see "It returns at every boundary"). A prompt
+that is mostly such steps is marked inline.
 
 **Starting a subagent group.** When its turn comes, and its plans are in the run
 file, the main agent starts one general-purpose subagent, on the session's model,
@@ -500,8 +555,16 @@ in the background, with a brief that gives:
 - the path of this skill file, `SKILL.md` in this skill's base directory: the
   subagent reads "The run" (steps 5 to 7), "The queue format" and "The run file",
   and follows them as written, so there is one text of the rules, not two;
-- what it may not do: ask the user anything directly (it cannot), touch another
+- what it may not do: ask the user anything directly (it cannot), take a
+  main-session step (tagged, or one it meets that the plan missed), touch another
   group's entries in the run file, or start the next group.
+
+The brief grants no main-session step, not even as "the plan says so": it names
+them only as points to stop and return. **If the start is refused,** check the
+brief against that rule. If it handed over a main-session step, the tagging
+missed it: tag it, correct the brief, and start once more. If it did not, or the
+second start is refused too, do not reword it again: tell the user, and offer to
+run the group inline or stop the run.
 
 The subagent re-reads the run file, then runs the group's prompts in order. It
 may hand parts of a prompt to subagents of its own when its tools allow it and
@@ -520,6 +583,13 @@ same agent, its context intact) to go on:
   The main agent shows the user the same options, resumes the subagent with the
   answer, and the pending question is cleared. A stop is reported the same way,
   and stops the run as step 6 says;
+- **before each main-session step:** it writes the progress note and the step
+  (exactly what to run and how to check it) to the run file, then returns it. The
+  main agent takes the step itself, on the plan's approval and by step 6's rules
+  (an irreversible action the prompt does not name is still asked about), checks
+  it, records the outcome in the run file, and resumes the subagent. If a check
+  refuses the step, step 6's refusal rule applies: the main agent asks the user
+  and never works around it;
 - **when the group is done,** with the group's report. The next group then starts.
   The subagent never deletes the run file or writes the run's final report: those
   are the main agent's, at the end of the run (step 8), from the groups' reports.
@@ -527,7 +597,8 @@ same agent, its context intact) to go on:
 **The main agent is free while a subagent works:** the user can talk to it, and
 another `/do-next` adds a group (see "Adding to a live run") without interrupting
 the subagent. The main agent never runs work of its own in the working tree while
-a subagent group is running. If the user asks to stop the group, the main agent
+a subagent group is running; a main-session step the subagent has returned for is
+the one exception, since the subagent is waiting on it. If the user asks to stop the group, the main agent
 stops the subagent, marks the group and the run `stopped`, and reports where it
 halted.
 
@@ -576,6 +647,10 @@ Each group holds, for each of its prompts:
   "Adding to a live run"), `--yes` when it was taken with `--yes`, so a stopped or
   interrupted run shows how each prompt was approved;
 - its plan from step 4;
+- **mark** (only with `--subagents`): `delegated` or `inline`, and its one-line
+  reason;
+- **main-session steps** (delegated prompts): each tagged step, with its state
+  (`pending`, `handed back`, `done` or `refused`) and, once taken, its outcome;
 - **baseline:** the git commit (`git rev-parse HEAD`) and the changed-file list
   (`git status --porcelain`) when the plan was written; outside git, the paths and
   modification times of the files the plan names;
@@ -639,6 +714,10 @@ is a working note for one run, not part of the project's history.
 | "The subagent needs a decision, so it can take its best guess" | Above the threshold it writes the pending question and returns; the main agent asks the user and resumes it. A subagent is no licence to skip a pause. |
 | "A subagent group is running, so I'll start the next group too" | Groups share the working tree. The next one starts when this one is done. |
 | "A subagent is running, so I can make that small change myself" | Not in the working tree. The main agent plans and talks while a subagent group runs; the subagent does the work. |
+| "`--subagents`, so every prompt goes to a subagent" | The flag is for the main context. A one-line fix costs more to delegate than to do; mark it inline. |
+| "`--subagents`, so I'll have an Explore agent read this one file" | Only broad reading pays for a subagent. A known file is cheaper to read yourself. |
+| "The prompt asks for the deploy, so the subagent can do it" | Irreversible, production and credential steps are main-session steps. The subagent returns before each; the main agent takes it. |
+| "The check refused it; I'll phrase it differently" | A refusal pauses the run. Ask the user; never reword, split or reroute the action to get past the check. |
 | "I'll write the subagent the rules it needs" | Give it the skill file's path. One text of the rules, not a copy that drifts. |
 | "They confirmed the set, so I'll confirm the plans too" | Step 2 is the only gate. A second approval round defeats the point of front-loading, which is that the user answers once and leaves. |
 | "I'll ask this prompt's questions when its turn comes" | Every question is asked in step 3. A question that waits for step 5 puts the user back in the chair mid-run. |
