@@ -262,6 +262,9 @@ now) and its **assumptions** (the files, interfaces, behaviours and facts it
 relies on, each specific enough to check later). Step 5 checks them before the
 prompt starts, to catch what changed between planning and work.
 
+In a group to be run by a subagent, also tag each plan's **main-session steps**:
+the steps a background subagent must not take (see "Groups and subagents").
+
 Still change nothing. This phase produces text, not commits.
 
 ### 5. Run each prompt, in order
@@ -342,7 +345,7 @@ unknown met during the work, or an error whose fix needs a choice:
    compacted, or another `/do-next` arrives, before they answer, show the pending
    question again first; never take its recommendation by default.
 
-**Two things stay outside the threshold:**
+**Three things stay outside the threshold:**
 
 - **Irreversible or outward actions** (pushing, deleting data that has no copy,
   publishing, sending messages, spending money) are always asked about, whatever
@@ -360,11 +363,17 @@ unknown met during the work, or an error whose fix needs a choice:
   everything after it stay in `NEXT.md`, and `DONE.md` is left alone for them.
   Trouble of this kind stops the run: do not skip the prompt and carry on with
   the next one, because the later plans assume this one landed.
+- **A refusal by the permission or safety check always pauses.** Never reword,
+  split or reroute a refused action to get it past the check. Write the progress
+  note and a pending question: what was refused, why the plan needs it, and the
+  options (the user runs it themselves, for instance with `! <command>`; the user
+  approves it and it is tried once more; the step is dropped and the plan
+  adjusted; the run stops). Then ask, as in 4 above.
 
 **Press through.** If this run was told to press through ("don't stop for
 problems", "improvise and keep going"), never pause, even when the threshold
 would ask. Take the recommended option, log it with `above threshold`, and list
-it first in the reports. The two exceptions above still apply.
+it first in the reports. The three exceptions above still apply.
 
 ### 7. Archive each finished prompt
 
@@ -492,6 +501,22 @@ at once, even while an earlier group is still running, and plans it against the
 project as the earlier groups will leave it. An inline group after a subagent
 group is run by the main agent when the subagent's group finishes.
 
+**Main-session steps.** Some steps must not be left to a background agent that
+nobody is watching, and the permission and safety checks may refuse them there,
+or refuse to start a subagent whose brief hands them over:
+
+- **irreversible or outward actions:** writing or migrating live or production
+  data, deploying, publishing, pushing to a shared branch, deleting data that has
+  no copy, sending messages, spending money;
+- **steps that need the user present:** an interactive login, a secret or
+  credential only they have, anything that would ask them for permission.
+
+Step 4 tags these in each plan of a subagent group. They stay the main agent's
+even when the prompt names them: the subagent does the reversible work around
+them, and the main agent takes each one itself (see "It returns at every
+boundary"). A group whose prompts are all main-session steps gains nothing from a
+subagent; say so at planning and offer to run it inline.
+
 **Starting a subagent group.** When its turn comes, and its plans are in the run
 file, the main agent starts one general-purpose subagent, on the session's model,
 in the background, with a brief that gives:
@@ -500,8 +525,16 @@ in the background, with a brief that gives:
 - the path of this skill file, `SKILL.md` in this skill's base directory: the
   subagent reads "The run" (steps 5 to 7), "The queue format" and "The run file",
   and follows them as written, so there is one text of the rules, not two;
-- what it may not do: ask the user anything directly (it cannot), touch another
+- what it may not do: ask the user anything directly (it cannot), take a
+  main-session step (tagged, or one it meets that the plan missed), touch another
   group's entries in the run file, or start the next group.
+
+The brief grants no main-session step, not even as "the plan says so": it names
+them only as points to stop and return. **If the start is refused,** check the
+brief against that rule. If it handed over a main-session step, the tagging
+missed it: tag it, correct the brief, and start once more. If it did not, or the
+second start is refused too, do not reword it again: tell the user, and offer to
+run the group inline or stop the run.
 
 The subagent re-reads the run file, then runs the group's prompts in order. It
 may hand parts of a prompt to subagents of its own when its tools allow it and
@@ -520,6 +553,13 @@ same agent, its context intact) to go on:
   The main agent shows the user the same options, resumes the subagent with the
   answer, and the pending question is cleared. A stop is reported the same way,
   and stops the run as step 6 says;
+- **before each main-session step:** it writes the progress note and the step
+  (exactly what to run and how to check it) to the run file, then returns it. The
+  main agent takes the step itself, on the plan's approval and by step 6's rules
+  (an irreversible action the prompt does not name is still asked about), checks
+  it, records the outcome in the run file, and resumes the subagent. If a check
+  refuses the step, step 6's refusal rule applies: the main agent asks the user
+  and never works around it;
 - **when the group is done,** with the group's report. The next group then starts.
   The subagent never deletes the run file or writes the run's final report: those
   are the main agent's, at the end of the run (step 8), from the groups' reports.
@@ -527,7 +567,8 @@ same agent, its context intact) to go on:
 **The main agent is free while a subagent works:** the user can talk to it, and
 another `/do-next` adds a group (see "Adding to a live run") without interrupting
 the subagent. The main agent never runs work of its own in the working tree while
-a subagent group is running. If the user asks to stop the group, the main agent
+a subagent group is running; a main-session step the subagent has returned for is
+the one exception, since the subagent is waiting on it. If the user asks to stop the group, the main agent
 stops the subagent, marks the group and the run `stopped`, and reports where it
 halted.
 
@@ -576,6 +617,8 @@ Each group holds, for each of its prompts:
   "Adding to a live run"), `--yes` when it was taken with `--yes`, so a stopped or
   interrupted run shows how each prompt was approved;
 - its plan from step 4;
+- **main-session steps** (subagent groups): each tagged step, with its state
+  (`pending`, `handed back`, `done` or `refused`) and, once taken, its outcome;
 - **baseline:** the git commit (`git rev-parse HEAD`) and the changed-file list
   (`git status --porcelain`) when the plan was written; outside git, the paths and
   modification times of the files the plan names;
@@ -639,6 +682,8 @@ is a working note for one run, not part of the project's history.
 | "The subagent needs a decision, so it can take its best guess" | Above the threshold it writes the pending question and returns; the main agent asks the user and resumes it. A subagent is no licence to skip a pause. |
 | "A subagent group is running, so I'll start the next group too" | Groups share the working tree. The next one starts when this one is done. |
 | "A subagent is running, so I can make that small change myself" | Not in the working tree. The main agent plans and talks while a subagent group runs; the subagent does the work. |
+| "The prompt asks for the deploy, so the subagent can do it" | Irreversible, production and credential steps are main-session steps. The subagent returns before each; the main agent takes it. |
+| "The check refused it; I'll phrase it differently" | A refusal pauses the run. Ask the user; never reword, split or reroute the action to get past the check. |
 | "I'll write the subagent the rules it needs" | Give it the skill file's path. One text of the rules, not a copy that drifts. |
 | "They confirmed the set, so I'll confirm the plans too" | Step 2 is the only gate. A second approval round defeats the point of front-loading, which is that the user answers once and leaves. |
 | "I'll ask this prompt's questions when its turn comes" | Every question is asked in step 3. A question that waits for step 5 puts the user back in the chair mid-run. |
