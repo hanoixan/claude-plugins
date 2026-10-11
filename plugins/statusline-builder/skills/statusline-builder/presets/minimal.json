@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "minimal",
+  "description": "Model, folder and context percentage, coloured as it fills",
+  "lines": [[
+    {"item": "model", "color": "cyan"},
+    {"sep": " | "},
+    {"item": "folder"},
+    {"sep": " | "},
+    {"item": "ctx_pct", "thresholds": [{"below": 50, "color": "green"}, {"below": 80, "color": "yellow"}, {"color": "red"}]}
+  ]]
+}

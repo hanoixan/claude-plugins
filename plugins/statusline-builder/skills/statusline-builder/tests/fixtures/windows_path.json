@@ -1,0 +1,10 @@
+{
+  "cwd": "C:\\Users\\Sean\\Data\\proj",
+  "workspace": {"current_dir": "C:\\Users\\Sean\\Data\\proj"},
+  "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+  "context_window": {
+    "context_window_size": 200000,
+    "used_percentage": 12.34,
+    "current_usage": {"input_tokens": 24600, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 80}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "layout",
+  "lines": [
+    [{"sep": "<"}, {"item": "effort"}, {"text": "["}, {"sep": "-"}, {"text": "]"}, {"item": "model", "format": "{value} {nope}"}, {"sep": ">"}],
+    [{"item": "folder", "max": 12, "keep": 8, "ellipsis": "…"}, {"sep": " "}, {"item": "vim_mode"}, {"sep": " "}, {"item": "ctx_pct"}],
+    [{"item": "vim_mode"}, {"sep": " "}, {"item": "pr"}]
+  ]
+}

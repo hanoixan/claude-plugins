@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "groups": [
+    {"id": "basics", "label": "Basics", "description": "Who and where: user, host, folder, and how full the context window is"},
+    {"id": "model", "label": "Model & mode", "description": "Model, effort, fast mode, thinking, output style, vim mode, session name"},
+    {"id": "session", "label": "Session totals", "description": "Estimated cost, durations, lines added and removed"},
+    {"id": "git", "label": "Git & PR", "description": "Repository, branch, worktree, open pull request"},
+    {"id": "limits", "label": "Limits & cache", "description": "Rate-limit and spend-limit use, prompt-cache hit ratio and time left"}
+  ],
+  "items": [
+    {"id": "user", "group": "basics", "label": "User", "description": "The login name", "source": "whoami", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "host", "group": "basics", "label": "Hostname", "description": "The short host name", "source": "hostname -s", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "folder", "group": "basics", "label": "Session folder", "description": "The session's folder, home shown as ~, long paths cut to their end", "source": "workspace.current_dir, else cwd", "placeholders": ["value"], "default_format": "{value}", "settings": {"max": 35, "keep": 32, "ellipsis": "..."}},
+    {"id": "ctx_used", "group": "basics", "label": "Context used", "description": "Tokens in the context window (input, cache writes and cache reads)", "source": "context_window.current_usage", "placeholders": ["value", "k"], "default_format": "{k}", "numeric": true},
+    {"id": "ctx_max", "group": "basics", "label": "Context size", "description": "The most tokens the context window holds", "source": "context_window.context_window_size", "placeholders": ["value", "k"], "default_format": "{k}", "numeric": true},
+    {"id": "ctx_pct", "group": "basics", "label": "Context %", "description": "Percentage of the context window used", "source": "context_window.used_percentage", "placeholders": ["value"], "default_format": "{value}%", "numeric": true},
+
+    {"id": "model", "group": "model", "label": "Model", "description": "The model's display name", "source": "model.display_name", "placeholders": ["value", "id"], "default_format": "{value}"},
+    {"id": "effort", "group": "model", "label": "Effort", "description": "Reasoning effort level, when the model has one", "source": "effort.level", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "fast_mode", "group": "model", "label": "Fast mode", "description": "Shows 'fast' while fast mode is on", "source": "fast_mode", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "thinking", "group": "model", "label": "Thinking", "description": "Shows 'thinking' while extended thinking is on", "source": "thinking.enabled", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "output_style", "group": "model", "label": "Output style", "description": "The output style's name", "source": "output_style.name", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "vim_mode", "group": "model", "label": "Vim mode", "description": "NORMAL, INSERT and so on, when vim mode is on", "source": "vim.mode", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "session_name", "group": "model", "label": "Session name", "description": "The session's name or generated title", "source": "session_name", "placeholders": ["value"], "default_format": "{value}"},
+
+    {"id": "cost", "group": "session", "label": "Cost", "description": "Estimated session cost in US dollars", "source": "cost.total_cost_usd", "placeholders": ["value"], "default_format": "${value}", "numeric": true},
+    {"id": "duration", "group": "session", "label": "Duration", "description": "Wall-clock time since the session started", "source": "cost.total_duration_ms", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "api_duration", "group": "session", "label": "API time", "description": "Time spent waiting on the API", "source": "cost.total_api_duration_ms", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "lines_added", "group": "session", "label": "Lines added", "description": "Lines of code added this session", "source": "cost.total_lines_added", "placeholders": ["value"], "default_format": "+{value}", "numeric": true},
+    {"id": "lines_removed", "group": "session", "label": "Lines removed", "description": "Lines of code removed this session", "source": "cost.total_lines_removed", "placeholders": ["value"], "default_format": "-{value}", "numeric": true},
+
+    {"id": "repo", "group": "git", "label": "Repository", "description": "owner/name of the origin remote", "source": "workspace.repo", "placeholders": ["value", "owner", "name", "host"], "default_format": "{value}"},
+    {"id": "branch", "group": "git", "label": "Branch", "description": "The current git branch, or the short commit when detached (runs git)", "source": "git", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "worktree", "group": "git", "label": "Worktree", "description": "The worktree's name, inside a worktree", "source": "worktree.name, else workspace.git_worktree", "placeholders": ["value"], "default_format": "{value}"},
+    {"id": "pr", "group": "git", "label": "Pull request", "description": "The open PR for this branch, with its review state", "source": "pr", "placeholders": ["value", "state", "url"], "default_format": "PR #{value}"},
+
+    {"id": "rate_5h", "group": "limits", "label": "5-hour limit", "description": "Percentage of the 5-hour rate limit used (Pro and Max)", "source": "rate_limits.five_hour", "placeholders": ["value", "resets"], "default_format": "5h {value}%", "numeric": true},
+    {"id": "rate_7d", "group": "limits", "label": "7-day limit", "description": "Percentage of the 7-day rate limit used (Pro and Max)", "source": "rate_limits.seven_day", "placeholders": ["value", "resets"], "default_format": "7d {value}%", "numeric": true},
+    {"id": "spend", "group": "limits", "label": "Spend limit", "description": "Percentage of a gateway spend limit used", "source": "rate_limits.spend_limit", "placeholders": ["value", "resets", "usd", "limit"], "default_format": "{value}%", "numeric": true},
+    {"id": "cache_hit", "group": "limits", "label": "Cache hit ratio", "description": "Share of input read from the prompt cache this session", "source": "prompt_cache.hit_ratio", "placeholders": ["value"], "default_format": "cache {value}%", "numeric": true},
+    {"id": "cache_ttl", "group": "limits", "label": "Cache time left", "description": "Time until the prompt cache goes cold", "source": "prompt_cache.expires_at", "placeholders": ["value"], "default_format": "{value}"}
+  ]
+}

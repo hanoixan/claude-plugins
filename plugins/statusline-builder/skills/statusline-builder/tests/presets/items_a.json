@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "items_a",
+  "lines": [
+    [{"item": "user"}, {"sep": "|"}, {"item": "host"}, {"sep": "|"}, {"item": "folder"}, {"sep": "|"}, {"item": "ctx_used", "format": "{value}={k}"}, {"sep": "|"}, {"item": "ctx_max", "format": "{value}={k}"}, {"sep": "|"}, {"item": "ctx_pct"}],
+    [{"item": "model", "format": "{value}/{id}"}, {"sep": "|"}, {"item": "effort"}, {"sep": "|"}, {"item": "fast_mode"}, {"sep": "|"}, {"item": "thinking"}, {"sep": "|"}, {"item": "output_style"}, {"sep": "|"}, {"item": "vim_mode"}, {"sep": "|"}, {"item": "session_name"}],
+    [{"item": "cost"}, {"sep": "|"}, {"item": "duration"}, {"sep": "|"}, {"item": "api_duration"}, {"sep": "|"}, {"item": "lines_added"}, {"sep": "|"}, {"item": "lines_removed"}]
+  ]
+}

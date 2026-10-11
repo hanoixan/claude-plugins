@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "styles",
+  "lines": [[
+    {"item": "model", "color": "bright_cyan", "bold": true},
+    {"sep": " ", "color": "red"},
+    {"item": "effort", "color": 208},
+    {"sep": " "},
+    {"item": "ctx_pct", "color": "#ff8000", "thresholds": [{"below": 5, "color": "green"}, {"below": 9, "color": "yellow"}, {"color": "red"}]},
+    {"text": "!", "bold": true},
+    {"sep": " "},
+    {"item": "lines_added", "thresholds": [{"below": 100, "color": "green"}, {"color": 196}]}
+  ]]
+}

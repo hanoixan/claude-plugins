@@ -1,0 +1,9 @@
+{
+  "cwd": "/var/lib/thing",
+  "model": {"id": "claude-haiku-4-5", "display_name": "Haiku"},
+  "context_window": {
+    "context_window_size": 200000,
+    "used_percentage": 50,
+    "current_usage": {"input_tokens": 999, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1}
+  }
+}

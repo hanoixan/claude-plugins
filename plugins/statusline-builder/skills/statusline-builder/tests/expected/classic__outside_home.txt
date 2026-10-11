@@ -1,0 +1,1 @@
+sean@box:/var/lib/thing 1k (50%)
