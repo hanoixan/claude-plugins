@@ -36,6 +36,11 @@
       "name": "wrist",
       "source": "./plugins/wrist",
       "description": "Write prose in four phases: premise, checked stand-in tree, realization, PDF/EPUB publishing"
+    },
+    {
+      "name": "statusline-builder",
+      "source": "./plugins/statusline-builder",
+      "description": "A status line built from a menu, saved as a shareable preset, drawn in bash or PowerShell"
     }
   ]
 }
