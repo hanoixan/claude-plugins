@@ -28,6 +28,15 @@ function Test-Has($object, [string]$name) {
     return ($null -ne $object) -and ($null -ne $object.PSObject.Properties[$name])
 }
 
+# Lower-cases A to Z only, as jq's ascii_downcase does.
+function ConvertTo-AsciiLower([string]$text) {
+    $chars = $text.ToCharArray()
+    for ($i = 0; $i -lt $chars.Length; $i++) {
+        if (($chars[$i] -ge 'A') -and ($chars[$i] -le 'Z')) { $chars[$i] = [char]([int]$chars[$i] + 32) }
+    }
+    return -join $chars
+}
+
 function Test-Empty($value) {
     return ($null -eq $value) -or ([string]$value -eq '')
 }
@@ -81,15 +90,16 @@ function Get-Folder($seg) {
     }
     if ($h.Length -gt 1) { $h = $h -replace '/+$', '' }
     $pc = $p; $hc = $h
-    if ($drive) { $pc = $p.ToLowerInvariant(); $hc = $h.ToLowerInvariant() }
+    if ($drive) { $pc = ConvertTo-AsciiLower $p; $hc = ConvertTo-AsciiLower $h }
     if ($hc -eq '') { $f = $p }
     elseif ($pc -eq $hc) { $f = '~' }
     elseif ($pc.StartsWith($hc + '/', [StringComparison]::Ordinal)) { $f = '~' + $p.Substring($h.Length) }
     else { $f = $p }
     $max = 35; $keep = 32; $ellipsis = '...'
-    if (Test-Has $seg 'max') { $max = [int]$seg.max }
-    if (Test-Has $seg 'keep') { $keep = [int]$seg.keep }
+    try { if (Test-Has $seg 'max') { $max = [int][Math]::Floor([double]$seg.max) } } catch { }
+    try { if (Test-Has $seg 'keep') { $keep = [int][Math]::Floor([double]$seg.keep) } } catch { }
     if (Test-Has $seg 'ellipsis') { $ellipsis = [string]$seg.ellipsis }
+    $keep = [Math]::Max([Math]::Min($keep, $max), 0)
     if ($f.Length -gt $max) { $f = $ellipsis + $f.Substring($f.Length - $keep) }
     return $f
 }
@@ -252,8 +262,13 @@ function Get-Ansi($colour) {
 
 function Get-ThresholdColour($seg, $n) {
     if ((-not (Test-Has $seg 'thresholds')) -or ($null -eq $n)) { return $seg.color }
+    if (($null -eq $seg.thresholds) -or ($seg.thresholds -is [string]) -or
+        ($seg.thresholds -is [System.Management.Automation.PSCustomObject])) { return $seg.color }
     foreach ($rule in $seg.thresholds) {
-        if (($null -eq $rule.below) -or ([double]$n -lt [double]$rule.below)) {
+        if (-not ($rule -is [System.Management.Automation.PSCustomObject])) { continue }
+        $below = $null
+        try { if ($null -ne $rule.below) { $below = [double]$rule.below } } catch { $below = $null }
+        if (($null -eq $below) -or ([double]$n -lt $below)) {
             if ($null -ne $rule.color) { return $rule.color }
             return $seg.color
         }
@@ -262,6 +277,8 @@ function Get-ThresholdColour($seg, $n) {
 }
 
 function Format-Styled([string]$text, $seg, $colour) {
+    # Control characters would reach the terminal as escape sequences; drop them.
+    $text = $text -replace '[\x00-\x1F\x7F]', ''
     $codes = @()
     if ($seg.bold -eq $true) { $codes += '1' }
     $code = Get-Ansi $colour
@@ -281,16 +298,21 @@ function Format-Fill([string]$format, $r) {
 function Format-Line($line) {
     $segs = @()
     foreach ($seg in $line) {
+        if (-not ($seg -is [System.Management.Automation.PSCustomObject])) { continue }
         if (Test-Has $seg 'item') {
-            $r = Get-Value ([string]$seg.item) $seg
-            if ($null -eq $r) {
-                $segs += , @{ kind = 'item'; shown = $false; out = '' }
-            } else {
+            try { $r = Get-Value ([string]$seg.item) $seg } catch { $r = $null }
+            $filled = ''
+            if ($null -ne $r) {
                 $format = $defaults[[string]$seg.item]
                 if (Test-Has $seg 'format') { $format = [string]$seg.format }
+                try { $filled = Format-Fill $format $r } catch { $filled = '' }
+            }
+            if ($filled -eq '') {
+                $segs += , @{ kind = 'item'; shown = $false; out = '' }
+            } else {
                 $n = $null
                 if ($r.Contains('n')) { $n = $r['n'] }
-                $out = Format-Styled (Format-Fill $format $r) $seg (Get-ThresholdColour $seg $n)
+                $out = Format-Styled $filled $seg (Get-ThresholdColour $seg $n)
                 $segs += , @{ kind = 'item'; shown = $true; out = $out }
             }
         } elseif (Test-Has $seg 'sep') {
@@ -374,6 +396,7 @@ if ($valid) { foreach ($line in $preset.lines) { if (-not ($line -is [array])) {
 if (-not $valid) { Stop-With 'invalid preset' }
 foreach ($line in $preset.lines) {
     foreach ($seg in $line) {
+        if (-not ($seg -is [System.Management.Automation.PSCustomObject])) { continue }
         if ((Test-Has $seg 'item') -and (-not $defaults.ContainsKey([string]$seg.item))) {
             Stop-With ('unknown item ' + $quote + [string]$seg.item + $quote)
         }

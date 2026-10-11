@@ -69,6 +69,10 @@ def slashes: gsub("\\\\"; "/");
 def msys: if test("^/[A-Za-z](/|$)") then (.[1:2] | ascii_upcase) + ":" + .[2:] else . end;
 def q: [39] | implode;  # a single quote, which the shell quoting cannot hold
 def nonempty: if . == null or . == "" then null else . end;
+# Numbers may arrive as strings; anything that is not a number counts as absent.
+def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;
+# Control characters would reach the terminal as escape sequences; drop them.
+def clean: tostring | explode | map(select(. >= 32 and . != 127)) | implode;
 
 def folder($seg):
   ($in.workspace.current_dir // $in.cwd // $pwd) as $raw
@@ -82,20 +86,23 @@ def folder($seg):
      elif $pc == $hc then "~"
      elif ($pc | startswith($hc + "/")) then "~" + $p[($h | length):]
      else $p end) as $f
-  | ($seg.max // 35) as $max | ($seg.keep // 32) as $keep | ($seg.ellipsis // "...") as $ell
-  | if ($f | length) > $max then $ell + $f[(($f | length) - $keep):] else $f end;
+  | (($seg.max | num) // 35 | floor) as $max
+  | ([[(($seg.keep | num) // 32 | floor), $max] | min, 0] | max) as $keep
+  | ($seg.ellipsis // "..." | tostring) as $ell
+  | if ($f | length) > $max then $ell + (if $keep == 0 then "" else $f[(($f | length) - $keep):] end) else $f end;
 
 def usage: $in.context_window.current_usage
   | if . == null then null
-    else (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0) end;
+    else ((.input_tokens | num) // 0) + ((.cache_creation_input_tokens | num) // 0)
+      + ((.cache_read_input_tokens | num) // 0) end;
 
 def limit($w):
-  if $w == null or $w.used_percentage == null then null
-  else ($w.used_percentage | pct) as $v
+  if ($w | type) != "object" or ($w.used_percentage | num) == null then null
+  else ($w.used_percentage | num | pct) as $v
     | {value: "\($v)", n: $v,
-       resets: (if $w.resets_at == null then "" else $w.resets_at | hhmm end),
-       usd: (if $w.used_usd == null then "" else $w.used_usd | money end),
-       limit: (if $w.limit_usd == null then "" else $w.limit_usd | money end)}
+       resets: ($w.resets_at | num | if . == null then "" else hhmm end),
+       usd: ($w.used_usd | num | if . == null then "" else money end),
+       limit: ($w.limit_usd | num | if . == null then "" else money end)}
   end;
 
 def text1($v): if ($v | nonempty) == null then null else {value: "\($v)"} end;
@@ -106,9 +113,9 @@ def value($id; $seg):
   elif $id == "host" then text1($host)
   elif $id == "folder" then {value: folder($seg)}
   elif $id == "ctx_used" then usage | if . == null then null else {value: "\(floor)", k: kfmt, n: .} end
-  elif $id == "ctx_max" then $in.context_window.context_window_size
+  elif $id == "ctx_max" then $in.context_window.context_window_size | num
     | if . == null then null else {value: "\(floor)", k: kfmt, n: .} end
-  elif $id == "ctx_pct" then $in.context_window.used_percentage
+  elif $id == "ctx_pct" then $in.context_window.used_percentage | num
     | if . == null then null else pct as $v | {value: "\($v)", n: $v} end
   elif $id == "model" then $in.model.display_name
     | if . == null then null else {value: ., id: ($in.model.id // "")} end
@@ -118,11 +125,11 @@ def value($id; $seg):
   elif $id == "output_style" then text1($in.output_style.name)
   elif $id == "vim_mode" then text1($in.vim.mode)
   elif $id == "session_name" then text1($in.session_name)
-  elif $id == "cost" then $in.cost.total_cost_usd | if . == null then null else {value: money, n: .} end
-  elif $id == "duration" then $in.cost.total_duration_ms | if . == null then null else {value: (. / 1000 | human)} end
-  elif $id == "api_duration" then $in.cost.total_api_duration_ms | if . == null then null else {value: (. / 1000 | human)} end
-  elif $id == "lines_added" then $in.cost.total_lines_added | if . == null then null else {value: "\(.)", n: .} end
-  elif $id == "lines_removed" then $in.cost.total_lines_removed | if . == null then null else {value: "\(.)", n: .} end
+  elif $id == "cost" then $in.cost.total_cost_usd | num | if . == null then null else {value: money, n: .} end
+  elif $id == "duration" then $in.cost.total_duration_ms | num | if . == null then null else {value: (. / 1000 | human)} end
+  elif $id == "api_duration" then $in.cost.total_api_duration_ms | num | if . == null then null else {value: (. / 1000 | human)} end
+  elif $id == "lines_added" then $in.cost.total_lines_added | num | if . == null then null else {value: "\(.)", n: .} end
+  elif $id == "lines_removed" then $in.cost.total_lines_removed | num | if . == null then null else {value: "\(.)", n: .} end
   elif $id == "repo" then $in.workspace.repo
     | if . == null or .name == null then null
       else {value: ((if .owner then .owner + "/" else "" end) + .name),
@@ -135,9 +142,9 @@ def value($id; $seg):
   elif $id == "rate_5h" then limit($in.rate_limits.five_hour)
   elif $id == "rate_7d" then limit($in.rate_limits.seven_day)
   elif $id == "spend" then limit($in.rate_limits.spend_limit)
-  elif $id == "cache_hit" then $in.prompt_cache.hit_ratio
+  elif $id == "cache_hit" then $in.prompt_cache.hit_ratio | num
     | if . == null then null else (. * 100 | pct) as $v | {value: "\($v)", n: $v} end
-  elif $id == "cache_ttl" then $in.prompt_cache.expires_at
+  elif $id == "cache_ttl" then $in.prompt_cache.expires_at | num
     | if . == null or . <= $now then null else {value: (. - $now | human)} end
   else error("unknown item \(q)\($id)\(q)") end;
 
@@ -160,27 +167,30 @@ def hexbyte: ascii_downcase | explode
 def ansi:  # a colour value as SGR parameters
   if . == null then null
   elif type == "number" then "38;5;\(floor)"
+  elif type != "string" then null
   elif test("^[0-9]+$") then "38;5;" + .
   elif test("^#[0-9a-fA-F]{6}$") then "38;2;\(.[1:3] | hexbyte);\(.[3:5] | hexbyte);\(.[5:7] | hexbyte)"
   elif startswith("bright_") then names[.[7:]] | if . == null then null else "\(. + 90)" end
   else names[.] | if . == null then null else "\(. + 30)" end end;
 
 def threshold($seg; $n):
-  if $seg.thresholds == null or $n == null then $seg.color
-  else [$seg.thresholds[] | select(.below == null or $n < .below)][0].color // $seg.color end;
+  if ($seg.thresholds | type) != "array" or $n == null then $seg.color
+  else [$seg.thresholds[] | select(type == "object")
+        | select(.below == null or (.below | num) == null or $n < (.below | num))][0].color // $seg.color end;
 
-def styled($text; $seg; $colour):
-  ((if $seg.bold == true then ["1"] else [] end) + ([$colour | ansi] | map(select(. != null)))) as $codes
+def styled($raw; $seg; $colour):
+  ($raw | clean) as $text
+  | ((if $seg.bold == true then ["1"] else [] end) + ([$colour | ansi] | map(select(. != null)))) as $codes
   | if $nocolor or ($codes | length) == 0 or $text == "" then $text
     else "\u001b[" + ($codes | join(";")) + "m" + $text + "\u001b[0m" end;
 
 def render_line:
-  [ .[] | . as $seg
+  [ .[] | select(type == "object") | . as $seg
     | if has("item") then
-        value($seg.item; $seg) as $r
-        | {kind: "item", shown: ($r != null),
-           out: (if $r == null then ""
-                 else styled(fill($seg.format // defaults[$seg.item]; $r); $seg; threshold($seg; $r.n)) end)}
+        (try value($seg.item; $seg) catch null) as $r
+        | (if $r == null then "" else (try fill($seg.format // defaults[$seg.item] | tostring; $r) catch "") end) as $t
+        | {kind: "item", shown: ($t != ""),
+           out: (if $t == "" then "" else styled($t; $seg; threshold($seg; $r.n)) end)}
       elif has("sep") then {kind: "sep", shown: false, out: styled($seg.sep; $seg; $seg.color)}
       else {kind: "text", shown: false, out: styled($seg.text // ""; $seg; $seg.color)} end ] as $s
   | [range(0; $s | length) | select($s[.].shown)] as $items
@@ -197,8 +207,9 @@ def render_line:
     end;
 
 $preset[0] as $p
-| ([$p.lines[][] | select(has("item")) | .item | select(defaults[.] == null)] | first) as $bad
-| if $bad != null then "statusline: unknown item \(q)\($bad)\(q)"
+| [$p.lines[][] | select(type == "object" and has("item"))
+   | select((.item | type) != "string" or defaults[.item] == null) | (.item // "" | tostring)] as $bad
+| if ($bad | length) > 0 then "statusline: unknown item \(q)\($bad[0])\(q)"
   else $p.lines[] | render_line end
 '
 

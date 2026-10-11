@@ -452,12 +452,12 @@ out.
 /statusline-builder export classic   show a preset to share
 ```
 
-**Renderers.** The same preset draws identically through either renderer: bash (with
+**Renderers.** A preset looks the same through either renderer: bash (with
 `jq`), the default on Linux and macOS, or PowerShell (5.1 or 7, nothing extra), the
 default on Windows, where it works whether Claude Code runs commands through Git Bash or
 PowerShell. Items with nothing to show yet, such as context use before the first reply,
-disappear along with their separators. `tests/run.sh` checks both renderers against the
-same expected output.
+disappear along with their separators. `tests/run.sh` checks both renderers against one
+set of expected outputs.
 
 ```
 /plugin install statusline-builder@hanoixan-claude-plugins
