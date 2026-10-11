@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "robust",
+  "lines": [
+    [
+      "x",
+      {"item": "folder", "max": 10},
+      {"sep": " "}, {"item": "duration"},
+      {"sep": " "}, {"item": "cost"},
+      {"sep": " "}, {"item": "session_name"},
+      {"sep": " ", "color": true},
+      {"item": "model", "thresholds": {"below": 5}},
+      {"text": "\u001b[31m!"},
+      {"sep": " "}, {"item": "effort", "format": ""}
+    ],
+    [{"item": "model", "format": ""}]
+  ]
+}

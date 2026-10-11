@@ -1,0 +1,8 @@
+{
+  "name": "statusline-builder",
+  "description": "Build a Claude Code status line from a menu of items, save it as a shareable preset, and install a bash or PowerShell renderer that draws it",
+  "version": "0.1.0",
+  "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "license": "MIT",
+  "keywords": ["statusline", "status-line", "presets", "settings", "terminal"]
+}

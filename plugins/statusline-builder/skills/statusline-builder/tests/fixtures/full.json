@@ -1,0 +1,49 @@
+{
+  "cwd": "/home/sean/work/app",
+  "session_id": "abc123",
+  "session_name": "my-session",
+  "transcript_path": "/home/sean/.claude/projects/x/abc123.jsonl",
+  "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+  "workspace": {
+    "current_dir": "/home/sean/work/app",
+    "project_dir": "/home/sean/work/app",
+    "added_dirs": [],
+    "git_worktree": "feature-xyz",
+    "repo": {"host": "github.com", "owner": "anthropics", "name": "claude-code"}
+  },
+  "version": "2.1.90",
+  "output_style": {"name": "default"},
+  "cost": {
+    "total_cost_usd": 0.01234,
+    "total_duration_ms": 3725000,
+    "total_api_duration_ms": 125000,
+    "total_lines_added": 156,
+    "total_lines_removed": 23
+  },
+  "context_window": {
+    "total_input_tokens": 15500,
+    "total_output_tokens": 1200,
+    "context_window_size": 200000,
+    "used_percentage": 8.7,
+    "remaining_percentage": 91.3,
+    "current_usage": {
+      "input_tokens": 8500,
+      "output_tokens": 1200,
+      "cache_creation_input_tokens": 5000,
+      "cache_read_input_tokens": 2000
+    }
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {"warm": true, "ttl": "1h", "expires_at": 1738429200, "hit_ratio": 0.91},
+  "fast_mode": true,
+  "effort": {"level": "high"},
+  "thinking": {"enabled": true},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+    "seven_day": {"used_percentage": 81.2, "resets_at": 1738857600},
+    "spend_limit": {"used_percentage": 62.8, "resets_at": 1740787200, "used_usd": 314.12, "limit_usd": 500, "period": "monthly"}
+  },
+  "vim": {"mode": "NORMAL"},
+  "pr": {"number": 1234, "url": "https://github.com/anthropics/claude-code/pull/1234", "review_state": "pending"},
+  "worktree": {"name": "my-feature", "path": "/home/sean/.claude/worktrees/my-feature"}
+}

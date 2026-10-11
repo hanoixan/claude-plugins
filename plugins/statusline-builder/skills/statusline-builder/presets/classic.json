@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "name": "classic",
+  "description": "user@host:folder, then context used and its percentage",
+  "lines": [[
+    {"item": "user", "color": "green", "bold": true},
+    {"text": "@", "color": "green", "bold": true},
+    {"item": "host", "color": "green", "bold": true},
+    {"text": ":"},
+    {"item": "folder", "color": "blue", "bold": true},
+    {"sep": " "},
+    {"item": "ctx_used"},
+    {"sep": " "},
+    {"item": "ctx_pct", "format": "({value}%)"}
+  ]]
+}

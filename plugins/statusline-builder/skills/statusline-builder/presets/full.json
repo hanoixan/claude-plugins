@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "name": "full",
+  "description": "Three lines: where you are, the session, and your limits",
+  "lines": [
+    [
+      {"item": "user", "color": "green", "bold": true},
+      {"text": "@", "color": "green", "bold": true},
+      {"item": "host", "color": "green", "bold": true},
+      {"text": ":"},
+      {"item": "folder", "color": "blue", "bold": true},
+      {"sep": " "},
+      {"item": "branch", "color": "magenta", "format": "({value})"},
+      {"sep": " "},
+      {"item": "pr", "color": "cyan"}
+    ],
+    [
+      {"item": "model", "color": "cyan"},
+      {"sep": " · "},
+      {"item": "ctx_used"},
+      {"sep": "/"},
+      {"item": "ctx_max"},
+      {"sep": " "},
+      {"item": "ctx_pct", "format": "({value}%)", "thresholds": [{"below": 50, "color": "green"}, {"below": 80, "color": "yellow"}, {"color": "red"}]},
+      {"sep": " · "},
+      {"item": "cost"},
+      {"sep": " · "},
+      {"item": "duration"},
+      {"sep": " · "},
+      {"item": "lines_added", "color": "green"},
+      {"sep": " "},
+      {"item": "lines_removed", "color": "red"}
+    ],
+    [
+      {"item": "rate_5h", "thresholds": [{"below": 50, "color": "green"}, {"below": 80, "color": "yellow"}, {"color": "red"}]},
+      {"sep": " · "},
+      {"item": "rate_7d", "thresholds": [{"below": 50, "color": "green"}, {"below": 80, "color": "yellow"}, {"color": "red"}]},
+      {"sep": " · "},
+      {"item": "cache_hit"}
+    ]
+  ]
+}

@@ -1,6 +1,6 @@
 # hanoixan-claude-plugins
 
-A Claude Code plugin marketplace. Six plugins.
+A Claude Code plugin marketplace. Seven plugins.
 
 Four are small. Three of them are built around the same observation: **a skill body
 reaches the model once, when it is invoked, and then sits at a fixed point in the
@@ -15,7 +15,8 @@ The fifth, [skel](#skel), is a different kind of thing: a design format with its
 grammar, checker and templates, loaded when you ask for it. The sixth, [wrist](#wrist), is
 skel adapted for writing: the same stand-in tree, checker and unknowns, applied to a short
 story, novel, screenplay or poem instead of a codebase, and carried through to a published
-PDF and EPUB.
+PDF and EPUB. The seventh, [statusline-builder](#statusline-builder), sets up your status
+line from a menu and keeps it as a preset you can share.
 
 ---
 
@@ -36,6 +37,7 @@ Then install whichever plugins you want:
 /plugin install ask-questions@hanoixan-claude-plugins
 /plugin install skel@hanoixan-claude-plugins
 /plugin install wrist@hanoixan-claude-plugins
+/plugin install statusline-builder@hanoixan-claude-plugins
 ```
 
 ### Requirements
@@ -50,6 +52,9 @@ wrist has no hooks either. Its scripts need `python3` (standard library only); p
 also needs `pandoc` 3.2+ and `typst` 0.12+, and wrist prints install steps if either is
 missing.
 
+statusline-builder's status line runs in bash with `jq`, or in PowerShell (Windows
+PowerShell 5.1 or PowerShell 7) with nothing else.
+
 ---
 
 ## The plugins at a glance
@@ -62,6 +67,7 @@ missing.
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
 | [skel](#skel) | Designing a codebase before writing it | none | yes | none |
 | [wrist](#wrist) | Writing a story, novel, screenplay or poem from a checked outline | none | yes | none |
+| [statusline-builder](#statusline-builder) | Your status line, built from a menu and saved as a preset | none | yes | none |
 
 ---
 
@@ -417,6 +423,48 @@ gates, so nothing depends on the model still remembering them.
 
 ---
 
+## statusline-builder
+
+Builds your Claude Code status line from a menu instead of a hand-written script.
+`/statusline-builder` asks which items you want, group by group:
+
+- **Basics:** user, hostname, session folder (home shown as `~`, long paths cut to
+  `...` and their last 32 characters), context tokens used, context size, context %.
+- **Model & mode:** model, effort, fast mode, thinking, output style, vim mode, session name.
+- **Session totals:** estimated cost, duration, API time, lines added and removed.
+- **Git & PR:** repository, branch, worktree, open pull request.
+- **Limits & cache:** 5-hour and 7-day limits, spend limit, cache hit ratio, cache time left.
+
+Then it asks for their order and lines (up to three), and any colours, bold, format
+templates (`({value}%)`, `5h {value}% until {resets}`) or colour thresholds you want. It previews the
+result on sample input, saves it as a named **preset** in `~/.claude/statusline/presets/`,
+and points `statusLine` in `~/.claude/settings.json` at a renderer, after backing up the
+one you had.
+
+A preset is a small JSON file with no user, host or path in it, so it moves between
+machines and people: `export` shows it, `import` takes one from a file or URL, `use`
+switches to another, `restore` brings back a replaced status line, and `remove` takes it
+out.
+
+```
+/statusline-builder                  build or change it interactively
+/statusline-builder use minimal      switch to a saved or built-in preset
+/statusline-builder export classic   show a preset to share
+```
+
+**Renderers.** A preset looks the same through either renderer: bash (with
+`jq`), the default on Linux and macOS, or PowerShell (5.1 or 7, nothing extra), the
+default on Windows, where it works whether Claude Code runs commands through Git Bash or
+PowerShell. Items with nothing to show yet, such as context use before the first reply,
+disappear along with their separators. `tests/run.sh` checks both renderers against one
+set of expected outputs.
+
+```
+/plugin install statusline-builder@hanoixan-claude-plugins
+```
+
+---
+
 ## Editing a plugin's injected text
 
 Every hook reads `${CLAUDE_PLUGIN_DATA}/<file>.txt` first and falls back to the copy
@@ -436,7 +484,7 @@ Find the data directory under `~/.claude/plugins/data/<plugin>-<marketplace>/`.
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json     the six plugin entries
+.claude-plugin/marketplace.json     the seven plugin entries
 plugins/<name>/
   .claude-plugin/plugin.json        manifest
   hooks/hooks.json                  hook registrations
@@ -449,6 +497,7 @@ plugins/<name>/
   tests/                            skel and wrist: tests for their scripts
   skills/wrist/profiles/            wrist only: one folder of data per profile
   skills/wrist/publish/             wrist only: pandoc and typst files per publishing style
+  skills/statusline-builder/renderers/  statusline-builder only: the bash and PowerShell renderers
 ```
 
 ---

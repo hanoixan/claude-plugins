@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "items_b",
+  "lines": [
+    [{"item": "repo", "format": "{value} {host}:{owner}:{name}"}, {"sep": "|"}, {"item": "branch"}, {"sep": "|"}, {"item": "worktree"}, {"sep": "|"}, {"item": "pr", "format": "#{value} {state} {url}"}],
+    [{"item": "rate_5h", "format": "{value}% {resets}"}, {"sep": "|"}, {"item": "rate_7d", "format": "{value}% {resets}"}, {"sep": "|"}, {"item": "spend", "format": "{value}% ${usd}/${limit} {resets}"}, {"sep": "|"}, {"item": "cache_hit"}, {"sep": "|"}, {"item": "cache_ttl"}]
+  ]
+}

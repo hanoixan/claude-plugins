@@ -1,0 +1,6 @@
+{
+  "cwd": "/opt/abcdefghijklmnop",
+  "model": {"display_name": "Opus"},
+  "session_name": "evil\u001b]0;x\u0007name",
+  "cost": {"total_duration_ms": "60000", "total_cost_usd": "0.5"}
+}

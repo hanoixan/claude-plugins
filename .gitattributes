@@ -1,0 +1,4 @@
+# Scripts must keep LF endings, or bash fails on a Windows checkout with core.autocrlf.
+*.sh   text eol=lf
+*.ps1  text eol=lf
+*.json text eol=lf
