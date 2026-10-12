@@ -327,6 +327,24 @@ from outside the run.
    that is a decision after the question phase, and step 6 decides it. Write the
    adjusted plan back to the run file before any work starts.
 
+**Estimate the prompt and note the time** once its plan is settled, before the
+first step of work:
+
+1. Estimate the prompt's total working time, from its plan, in whole minutes.
+2. Read the time with `date '+%Y-%m-%d %H:%M:%S %z'`, never from memory.
+3. Write both into the prompt's entry in the run file: `estimate: 20 min` and
+   `started: 2026-10-12 10:03:41 -0400`.
+4. Run `python3 <this skill's base directory>/scripts/estimate.py ratio ./DONE.md 20`
+   (with your estimate) and tell the user the line it prints: the raw estimate
+   and, once `DONE.md` holds enough finished tasks with times, the estimate
+   adjusted by how long past tasks took against their estimates. In a subagent
+   group, the subagent returns that line to the main agent, which passes it to
+   the user and resumes the subagent at once.
+
+**The adjusted estimate is for the user only.** Never write it to the run file,
+`DONE.md` or anywhere else: the record keeps the raw estimate, so the history goes
+on measuring how good raw estimates are.
+
 **Keep the progress note current.** After each step of the plan, and always
 before pausing to ask anything, write into the prompt's entry what has been done,
 which step is next, and anything half-finished. If the run is interrupted, this
@@ -367,8 +385,10 @@ unknown met during the work, or an error whose fix needs a choice:
    decision log (see "The run file"), and carry on.
 4. **When you do pause,** write the progress note first, and with it the
    **pending question**: the full option list and the recommendation, in the run
-   file. Then show the user the same list and wait. The run is paused, not
-   stopped: their answer resumes it, and clears the pending question. If they
+   file, and the start of the pause on the prompt's `pauses:` line (the time read
+   with `date`). Then show the user the same list and wait. The run is paused, not
+   stopped: their answer resumes it, clears the pending question, and closes the
+   pause with its end time, read with `date` when work resumes. If they
    end the run instead, set its state to `stopped`. If the conversation is
    compacted, or another `/do-next` arrives, before they answer, show the pending
    question again first; never take its recommendation by default.
@@ -420,14 +440,23 @@ leave a queue that says exactly what is left.
    each prompt: they finished at different times, and copying the first one's
    timestamp onto the rest makes the log say something untrue.
 
-2. **Append** to `./DONE.md`: the timestamp on its own line in square brackets,
-   then the prompt text, then, if any decision was taken without asking, a
+2. **Work out the actual time** with the script, never in your head:
+   `python3 <this skill's base directory>/scripts/estimate.py elapsed "<started>" "<now>" "<pause start>" "<pause end>" ...`,
+   where `<started>` is the prompt's `started:` time, `<now>` is the time from
+   item 1, and the pauses come from its `pauses:` line, start and end in pairs. It
+   prints whole minutes of working time.
+
+3. **Append** to `./DONE.md`: the timestamp on its own line in square brackets,
+   then `estimate: N min` (the raw estimate from the run file) and `actual: N min`
+   (from item 2), each on its own line, then the prompt text, then, if any decision was taken without asking, a
    `Decisions taken without asking:` line followed by one `- ` line per decision
    (what was decided, and the main alternative), then a `--` line. Create
    `DONE.md` if it does not exist.
 
    ```
    [2026-08-24 09:42:13 -0400]
+   estimate: 20 min
+   actual: 24 min
    Do the first thing.
    Decisions taken without asking:
    - Kept the old config key as an alias rather than removing it outright.
@@ -435,9 +464,11 @@ leave a queue that says exactly what is left.
    ```
 
    The brackets keep the timestamp from being mistaken for part of the prompt,
-   and the trailing `--` keeps `DONE.md` splittable the same way `NEXT.md` is.
+   and the trailing `--` keeps `DONE.md` splittable the same way `NEXT.md` is. The
+   `estimate` and `actual` lines sit directly after the timestamp, in exactly this
+   form, because `estimate.py` reads them there to adjust later estimates.
 
-3. **Then** remove that prompt and its `--` line from `./NEXT.md`, **found by its
+4. **Then** remove that prompt and its `--` line from `./NEXT.md`, **found by its
    text, not by its position**: the prompt whose text, trimmed of leading and
    trailing white space and compared line by line, equals the archived one. The
    user may have added prompts above it or edited others during the run, so the
@@ -445,12 +476,12 @@ leave a queue that says exactly what is left.
    there (the user edited or deleted it), remove nothing, and say so in the
    report; the prompt is still archived.
 
-4. **When no prompt of that section is left in `NEXT.md`**, move the section's
+5. **When no prompt of that section is left in `NEXT.md`**, move the section's
    `#` line to `DONE.md` as well, directly after the prompt you just archived,
    and remove it from `NEXT.md`. `DONE.md` then keeps the grouping that `NEXT.md`
    had.
 
-5. Mark the prompt `done` in the run file.
+6. Mark the prompt `done` in the run file.
 
 Append before removing, in that order. If something dies between the two steps,
 that ordering leaves a duplicate entry, which is a nuisance; the reverse order
@@ -481,7 +512,8 @@ still asking its questions. The run must take the new prompts on without losing
 its place.
 
 1. **Reach a safe point.** Finish the tool call in progress and do not start
-   another step of the running prompt. Write its progress note. If a subagent is
+   another step of the running prompt. Write its progress note, and open a pause
+   on its `pauses:` line (the time read with `date`). If a subagent is
    running the current group, leave it running: the main agent is free, and the
    new set is planned alongside it.
 2. **Resolve the new set** from `NEXT.md` **with every prompt already in the run
@@ -505,8 +537,8 @@ its place.
    run file after every group already in it: one inline group without the flag,
    or groups cut by mark with it (see "Groups and subagents"). They run when the
    groups before them are done.
-6. **Resume.** Re-read the run file and continue the running prompt from its
-   progress note. If a subagent is running the current group, there is nothing to
+6. **Resume.** Re-read the run file, close the running prompt's pause with the
+   time read with `date`, and continue it from its progress note. If a subagent is running the current group, there is nothing to
    resume in the main agent: it goes back to relaying that subagent's reports.
 
 If the run is still in its own question or planning phase when the new request
@@ -573,6 +605,9 @@ the work divides; otherwise it does the work itself.
 **It returns at every boundary,** and the main agent resumes it (by sending to the
 same agent, its context intact) to go on:
 
+- **when each prompt starts,** with the estimate line from step 5 (the raw estimate
+  and, with enough history, the adjusted one). The main agent passes it to the user
+  and resumes the subagent at once; this return is not a pause;
 - **after each prompt is archived,** with that prompt's report from step 8 (what it
   did, and every decision taken without asking with its main alternative). The
   main agent passes the report to the user, then resumes the subagent for the
@@ -660,6 +695,9 @@ Each group holds, for each of its prompts:
 - **status:** `pending`, `running`, `done` or `stopped`;
 - **progress** (the running prompt): what is done, which step is next, anything
   half-finished;
+- **estimate** and **started** (from step 5): the raw estimate in whole minutes and
+  the time work began; and **pauses:** each interval the prompt spent paused, as
+  start and end times. Never the adjusted estimate;
 - **pending question** (only while paused in step 6): the option list and the
   recommendation that were shown to the user, so the question survives a
   compaction or an interruption;
@@ -748,4 +786,7 @@ is a working note for one run, not part of the project's history.
 | "`---` is close enough to `--`" | It is not. `---` is a horizontal rule, and splitting on it will cut a prompt in half. |
 | "I'll grep for the separator to read, and slice on `\n--\n` to archive" | Two matchers, one file. A separator with a trailing space passes the first and fails the second, and a prompt gets archived unrun. Use one rule in both places. |
 | "I know roughly what time it is" | You do not. Run `date`; a remembered timestamp is a made-up one. |
+| "I'll record the adjusted estimate, it's the better number" | Only the raw estimate is recorded. The adjusted one is told to the user and nowhere else, or the history stops measuring the raw estimates it corrects. |
+| "It started at about 10:05, so it took about 20 minutes" | Read `started:` from the run file and the time with `date`, and let `estimate.py elapsed` do the arithmetic, pauses subtracted. |
+| "The pause was short, I won't record it" | Every pause goes on the `pauses:` line, or the actual time counts waiting as work. |
 | "The run stopped, so I'll clear the run file" | A stopped run leaves it, marked `stopped`, so the user can see where it halted. |
