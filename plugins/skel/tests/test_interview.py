@@ -490,6 +490,135 @@ class Record(Case):
         self.assertEqual(self.read(iv.LOG), before)
 
 
+class Fitting(Case):
+    def dissent_rounds(self, n):
+        for _ in range(n):
+            self.round(question(1), answers="Q1=1")
+
+    def test_no_fit_below_five_tracers(self):
+        self.dissent_rounds(4)
+        self.write(iv.DRAFT, draft(question(1)))
+        self.assertIn("model: stated", self.cli("predict", "--by", "Ann").stdout)
+        self.assertIn("4 tracers", self.cli("fit", "--by", "Ann").stdout)
+
+    def test_five_tracers_fit_the_weights(self):
+        self.dissent_rounds(5)
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.assertIn("model: fitted+rec", self.read(iv.DRAFT))
+
+    def test_the_fit_moves_toward_the_dissent(self):
+        self.dissent_rounds(5)
+        w, w_rec, model, _ = iv.weights_for(self.state(), "Ann")
+        self.assertEqual(model, "fitted+rec")
+        self.assertLess(w[1] - w[2], 9.0)
+        self.assertGreater(w_rec, 0.0)
+
+    def test_the_fit_is_deterministic(self):
+        self.dissent_rounds(5)
+        self.assertEqual(iv.weights_for(self.state(), "Ann"), iv.weights_for(self.state(), "Ann"))
+
+    def test_weights_stay_within_their_bounds(self):
+        self.dissent_rounds(6)
+        w, w_rec, _, _ = iv.weights_for(self.state(), "Ann")
+        self.assertTrue(all(0.0 <= x <= 10.0 for x in w.values()))
+        self.assertTrue(-10.0 <= w_rec <= 10.0)
+
+    def test_multi_select_and_declined_are_left_out_of_fitting(self):
+        self.round(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"), answers="Q1=1+2")
+        self.round(question(1), answers="Q1=none")
+        self.round(question(1), answers="Q1=1")
+        state = self.state()
+        self.assertEqual(len(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann")), 1)
+
+    def test_other_people_are_left_out(self):
+        text = WEIGHTS
+        for ann in ("rating: 10 · by: Ann · 2026-10-01\n", "rating: 1 · by: Ann · 2026-10-01\n",
+                    "rating: 7 · by: Ann · 2026-10-01\n"):
+            text = text.replace(ann, ann + "rating: 5 · by: Bob · 2026-10-01\n")
+        self.write(iv.WEIGHTS, text)
+        self.round(question(1), answers="Q1=1", by="Bob")
+        state = self.state()
+        self.assertEqual(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann"), [])
+
+    def test_overfit_warning(self):
+        self.assertEqual(iv.overfit({1: 0.0, 2: 5.0}, {1: 10.0, 2: 1.0}, [], "Ann"), [1])
+        self.assertEqual(iv.overfit({1: 8.0}, {1: 10.0}, [], "Ann"), [])
+
+    def test_fit_reports_stated_and_fitted_weights(self):
+        self.dissent_rounds(5)
+        data = json.loads(self.cli("fit", "--by", "Ann", "--json").stdout)
+        self.assertEqual(data["model"], "fitted+rec")
+        self.assertEqual({c["id"] for c in data["concerns"]}, {1, 2, 3})
+        self.assertIn("w_rec", data)
+
+    def test_a_long_history_fits_in_reasonable_time(self):
+        body = []
+        for n in range(1, 201):
+            body.append(LOG_RECORD.split("\n", 2)[2].replace("## Q1", f"## Q{n}").replace("round: 1", f"round: {n}"))
+        self.write(iv.LOG, iv.LOG_TITLE + "\n\n" + "\n".join(body))
+        start = time.monotonic()
+        iv.weights_for(self.state(), "Ann")
+        self.assertLess(time.monotonic() - start, 10.0)
+
+
+class Probes(Case):
+    def test_a_question_on_a_dissent_axis_is_a_probe(self):
+        self.round(question(1), answers="Q1=1")
+        self.write(iv.DRAFT, draft(question(1, text="Again?", choices=(STURDY, CHEAP))))
+        self.cli("predict", "--by", "Ann")
+        text = self.read(iv.DRAFT)
+        self.assertIn("## Q1\n<probe> Again?\n", text)
+        self.assertIn("probes: C1 reliability vs C2 effort\n", text)
+
+    def test_a_question_off_the_dissent_axes_is_not_a_probe(self):
+        self.round(question(1), answers="Q1=1")
+        self.write(iv.DRAFT, draft(question(1, choices=(PRIVATE, PLAIN))))
+        self.cli("predict", "--by", "Ann")
+        self.assertNotIn("<probe>", self.read(iv.DRAFT))
+
+    def test_a_probe_is_kept_in_the_log(self):
+        self.round(question(1), answers="Q1=1")
+        self.round(question(1, text="Again?"), answers="Q1=1")
+        self.assertIn("## Q2\n<probe> <tracer> Again?\n", self.read(iv.LOG))
+        self.cli("parse")
+
+
+class Hits(Case):
+    def test_hits_counts_shown_and_stated(self):
+        self.round(question(1), answers="Q1=2")
+        self.round(question(1), answers="Q1=1")
+        out = self.cli("hits", "--by", "Ann").stdout
+        self.assertIn("Shown predictions: 1 of 2", out)
+        self.assertIn("Stated ratings only: 1 of 2", out)
+
+    def test_other_counts_as_a_miss(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        with open(self.path(iv.DRAFT), "a", encoding="utf-8") as fh:
+            fh.write("- **Other**: something else.\n    concern: x.\n    raises: reliability 1\n    addresses: none\n")
+        self.cli("record", "--by", "Ann", "--answers", "Q1=Other", "--asked", ASKED)
+        self.assertIn("Shown predictions: 0 of 1", self.cli("hits", "--by", "Ann").stdout)
+
+    def test_multi_select_hits_only_on_an_exact_match(self):
+        three = (CHEAP, STURDY, PRIVATE)
+        self.round(question(1, choices=three, select="multi"), answers="Q1=2+3")
+        self.round(question(1, choices=three, select="multi"), answers="Q1=2")
+        self.assertIn("Shown predictions: 1 of 2", self.cli("hits", "--by", "Ann").stdout)
+
+    def test_declined_questions_are_not_counted(self):
+        self.round(question(1), answers="Q1=none")
+        self.assertIn("Shown predictions: 0 of 0", self.cli("hits", "--by", "Ann").stdout)
+
+    def test_hits_json_has_rounds(self):
+        self.round(question(1), answers="Q1=2")
+        self.round(question(1), question(2), answers="Q1=1, Q2=2")
+        data = json.loads(self.cli("hits", "--by", "Ann", "--json").stdout)
+        self.assertEqual(data["shown"], {"hits": 2, "total": 3})
+        self.assertEqual([r["round"] for r in data["rounds"]], [1, 2])
+        self.assertEqual(data["rounds"][1], {"round": 2, "shown": 1, "stated": 1, "total": 2})
+
+
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_interview_files(self):
         work = tempfile.mkdtemp(prefix="skel-interview-tree-")

@@ -481,9 +481,78 @@ def probe_axis(vectors, counts):
     return best
 
 
+def fit_data(log, tags, by):
+    data = []
+    for rec in log:
+        if rec.by != by or rec.multi or rec.declined or not rec.annotated() or len(rec.selected()) != 1:
+            continue
+        if any(t not in tags for c in rec.choices for t in c.tags()):
+            continue
+        vecs = [vector(c, tags) for c in rec.choices]
+        recs = [1.0 if c.recommended else 0.0 for c in rec.choices]
+        data.append((vecs, recs, rec.choices.index(rec.selected()[0])))
+    return data
+
+
+def fit(data, w0):
+    """Gradient ascent on the softmax log-likelihood, pulled toward the stated weights (and w_rec toward 0)."""
+    cids = sorted(w0)
+    w, w_rec = dict(w0), 0.0
+    rate = RATE / max(1, len(data))
+    for _ in range(STEPS):
+        gw = {c: -2 * LAMBDA * (w[c] - w0[c]) for c in cids}
+        grec = -2 * LAMBDA * w_rec
+        for vecs, recs, s in data:
+            u = [T * (score(v, w) + w_rec * r) for v, r in zip(vecs, recs)]
+            top = max(u)
+            e = [math.exp(x - top) for x in u]
+            z = sum(e)
+            p = [x / z for x in e]
+            # Vectors are sparse (a choice touches a few concerns), so only their entries are visited.
+            for c, x in vecs[s].items():
+                if c in gw:
+                    gw[c] += T * x
+            for pj, v in zip(p, vecs):
+                for c, x in v.items():
+                    if c in gw:
+                        gw[c] -= T * pj * x
+            grec += T * (recs[s] - sum(pj * r for pj, r in zip(p, recs)))
+        for c in cids:
+            w[c] = min(10.0, max(0.0, w[c] + rate * gw[c]))
+        w_rec = min(10.0, max(-10.0, w_rec + rate * grec))
+    return w, w_rec
+
+
+def overfit(w, w0, log, by):
+    """Concerns a fit drove to a bound, far from the stated rating, on two tracers or fewer."""
+    counts = Counter()
+    for rec in tracers(log, by):
+        a = parse_axis(rec.fields.get("axis"))
+        if a:
+            counts.update(set(a))
+    return [c for c in sorted(w) if (w[c] <= 0.0 or w[c] >= 10.0) and abs(w[c] - w0[c]) > 3 and counts[c] <= 2]
+
+
 def weights_for(state, by):
     """The weights to predict with, w_rec, the model name and the person's tracer count."""
-    return stated(state.concerns, by), 0.0, "stated", len(tracers(state.log, by))
+    w0 = stated(state.concerns, by)
+    n = len(tracers(state.log, by))
+    if n < MIN_TRACERS:
+        return w0, 0.0, "stated", n
+    w, w_rec = fit(fit_data(state.log, tag_map(state.concerns), by), w0)
+    return w, w_rec, "fitted+rec", n
+
+
+def hit_rows(log, by):
+    rows = []
+    for rec in log:
+        sel = {c.label for c in rec.selected()}
+        if rec.by != by or rec.declined or "prediction" not in rec.fields or not sel:
+            continue
+        shown = {c.label for c in rec.predicted()}
+        only = set(rec.fields.get("concern-only", "").split(" | "))
+        rows.append((int(rec.meta["round"]), shown == sel, only == sel))
+    return rows
 
 
 def load(skel):
@@ -842,6 +911,63 @@ def cmd_record(args):
     return 0
 
 
+def cmd_fit(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    errors = readiness(state, by)
+    if errors:
+        sys.exit("\n".join(errors))
+    w0 = stated(state.concerns, by)
+    w, w_rec, model, n = weights_for(state, by)
+    warn = overfit(w, w0, state.log, by) if model != "stated" else []
+    by_id = {c.cid: c for c in state.concerns}
+    if args.json:
+        print(json.dumps({"by": by, "model": model, "tracers": n, "w_rec": round(w_rec, 3),
+                          "concerns": [{"id": c, "name": by_id[c].name, "stated": w0[c], "fitted": round(w[c], 3)}
+                                       for c in sorted(w0)],
+                          "overfit": warn}))
+        return 0
+    if model == "stated":
+        print(f"No fit for {by}: {n} tracers, {MIN_TRACERS} needed. Predictions use the stated ratings.")
+        return 0
+    print(f"Fitted weights for {by} ({n} tracers):")
+    for c in sorted(w0):
+        moved = "" if abs(w[c] - w0[c]) < 0.5 else "  (moved)"
+        print(f"  {by_id[c].title}: stated {fmt(w0[c])}, fitted {fmt(w[c])}{moved}")
+    print(f"  recommended choice (w_rec): {fmt(w_rec)}")
+    for c in warn:
+        print(f"warning: {by_id[c].title} reached {fmt(w[c])} on two tracers or fewer; "
+              f"it may not be a real preference")
+    return 0
+
+
+def cmd_hits(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    rows = hit_rows(state.log, by)
+    rounds = sorted({r for r, _, _ in rows})
+    per_round = [{"round": r, "shown": sum(s for x, s, _ in rows if x == r),
+                  "stated": sum(o for x, _, o in rows if x == r), "total": sum(1 for x, _, _ in rows if x == r)}
+                 for r in rounds]
+    shown, only = sum(s for _, s, _ in rows), sum(o for _, _, o in rows)
+    if args.json:
+        print(json.dumps({"by": by, "shown": {"hits": shown, "total": len(rows)},
+                          "stated": {"hits": only, "total": len(rows)}, "rounds": per_round}))
+        return 0
+
+    def pct(h, t):
+        return f"{h} of {t}" + (f" ({round(100 * h / t)}%)" if t else "")
+
+    print(f"Hit rates for {by}, from predictions logged before each answer:")
+    print(f"  Shown predictions: {pct(shown, len(rows))}")
+    print(f"  Stated ratings only: {pct(only, len(rows))}")
+    for r in per_round[-5:]:
+        print(f"  round {r['round']}: shown {r['shown']}/{r['total']}, stated {r['stated']}/{r['total']}")
+    return 0
+
+
 def cmd_parse(args):
     state = load(args.skel)
     for line in state.problems.errors:
@@ -856,7 +982,7 @@ def cmd_parse(args):
 
 
 COMMANDS = {"parse": cmd_parse, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
-            "predict": cmd_predict, "record": cmd_record}
+            "predict": cmd_predict, "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
 def main(argv=None):
@@ -885,6 +1011,8 @@ def main(argv=None):
     p = command("record")
     p.add_argument("--answers", required=True)
     p.add_argument("--asked")
+    command("fit", json_flag=True)
+    command("hits", json_flag=True)
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 
