@@ -11,6 +11,10 @@ Out of scope: ...
 
 - **<Term>**: <definition>
 
+## Principles
+
+- <Optional. A rule the project weighs choices by, e.g. "open source over a moat". Interview rounds judge choices against these.>
+
 ## Global decisions
 
 - Language/runtime: <decided value> or *UNKNOWN*: [language] ... Kind: blocking. Consequence: ... Unlocks: ...

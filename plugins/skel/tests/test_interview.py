@@ -619,6 +619,25 @@ class Hits(Case):
         self.assertEqual(data["rounds"][1], {"round": 2, "shown": 1, "stated": 1, "total": 2})
 
 
+class Docs(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(SKILL, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_reference_names_every_command(self):
+        text = self.read("references", "interviewing.md")
+        for command in ("parse", "concerns", "tag", "rate", "fit", "predict", "record", "hits"):
+            self.assertIn(f"interview.py\" {command}", text)
+
+    def test_every_place_that_asks_points_to_the_reference(self):
+        self.assertGreaterEqual(self.read("SKILL.md").count("interviewing.md"), 3)
+        self.assertIn("interviewing.md", self.read("references", "implementing.md"))
+        self.assertIn("interviewing.md", self.read("references", "abstract-systems.md"))
+
+    def test_the_system_template_has_principles(self):
+        self.assertIn("## Principles", self.read("assets", "templates", "SYSTEM.md"))
+
+
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_interview_files(self):
         work = tempfile.mkdtemp(prefix="skel-interview-tree-")

@@ -45,7 +45,7 @@ Then install whichever plugins you want:
 `bash` and `jq` on `PATH`. Every hook exits quietly if `jq` is missing, so a plugin
 degrades to its skill rather than erroring.
 
-skel has no hooks and needs `python3` instead, for its two scripts. They use only the
+skel has no hooks and needs `python3` instead, for its three scripts. They use only the
 standard library.
 
 wrist has no hooks either. Its scripts need `python3` (standard library only); publishing
@@ -286,10 +286,11 @@ agent can follow file by file.
 
 | Piece | Role |
 | --- | --- |
-| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1678 words. |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1929 words. |
 | `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
 | `scripts/skel_check.py` | The checker, below. |
 | `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |
+| `scripts/interview.py` | Records every question and answer, and predicts answers from the concerns the user rates. Below. |
 | `assets/templates/` | A starting stand-in for each kind: code, data, infrastructure, and the tree's `SYSTEM.md`. |
 | `assets/examples/undo-system/` | A complete abstract tree for an undo system, which passes the checker. |
 
@@ -315,6 +316,23 @@ skel_check.py batches SKEL_DIR          buildable batches of units, manifests se
 `check` exits non-zero on errors, so it can run in CI or a pre-commit hook to keep the
 tree consistent. It never reads code; `status` is what reports files that have drifted from
 the tree, in either direction.
+
+**Interviews.** Every question skel asks goes through a round. The agent turns each unknown into two to four
+choices, its proposal the recommended one, and annotates each choice with the concerns it raises and addresses
+before asking. The predicted choice is marked `*`. Questions and answers are kept in `skel/.interviews.md`, and the
+concerns and each person's 0 to 10 ratings of them in `skel/.interview-weights.md`; both are committed. An answer
+that goes against the prediction from the stated ratings is a tracer. From five tracers the weights are fitted to
+the person's answers, and a new question on a trade-off they have gone against before is marked as a probe. Every
+question is still asked; the logged predictions and their margins are there so that confident ones can be skipped
+in a later version.
+
+```
+interview.py concerns SKEL_DIR          tags to map and concerns to rate before a round
+interview.py predict SKEL_DIR           mark the predicted choice on each question of the round
+interview.py record SKEL_DIR --answers  log the answers, mark tracers, number the questions
+interview.py fit SKEL_DIR               stated against fitted weights
+interview.py hits SKEL_DIR              hit rates of the logged predictions
+```
 
 **Upgrading a tree stamped with skel 2.x.** Stamps now live in the stand-in, with a hash of each side, so
 `status` reports both a stand-in that changed (stale) and a file that changed (edited). Run

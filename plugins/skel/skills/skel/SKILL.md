@@ -1,6 +1,6 @@
 ---
 name: skel
-description: Author, validate, and implement Skel specifications. Skel is a code-shaped, prose-only design format where every project file gets a stand-in at skel/PATH/FILE.EXT.skel.md describing its modules, classes, functions, data schemas, or infrastructure, with bidirectional `Depends on:`/`Referred by:` links and formal `*UNKNOWN*:` markers. Use this skill whenever the user mentions Skel, .skel.md files, or a skel/ folder. Also use it when the user wants to plan or architect a codebase before coding, turn a design, PRD, or spec into an implementation plan shaped like the code, describe a reusable subsystem (undo, auth, sync, plugins, job queues) independent of language or platform, or implement or update code from an existing skel/ tree. Prefer it over writing a linear spec or task list whenever the user wants architecture-first planning that an agent will implement.
+description: Author, validate, and implement Skel specifications. Skel is a code-shaped, prose-only design format where every project file gets a stand-in at skel/PATH/FILE.EXT.skel.md describing its modules, classes, functions, data schemas, or infrastructure, with bidirectional `Depends on:`/`Referred by:` links and formal `*UNKNOWN*:` markers. Every question to the user is an interview round, recorded in skel/.interviews.md with a predicted answer. Use this skill whenever the user mentions Skel, .skel.md files, or a skel/ folder. Also use it when the user wants to plan or architect a codebase before coding, turn a design, PRD, or spec into an implementation plan shaped like the code, describe a reusable subsystem (undo, auth, sync, plugins, job queues) independent of language or platform, or implement or update code from an existing skel/ tree. Prefer it over writing a linear spec or task list whenever the user wants architecture-first planning that an agent will implement.
 ---
 
 # Skel specifications
@@ -22,6 +22,7 @@ Inside a code stand-in, headings follow the code (`# module:` > `## class:` > `#
 | Author a skel tree for a concrete project | `references/grammar.md` (always), then the workflow below |
 | Describe a language- and platform-neutral system | `references/grammar.md`, `references/abstract-systems.md`, `assets/examples/undo-system/` |
 | Implement code from an existing skel tree, or keep code and skel in sync | `references/implementing.md` |
+| Ask the user anything: open questions, unknowns, roles | `references/interviewing.md` |
 
 Read `references/grammar.md` before writing or editing any `.skel.md`. It is the normative grammar, and the checker enforces it.
 
@@ -37,11 +38,12 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
 - **Data:** state `Source:`, give a `## Schema` with a fenced block, and if the data is generated, add a `## Generation` section with the pipeline, tool links, and a development usage fence.
 - **Storage is infrastructure-as-code:** each store is a `## resource:` in an iac stand-in, with `Data requirements:` and its consumers listed as `Referred by:`.
 - **Unknowns:** use `*UNKNOWN*: [name] <what>. Kind: blocking | local. Proposed: <...>. Consequence: <...>. Unlocks: <...>.` Declare a decision once and mark the other places it affects with `*UNKNOWN*: Follows [name]. Consequence: <...>.` Anything you choose that the user did not state is an unknown with a `Proposed:`. Never present your own choice as settled.
+- **Questions are interview rounds:** every question you ask the user goes through a round (`references/interviewing.md`). It is recorded in `skel/.interviews.md` with its choices and the answer, and shown with the predicted choice marked `*`.
 - **Fences** always carry a language tag. Include sample code only when code is the clearest way to state a contract.
 
 ## Authoring workflow
 
-1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions. Don't resolve open questions yourself; they become unknowns. A choice you make to keep the design moving is an unknown too, with your choice as its `Proposed:`.
+1. **Gather intent.** Read whatever the user has: a design doc, a PRD, existing code, or a conversation. Note decisions and open questions, and ask the open questions as the first interview round (`references/interviewing.md`). Don't resolve them yourself: an open question you don't ask, or that the user declines, becomes an unknown. A choice you make to keep the design moving is an unknown too, with your choice as its `Proposed:`.
 2. **Write `skel/SYSTEM.md`** from `assets/templates/SYSTEM.md`. Include scope, glossary, global decisions, and entry points.
 3. **Lay out the file tree first.** List every file the project will contain and create empty stand-ins at mirrored paths. Links need targets, and seeing the whole tree early exposes structural problems (god modules, misplaced responsibilities) while they are still cheap to fix. Then give every stand-in its role, and pair each source file with its header:
 
@@ -49,7 +51,7 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    python3 "SKILL_DIR/scripts/skel_check.py" infer-roles skel --write
    ```
 
-   It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
+   It never writes a role or a unit it is unsure of; it lists those with a `?`. Set them by hand in the front matter, and ask the user about any you cannot settle in an interview round. Run it again after step 4: a source whose name only begins with its header's, or whose header is in another folder, is paired once it has a `Depends on:` link to that header.
 4. **Fill each stand-in top-down** from the templates in `assets/templates/`, keeping the front matter step 3 wrote. Start with the module purpose and traits, then classes, then functions. Write `Depends on:` links at the most specific level that is true. Don't hand-write `Referred by:` yet.
 5. **Walk each dependency as its caller.** For every `Depends on:` link, read the target and confirm that it declares each function, type and callback this unit's prose says it uses, that the mutability and lifetime it offers fit, and that every type the tree defines and the prose names has its own `class:` or `symbol:` heading. Add what is missing to the target now. Each gap found here is one an implementer would otherwise fill by changing the plan.
 6. **Generate the backlinks** and review them:
@@ -64,13 +66,13 @@ The `references/`, `assets/`, and `scripts/` paths in this skill are relative to
    ```bash
    python3 "SKILL_DIR/scripts/skel_check.py" check skel            # --lenient while drafting
    ```
-8. **Hand back the agenda.** Run `skel_check.py unknowns skel` and `skel_check.py batches skel`, and report in this shape:
-   1. **Decisions needed before implementation:** the blocking unknowns, each with its consequence, what it unlocks, and its proposal if it has one.
-   2. **Proposals to accept or change:** the local unknowns, each with its proposal. The user may accept them all in one answer.
-   3. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
-   4. **Files out of step with the plan:** the Stale, Edited and Diverged groups from `skel_check.py status skel --root .`. Leave this out when nothing is implemented yet.
+8. **Ask the unknowns, then hand back the agenda.** Run `skel_check.py unknowns skel` and ask every blocking and local unknown in one interview round (`references/interviewing.md`): each unknown is its own question, and its `Proposed:` is the recommended choice. Apply the answers to the tree and run `check` again. Then run `skel_check.py batches skel`, and report in this shape:
+   1. **Answers taken:** each decision and the choice made, and any unknown left open (declined), with its consequence.
+   2. **Build batches:** the output of `batches`: which units can be built together and in what order, and which manifests grow with each batch.
+   3. **Files out of step with the plan:** the Stale, Edited and Diverged groups from `skel_check.py status skel --root .`. Leave this out when nothing is implemented yet.
+   4. **Interview:** the round's report from `interviewing.md`: hit rates, new tracers, and weights that moved.
 
-   The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first, then report it under 1 or 2.
+   The report lists no choice that is not in the tree. If you are about to write "I decided" or "I assumed", add the unknown first and ask it.
 
 ## Writing good stand-ins
 
@@ -98,6 +100,14 @@ python3 "SKILL_DIR/scripts/skel_check.py" fix-backlinks SKEL_DIR [--write]
 python3 "SKILL_DIR/scripts/skel_check.py" infer-roles SKEL_DIR [--write]   # propose role: and unit: front matter
 python3 "SKILL_DIR/scripts/skel_check.py" batches SKEL_DIR [--json]    # buildable batches of units; manifests set aside
 python3 "SKILL_DIR/scripts/skel_mv.py" SKEL_DIR OLD NEW | --map map.txt [--dry-run]  # move or rename with link rewriting
+python3 "SKILL_DIR/scripts/interview.py" parse SKEL_DIR                    # validate the interview log, weights and round
+python3 "SKILL_DIR/scripts/interview.py" concerns SKEL_DIR                 # tags to map, concerns to rate
+python3 "SKILL_DIR/scripts/interview.py" tag SKEL_DIR TAG C<n> | TAG --new NAME MEANING
+python3 "SKILL_DIR/scripts/interview.py" rate SKEL_DIR C<n>=V ...
+python3 "SKILL_DIR/scripts/interview.py" predict SKEL_DIR                  # mark predicted choices in the round
+python3 "SKILL_DIR/scripts/interview.py" record SKEL_DIR --answers "Q1=2, Q2=none"
+python3 "SKILL_DIR/scripts/interview.py" fit SKEL_DIR                      # stated against fitted weights
+python3 "SKILL_DIR/scripts/interview.py" hits SKEL_DIR                     # hit rates of logged predictions
 ```
 
 The reference files and templates name the scripts by filename alone (`skel_check.py check skel/`). Run them by the full paths shown here.

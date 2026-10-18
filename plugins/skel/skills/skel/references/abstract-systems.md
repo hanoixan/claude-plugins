@@ -15,7 +15,7 @@ Skel can describe a subsystem before any host project, language, or platform is 
 ## Adapting to a project
 
 1. Copy the system's `skel/` contents into the project's `skel/` tree, or start a new one.
-2. Run `skel_check.py unknowns skel/` and walk the user through the answers. Do the host-boundary unknowns first, because they usually determine the language and layout.
+2. Run `skel_check.py unknowns skel/` and ask them in interview rounds (`interviewing.md`). Ask the host-boundary unknowns first, in a round of their own, because they usually determine the language and layout.
 3. Delete parts that were answered "not needed". Remove the stand-ins, then remove the links to them. Use `check` to find the dangling ones.
 4. Write a mapping file from placeholder paths to real project paths and extensions, then apply it with `skel_mv.py` (its full path is in the Tools section of `SKILL.md`):
 
