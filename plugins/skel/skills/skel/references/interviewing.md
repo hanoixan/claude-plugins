@@ -65,7 +65,9 @@ their name once and pass it on every command for the rest of the session.
    against before, `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern,
    and names the command that fixes each.
 
-4. **Ask** the questions in draft order, with the same choices and descriptions.
+4. **Ask** the questions in draft order. Copy each question, label and description from the draft word for word:
+   the log records the draft, so anything reworded when asked is not what the log says was asked. To change the
+   wording, edit the draft and run `predict` again before asking.
    - With a multiple-choice tool (AskUserQuestion in Claude Code): four questions per call; the predicted choice's
      label starts with `* `; `(Recommended)` stays in its label; the predicted choice's description ends with
      `(predicted, lead N)`, N being the `gap` from `prediction:`.
