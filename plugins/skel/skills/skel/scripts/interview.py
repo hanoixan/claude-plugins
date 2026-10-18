@@ -415,6 +415,77 @@ def stated(concerns, by):
     return {c.cid: c.rating(by) for c in concerns if c.rating(by) is not None}
 
 
+def vector(choice, tags):
+    """Net severity per concern: what the choice addresses minus what it raises."""
+    v = {}
+    for tag, severity in choice.addresses:
+        cid = tags[tag].cid
+        v[cid] = v.get(cid, 0) + severity
+    for tag, severity in choice.raises:
+        cid = tags[tag].cid
+        v[cid] = v.get(cid, 0) - severity
+    return v
+
+
+def score(v, w):
+    return sum(w.get(cid, 0.0) * x for cid, x in v.items())
+
+
+def choose(rec, vectors, w, w_rec=0.0):
+    scores = [score(v, w) + (w_rec if c.recommended else 0.0) for c, v in zip(rec.choices, vectors)]
+    order = sorted(range(len(scores)), key=lambda i: (-scores[i], not rec.choices[i].recommended, i))
+    if rec.multi:
+        picked = [i for i, s in enumerate(scores) if s > 0] or [order[0]]
+        gap = min(abs(s) for s in scores)
+    else:
+        picked = [order[0]]
+        gap = scores[order[0]] - scores[order[1]] if len(order) > 1 else 0.0
+    return picked, scores, gap
+
+
+def axis(v_to, v_from):
+    """(concern gained most, concern lost most) going from one choice to another, or None."""
+    d = {cid: v_to.get(cid, 0) - v_from.get(cid, 0) for cid in sorted(set(v_to) | set(v_from))}
+    if not d:
+        return None
+    gain = max(d, key=lambda cid: d[cid])
+    loss = min(d, key=lambda cid: d[cid])
+    return (gain, loss) if d[gain] > 0 and d[loss] < 0 else None
+
+
+def axis_text(a, by_id):
+    return f"{by_id[a[0]].title} vs {by_id[a[1]].title}"
+
+
+def parse_axis(text):
+    m = AXIS_RE.match(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def tracers(log, by):
+    return [r for r in log if r.by == by and "tracer" in r.marks]
+
+
+def dissent(log, by):
+    """Each unordered axis over this person's tracers, with how many tracers it has."""
+    return Counter(frozenset(a) for a in (parse_axis(r.fields.get("axis")) for r in tracers(log, by)) if a)
+
+
+def probe_axis(vectors, counts):
+    best, best_count = None, 0
+    for i in range(len(vectors)):
+        for j in range(i + 1, len(vectors)):
+            a = axis(vectors[i], vectors[j])
+            if a and counts.get(frozenset(a), 0) > best_count:
+                best, best_count = a, counts[frozenset(a)]
+    return best
+
+
+def weights_for(state, by):
+    """The weights to predict with, w_rec, the model name and the person's tracer count."""
+    return stated(state.concerns, by), 0.0, "stated", len(tracers(state.log, by))
+
+
 def load(skel):
     if not os.path.isdir(skel):
         sys.exit(f"not a directory: {skel}")
@@ -605,6 +676,172 @@ def cmd_rate(args):
     return 0
 
 
+def readiness(state, by):
+    errors = []
+    unmapped, used = used_concerns(state, relevant(state, by))
+    errors += [f"tag `{t}` belongs to no concern: run `interview.py tag SKEL_DIR {t} C<n>` "
+               f"or `--new NAME MEANING`" for t in sorted(unmapped)]
+    rated = stated(state.concerns, by)
+    by_id = {c.cid: c for c in state.concerns}
+    errors += [f"{by_id[cid].title} is not rated by {by}: run `interview.py rate SKEL_DIR C{cid}=<0-10>`"
+               for cid in sorted(used - set(rated))]
+    return errors
+
+
+def cmd_predict(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    if state.draft is None:
+        sys.exit(f"no round to predict: write {DRAFT} first")
+    errors = []
+    for rec in state.draft:
+        for c in rec.choices:
+            if not c.annotated:
+                errors.append(f"Q{rec.number}: choice `{c.label}` is not annotated")
+            if c.label == "Other":
+                errors.append(f"Q{rec.number}: `Other` is added after predict, when the answer is typed")
+    errors += readiness(state, by)
+    if errors:
+        sys.exit("\n".join(errors))
+    w, w_rec, model, n = weights_for(state, by)
+    rated = stated(state.concerns, by)
+    tags = tag_map(state.concerns)
+    by_id = {c.cid: c for c in state.concerns}
+    counts = dissent(state.log, by)
+    for rec in state.draft:
+        vecs = [vector(c, tags) for c in rec.choices]
+        picked, scores, gap = choose(rec, vecs, w, w_rec)
+        only, _, _ = choose(rec, vecs, rated)
+        for i, c in enumerate(rec.choices):
+            c.predicted = i in picked
+        labels = " | ".join(rec.choices[i].label for i in picked)
+        rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
+                                    f"gap {fmt(gap)} · model: {model}")
+        rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
+        rec.marks = [m for m in rec.marks if m != "probe"]
+        rec.fields.pop("probes", None)
+        a = probe_axis(vecs, counts)
+        if a:
+            rec.marks.insert(0, "probe")
+            rec.fields["probes"] = axis_text(a, by_id)
+        print(f"Q{rec.number}: {labels} (lead {fmt(gap)})" + (f", probe: {rec.fields['probes']}" if a else ""))
+    print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
+    write(state.path(DRAFT), rebuild(state.draft_lines, state.draft))
+    return 0
+
+
+ANSWER_RE = re.compile(r"^Q(\d+)=(.+)$")
+
+
+def parse_answers(text):
+    answers = {}
+    for part in (p.strip() for p in text.split(",")):
+        if not part:
+            continue
+        m = ANSWER_RE.match(part.replace(" ", ""))
+        if not m:
+            raise ValueError(f"an answer is `Q<n>=<choice>`, `Q<n>=Other` or `Q<n>=none`: {part}")
+        n = int(m.group(1))
+        if n in answers:
+            raise ValueError(f"Q{n} is answered twice")
+        answers[n] = [t.lower() for t in m.group(2).split("+")]
+    return answers
+
+
+def answer_errors(rec, tokens, tags):
+    errors = []
+    offered = [c for c in rec.choices if c.label != "Other"]
+    other = rec.choice("Other")
+    if "prediction" not in rec.fields:
+        errors.append(f"Q{rec.number} has no prediction: run `interview.py predict` first")
+    if tokens == ["none"]:
+        return errors
+    if "none" in tokens:
+        errors.append(f"Q{rec.number}: `none` cannot be combined with choices")
+    if len(tokens) > 1 and not rec.multi:
+        errors.append(f"Q{rec.number} is single-choice: give one answer")
+    for t in tokens:
+        if t == "other":
+            if other is None or not other.annotated:
+                errors.append(f"Q{rec.number}: add the typed answer to the round as `- **Other**: <text>` with "
+                              f"its concern:, raises: and addresses: lines, then record again")
+            elif any(tag not in tags for tag in other.tags()):
+                errors.append(f"Q{rec.number}: map the Other choice's tags with `interview.py tag` first")
+        elif t.isdigit():
+            if not 1 <= int(t) <= len(offered):
+                errors.append(f"Q{rec.number}: choice {t} is out of range 1-{len(offered)}")
+        elif t != "none":
+            errors.append(f"Q{rec.number}={t}: an answer is a choice number, `Other` or `none`")
+    if other is not None and "other" not in tokens:
+        errors.append(f"Q{rec.number} has an Other choice, so its answer is Other")
+    return errors
+
+
+def cmd_record(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    if state.draft is None:
+        sys.exit(f"no round to record: {DRAFT} does not exist")
+    try:
+        answers = parse_answers(args.answers)
+    except ValueError as e:
+        sys.exit(str(e))
+    asked = args.asked or datetime.datetime.now().astimezone().strftime(STAMP_FORMAT)
+    try:
+        datetime.datetime.strptime(asked, STAMP_FORMAT)
+    except ValueError:
+        sys.exit("--asked is `YYYY-MM-DD HH:MM:SS ±ZZZZ`")
+    tags = tag_map(state.concerns)
+    numbers = {r.number for r in state.draft}
+    errors = [f"Q{n} is not in the round" for n in sorted(set(answers) - numbers)]
+    errors += [f"Q{n} has no answer; use Q{n}=none to record it as declined" for n in sorted(numbers - set(answers))]
+    for rec in state.draft:
+        if rec.number in answers:
+            errors += answer_errors(rec, answers[rec.number], tags)
+    if errors:
+        sys.exit("\n".join(errors))
+    by_id = {c.cid: c for c in state.concerns}
+    base = len(state.log)
+    rnd = max((int(r.meta["round"]) for r in state.log), default=0) + 1
+    for k, rec in enumerate(state.draft):
+        tokens = answers[rec.number]
+        offered = [c for c in rec.choices if c.label != "Other"]
+        if tokens == ["none"]:
+            rec.fields["answer"] = DECLINED
+        else:
+            for t in tokens:
+                (rec.choice("Other") if t == "other" else offered[int(t) - 1]).sel = True
+        rec.number = base + k + 1
+        rec.meta.update({"round": str(rnd), "asked": asked, "by": by})
+        rec.meta_raw = SEP.join(f"{key}: {rec.meta[key]}" for key in META_KEYS if key in rec.meta)
+        if not rec.multi and not rec.declined:
+            chosen, ref = rec.selected()[0], rec.choice(rec.fields["concern-only"])
+            if ref is not None and chosen is not ref:
+                rec.marks = [m for m in rec.marks if m != "tracer"] + ["tracer"]
+                a = axis(vector(chosen, tags), vector(ref, tags))
+                rec.fields["axis"] = axis_text(a, by_id) if a else "none"
+    log_lines = state.log_lines if state.log_lines is not None else [LOG_TITLE + newline_of(state.draft_lines)]
+    nl = newline_of(log_lines)
+    text = "".join(log_lines)
+    if not text.endswith(("\n", "\r")):
+        text += nl
+    for rec in state.draft:
+        text += nl + "".join(render_record(rec, nl))
+    write(state.path(LOG), text)
+    os.remove(state.path(DRAFT))
+    hits = 0
+    for rec in state.draft:
+        sel = {c.label for c in rec.selected()}
+        hits += bool(sel) and sel == {c.label for c in rec.predicted()}
+        note = f", tracer: {rec.fields['axis']}" if "tracer" in rec.marks else ""
+        answer = " + ".join(sorted(sel)) if sel else "declined"
+        print(f"Q{rec.number}: {answer}{note}")
+    print(f"round {rnd}: {hits} of {len(state.draft)} predictions hit")
+    return 0
+
+
 def cmd_parse(args):
     state = load(args.skel)
     for line in state.problems.errors:
@@ -618,7 +855,8 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate}
+COMMANDS = {"parse": cmd_parse, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
+            "predict": cmd_predict, "record": cmd_record}
 
 
 def main(argv=None):
@@ -643,6 +881,10 @@ def main(argv=None):
     p = command("rate")
     p.add_argument("ratings", nargs="+")
     p.add_argument("--date")
+    command("predict")
+    p = command("record")
+    p.add_argument("--answers", required=True)
+    p.add_argument("--asked")
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 

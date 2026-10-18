@@ -304,6 +304,192 @@ class TagAndRate(Case):
         self.assertIn("rating: 3 · by: Ann · 2026-10-05", self.read(iv.WEIGHTS))
 
 
+ANN = {1: 10.0, 2: 1.0, 3: 7.0}
+
+
+class Scoring(unittest.TestCase):
+    def tags(self, weights=WEIGHTS):
+        return iv.tag_map(iv.parse_weights("w", weights.splitlines(keepends=True), iv.Problems()))
+
+    def vectors(self, rec, weights=WEIGHTS):
+        tags = self.tags(weights)
+        return [iv.vector(c, tags) for c in rec.choices]
+
+    def test_score_adds_addresses_and_subtracts_raises(self):
+        rec = records(draft(question(1)))[0][0]
+        self.assertEqual([iv.score(v, ANN) for v in self.vectors(rec)], [-18.0, 18.0])
+
+    def test_tags_of_one_concern_add_up(self):
+        weights = WEIGHTS.replace("tags: reliability", "tags: reliability, uptime")
+        rec = records(draft(question(1, choices=(("A", "reliability 1, uptime 2", "impl-effort 1"), STURDY))))[0][0]
+        self.assertEqual(self.vectors(rec, weights)[0], {1: -3, 2: 1})
+
+    def test_the_top_score_is_predicted_with_its_lead(self):
+        rec = records(draft(question(1)))[0][0]
+        picked, scores, gap = iv.choose(rec, self.vectors(rec), ANN)
+        self.assertEqual((picked, gap), ([1], 36.0))
+
+    def test_a_tie_goes_to_the_recommended_choice(self):
+        rec = records(draft(question(1, choices=(STURDY, CHEAP))))[0][0]
+        picked, _, _ = iv.choose(rec, self.vectors(rec), {1: 5.0, 2: 5.0})
+        self.assertEqual(picked, [1])
+
+    def test_a_tie_without_a_recommendation_goes_to_the_first_choice(self):
+        rec = records(draft(question(1, choices=(STURDY, ("Quick", "reliability 2", "impl-effort 2")))))[0][0]
+        picked, _, _ = iv.choose(rec, self.vectors(rec), {1: 5.0, 2: 5.0})
+        self.assertEqual(picked, [0])
+
+    def test_multi_select_predicts_every_positive_choice(self):
+        rec = records(draft(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi")))[0][0]
+        picked, scores, gap = iv.choose(rec, self.vectors(rec), ANN)
+        self.assertEqual((picked, gap), ([1, 2], 13.0))
+
+    def test_multi_select_with_nothing_positive_predicts_the_best(self):
+        rec = records(draft(question(1, choices=(CHEAP, ("Worse", "reliability 3", "impl-effort 1")),
+                                     select="multi")))[0][0]
+        picked, _, _ = iv.choose(rec, self.vectors(rec), ANN)
+        self.assertEqual(picked, [0])
+
+    def test_the_axis_names_the_concern_gained_and_the_one_lost(self):
+        rec = records(draft(question(1)))[0][0]
+        cheap, sturdy = self.vectors(rec)
+        self.assertEqual(iv.axis(cheap, sturdy), (2, 1))
+        self.assertIsNone(iv.axis(cheap, cheap))
+
+
+class Predict(Case):
+    def test_predict_marks_the_top_choice_and_writes_the_prediction(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("predict", "--by", "Ann")
+        text = self.read(iv.DRAFT)
+        self.assertIn("- * **Sturdy**: about sturdy.\n", text)
+        self.assertIn("- **Cheap (Recommended)**: about cheap.\n", text)
+        self.assertIn("prediction: Sturdy · score 18 · gap 36 · model: stated\n", text)
+        self.assertIn("concern-only: Sturdy\n", text)
+        self.assertIn("model: stated", result.stdout)
+
+    def test_predict_refuses_an_unannotated_choice(self):
+        self.write(iv.DRAFT, draft(question(1, annotated=False)))
+        result = self.cli("predict", "--by", "Ann", ok=False)
+        self.assertIn("not annotated", result.stderr)
+
+    def test_predict_refuses_an_unmapped_tag(self):
+        self.write(iv.DRAFT, draft(question(1, choices=(CHEAP, ("Offline", "offline 1", "reliability 1")))))
+        result = self.cli("predict", "--by", "Ann", ok=False)
+        self.assertIn("interview.py tag", result.stderr)
+
+    def test_predict_refuses_a_concern_the_person_has_not_rated(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("predict", "--by", "Bob", ok=False)
+        self.assertIn("C1 reliability is not rated by Bob", result.stderr)
+
+    def test_a_failed_predict_writes_nothing(self):
+        text = draft(question(1), question(2, annotated=False))
+        self.write(iv.DRAFT, text)
+        self.cli("predict", "--by", "Ann", ok=False)
+        self.assertEqual(self.read(iv.DRAFT), text)
+
+    def test_predicting_twice_gives_the_same_round(self):
+        self.write(iv.DRAFT, draft(question(1), question(2, choices=(CHEAP, STURDY, PRIVATE))))
+        self.cli("predict", "--by", "Ann")
+        once = self.read(iv.DRAFT)
+        self.cli("predict", "--by", "Ann")
+        self.assertEqual(self.read(iv.DRAFT), once)
+
+    def test_predict_keeps_crlf_and_untouched_lines(self):
+        self.write(iv.DRAFT, draft(question(1)).replace("\n", "\r\n"))
+        self.cli("predict", "--by", "Ann")
+        text = self.read(iv.DRAFT)
+        self.assertNotIn("\n", text.replace("\r\n", ""))
+        self.assertIn("header: H1 · select: single\r\n", text)
+        self.assertIn("    concern: a worry about cheap.\r\n", text)
+
+
+class Record(Case):
+    def test_record_appends_the_round_and_deletes_the_draft(self):
+        self.round(question(1), answers="Q1=2")
+        text = self.read(iv.LOG)
+        self.assertTrue(text.startswith(iv.LOG_TITLE + "\n\n## Q1\nWhich way?\n"))
+        self.assertIn("header: H1 · round: 1 · select: single · asked: 2026-10-02 10:00:00 +0000 · by: Ann\n", text)
+        self.assertIn("- <sel> * **Sturdy**: about sturdy.\n", text)
+        self.assertNotIn("<tracer>", text)
+        self.assertFalse(os.path.exists(self.path(iv.DRAFT)))
+        self.cli("parse")
+
+    def test_a_dissenting_answer_is_a_tracer_with_its_axis(self):
+        result = self.round(question(1), answers="Q1=1")
+        text = self.read(iv.LOG)
+        self.assertIn("## Q1\n<tracer> Which way?\n", text)
+        self.assertIn("- <sel> **Cheap (Recommended)**", text)
+        self.assertIn("axis: C2 effort vs C1 reliability\n", text)
+        self.assertIn("tracer", result.stdout)
+
+    def test_other_is_always_a_tracer(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        with open(self.path(iv.DRAFT), "a", encoding="utf-8") as fh:
+            fh.write("- **Other**: keep the last ten steps.\n"
+                     "    concern: ten steps may be too few.\n"
+                     "    raises: reliability 1\n"
+                     "    addresses: impl-effort 1\n")
+        self.cli("record", "--by", "Ann", "--answers", "Q1=Other", "--asked", ASKED)
+        text = self.read(iv.LOG)
+        self.assertIn("<tracer> Which way?", text)
+        self.assertIn("- <sel> **Other**: keep the last ten steps.\n    concern:", text)
+        self.assertIn("axis: C2 effort vs C1 reliability\n", text)
+
+    def test_record_refuses_other_without_its_choice(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=Other", "--asked", ASKED, ok=False)
+        self.assertIn("- **Other**: <text>", result.stderr)
+
+    def test_record_refuses_bad_answers(self):
+        self.write(iv.DRAFT, draft(question(1), question(2)))
+        self.cli("predict", "--by", "Ann")
+        before = self.read(iv.DRAFT)
+        for answers, message in (("Q1=2", "Q2 has no answer"), ("Q1=2, Q2=3", "out of range"),
+                                 ("Q1=1+2, Q2=1", "single-choice"), ("Q1=1, Q2=1, Q3=1", "Q3 is not in the round"),
+                                 ("Q1=x, Q2=1", "Q1=x")):
+            result = self.cli("record", "--by", "Ann", "--answers", answers, "--asked", ASKED, ok=False)
+            self.assertIn(message, result.stderr)
+        self.assertEqual(self.read(iv.DRAFT), before)
+        self.assertFalse(os.path.exists(self.path(iv.LOG)))
+
+    def test_record_refuses_a_round_that_was_not_predicted(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertIn("run `interview.py predict` first", result.stderr)
+
+    def test_none_records_a_declined_question(self):
+        self.round(question(1), answers="Q1=none")
+        text = self.read(iv.LOG)
+        self.assertIn("answer: none (declined)\n", text)
+        self.assertNotIn("<sel>", text)
+        self.assertNotIn("<tracer>", text)
+
+    def test_numbers_and_rounds_continue_the_log(self):
+        self.round(question(1), answers="Q1=2")
+        self.round(question(1, text="Again?"), question(2, text="And?"), answers="Q1=2, Q2=1")
+        text = self.read(iv.LOG)
+        self.assertIn("## Q2\nAgain?\nheader: H1 · round: 2 ·", text)
+        self.assertIn("## Q3\n<tracer> And?\nheader: H2 · round: 2 ·", text)
+        self.cli("parse")
+
+    def test_multi_select_answers_join_with_plus(self):
+        self.round(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"), answers="Q1=1+2")
+        text = self.read(iv.LOG)
+        self.assertIn("- <sel> **Cheap", text)
+        self.assertIn("- <sel> * **Sturdy", text)
+        self.assertNotIn("<tracer>", text)
+
+    def test_a_new_rating_does_not_change_a_recorded_round(self):
+        self.round(question(1), answers="Q1=1")
+        before = self.read(iv.LOG)
+        self.cli("rate", "C1=0", "--by", "Ann", "--date", "2026-10-05")
+        self.assertEqual(self.read(iv.LOG), before)
+
+
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_interview_files(self):
         work = tempfile.mkdtemp(prefix="skel-interview-tree-")
