@@ -900,14 +900,15 @@ def cmd_record(args):
         text += nl + "".join(render_record(rec, nl))
     write(state.path(LOG), text)
     os.remove(state.path(DRAFT))
-    hits = 0
+    hits = answered = 0
     for rec in state.draft:
         sel = {c.label for c in rec.selected()}
+        answered += bool(sel)
         hits += bool(sel) and sel == {c.label for c in rec.predicted()}
         note = f", tracer: {rec.fields['axis']}" if "tracer" in rec.marks else ""
         answer = " + ".join(sorted(sel)) if sel else "declined"
         print(f"Q{rec.number}: {answer}{note}")
-    print(f"round {rnd}: {hits} of {len(state.draft)} predictions hit")
+    print(f"round {rnd}: {hits} of {answered} predictions hit")
     return 0
 
 

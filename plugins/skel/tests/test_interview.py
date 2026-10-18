@@ -476,6 +476,10 @@ class Record(Case):
         self.assertIn("## Q3\n<tracer> And?\nheader: H2 · round: 2 ·", text)
         self.cli("parse")
 
+    def test_the_round_summary_leaves_declined_questions_out(self):
+        result = self.round(question(1), question(2), answers="Q1=2, Q2=none")
+        self.assertIn("round 1: 1 of 1 predictions hit", result.stdout)
+
     def test_multi_select_answers_join_with_plus(self):
         self.round(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"), answers="Q1=1+2")
         text = self.read(iv.LOG)
