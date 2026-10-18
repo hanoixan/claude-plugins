@@ -24,6 +24,7 @@ import json
 import math
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -52,13 +53,13 @@ TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
 CHOICE_RE = re.compile(r"^- (<sel> )?(\* )?\*\*(.+?)\*\*:(?: (.*))?$")
 ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
-FIELD_RE = re.compile(r"^(answer|prediction|concern-only|axis|probes): (.*)$")
+FIELD_RE = re.compile(r"^(answer|prediction|concern-only|axis|probes|round-id): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
-FIELD_ORDER = ("answer", "prediction", "concern-only", "axis", "probes")
+FIELD_ORDER = ("answer", "prediction", "concern-only", "axis", "probes", "round-id")
 MARK_ORDER = ("probe", "tracer")
 
 
@@ -173,6 +174,9 @@ class State:
         return os.path.join(self.skel, name)
 
 
+DIGITS = re.compile(r"[0-9]+")
+
+
 def fmt(x):
     x = round(x, 2)
     return str(int(x)) if x == int(x) else f"{x:g}"
@@ -191,6 +195,13 @@ def write(path, text):
     """Write through a temporary file in the same folder, then rename over the target."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".tmp-", suffix=".md")
     try:
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
         with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
             fh.write(text)
         os.replace(tmp, path)
@@ -315,7 +326,7 @@ def validate_records(path, records, problems, log):
         missing = [key for key in need if key not in rec.meta]
         if missing:
             problems.error(path, at, f"Q{rec.number}: the meta line needs {', '.join(missing)}")
-        if log and "round" in rec.meta and not rec.meta["round"].isdigit():
+        if log and "round" in rec.meta and not DIGITS.fullmatch(rec.meta["round"]):
             problems.error(path, at, f"Q{rec.number}: `round:` is a number")
         if log and "asked" in rec.meta:
             try:
@@ -330,6 +341,9 @@ def validate_records(path, records, problems, log):
         labels = [c.label for c in rec.choices]
         if len(set(labels)) != len(labels):
             problems.error(path, at, f"Q{rec.number}: two choices have the same label")
+        for c in rec.choices:
+            if " | " in c.label:
+                problems.error(path, c.line + 1, f"Q{rec.number}: a label cannot contain ` | `: {c.label}")
         for c in rec.choices:
             names = {n for n, _ in c.annotations}
             if names and names != {"concern", "raises", "addresses"}:
@@ -753,6 +767,8 @@ def cmd_rate(args):
             errors.append(f"no concern C{m.group(1)} in {WEIGHTS}")
         elif not 0 <= float(m.group(2)) <= 10:
             errors.append(f"a rating is from 0 to 10: {item}")
+        elif any(c.cid == int(m.group(1)) for c, _ in ratings):
+            errors.append(f"C{m.group(1)} is rated twice")
         else:
             ratings.append((by_id[int(m.group(1))], float(m.group(2))))
     if errors:
@@ -803,6 +819,8 @@ def cmd_predict(args):
     tags = tag_map(state.concerns)
     by_id = {c.cid: c for c in state.concerns}
     counts = dissent(state.log, by)
+    ids = [r.fields["round-id"] for r in state.draft if "round-id" in r.fields]
+    round_id = ids[0] if ids else secrets.token_hex(4)
     for rec in state.draft:
         vecs = [vector(c, tags) for c in rec.choices]
         picked, scores, gap = choose(rec, vecs, w, w_rec)
@@ -814,6 +832,7 @@ def cmd_predict(args):
                                     f"gap {fmt(gap)} · model: {model}")
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
         rec.meta["by"] = by
+        rec.fields["round-id"] = round_id
         rec.meta_raw = SEP.join(f"{key}: {rec.meta[key]}" for key in META_KEYS if key in rec.meta)
         rec.marks = [m for m in rec.marks if m != "probe"]
         rec.fields.pop("probes", None)
@@ -827,7 +846,7 @@ def cmd_predict(args):
     return 0
 
 
-ANSWER_RE = re.compile(r"^Q(\d+)=(.+)$")
+ANSWER_RE = re.compile(r"^Q([0-9]+)=(.+)$")
 
 
 def parse_answers(text):
@@ -851,7 +870,7 @@ def answer_errors(rec, tokens, tags, by):
     other = rec.choice("Other")
     if "prediction" not in rec.fields:
         errors.append(f"Q{rec.number} has no prediction: run `interview.py predict` first")
-    elif ("concern-only" not in rec.fields or not rec.predicted()
+    elif ("concern-only" not in rec.fields or "round-id" not in rec.fields or not rec.predicted()
           or any(rec.choice(label) is None for label in rec.fields["concern-only"].split(" | "))):
         errors.append(f"Q{rec.number}: its prediction does not match its choices; "
                       f"run `interview.py predict` again, then ask it")
@@ -870,7 +889,7 @@ def answer_errors(rec, tokens, tags, by):
                               f"its concern:, raises: and addresses: lines, then record again")
             elif any(tag not in tags for tag in other.tags()):
                 errors.append(f"Q{rec.number}: map the Other choice's tags with `interview.py tag` first")
-        elif t.isdigit():
+        elif DIGITS.fullmatch(t):
             if not 1 <= int(t) <= len(offered):
                 errors.append(f"Q{rec.number}: choice {t} is out of range 1-{len(offered)}")
         elif t != "none":
@@ -902,6 +921,9 @@ def cmd_record(args):
     for rec in state.draft:
         if rec.number in answers:
             errors += answer_errors(rec, answers[rec.number], tags, by)
+    logged = {r.fields.get("round-id") for r in state.log} - {None}
+    if not errors and any(r.fields["round-id"] in logged for r in state.draft):
+        errors.append(f"this round is already in {LOG}, so {DRAFT} was left behind: delete it")
     if errors:
         sys.exit("\n".join(errors))
     by_id = {c.cid: c for c in state.concerns}
@@ -1023,18 +1045,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def command(name, by=True, json_flag=False):
+    def command(name, json_flag=False):
         p = sub.add_parser(name)
         p.add_argument("skel")
-        if by:
-            p.add_argument("--by")
+        p.add_argument("--by")
         if json_flag:
             p.add_argument("--json", action="store_true")
         return p
 
-    command("parse", by=False)
+    command("parse")
     command("concerns", json_flag=True)
-    p = command("tag", by=False)
+    p = command("tag")
     p.add_argument("tag")
     p.add_argument("concern", nargs="?")
     p.add_argument("--new", nargs=2, metavar=("NAME", "MEANING"))

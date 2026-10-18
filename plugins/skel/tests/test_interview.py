@@ -695,6 +695,77 @@ class ReviewFixes(Case):
             self.assertIn("starts a new history", fh.read())
 
 
+class DeferredMinors(Case):
+    def test_a_round_number_in_other_digits_is_refused(self):
+        self.write(iv.LOG, LOG_RECORD.replace("round: 1", "round: \u00b2"))
+        self.assertIn("`round:` is a number", self.cli("parse", ok=False).stdout)
+        self.assertNotIn("Traceback", self.cli("hits", "--by", "Ann", ok=False).stderr)
+
+    def test_an_answer_in_other_digits_is_refused(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=\u00b2", "--asked", ASKED, ok=False)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.LOG)))
+
+    def test_a_label_with_the_choice_separator_is_refused(self):
+        self.write(iv.DRAFT, draft(question(1, choices=(("Cheap | quick", *CHEAP[1:]), STURDY))))
+        result = self.cli("predict", "--by", "Ann", ok=False)
+        self.assertIn("` | `", result.stderr)
+
+    def test_a_concern_rated_twice_in_one_call_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        result = self.cli("rate", "C2=3", "C2=7", "--by", "Ann", ok=False)
+        self.assertIn("C2 is rated twice", result.stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_a_rewritten_file_keeps_its_mode(self):
+        os.chmod(self.path(iv.WEIGHTS), 0o644)
+        self.cli("rate", "C2=4", "--by", "Ann")
+        self.assertEqual(os.stat(self.path(iv.WEIGHTS)).st_mode & 0o777, 0o644)
+
+    def test_a_new_file_gets_the_usual_mode(self):
+        umask = os.umask(0)
+        os.umask(umask)
+        self.round(question(1), answers="Q1=1")
+        self.assertEqual(os.stat(self.path(iv.LOG)).st_mode & 0o777, 0o666 & ~umask)
+
+    def test_a_round_recorded_twice_is_refused(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        predicted = self.read(iv.DRAFT)
+        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED)
+        log = self.read(iv.LOG)
+        self.write(iv.DRAFT, predicted)
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertIn("already in", result.stderr)
+        self.assertEqual(self.read(iv.LOG), log)
+        self.cli("predict", "--by", "Ann")
+        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertEqual(self.read(iv.LOG), log)
+
+    def test_the_same_round_predicted_again_is_recorded(self):
+        for _ in range(2):
+            self.round(question(1), answers="Q1=1")
+        self.assertEqual(len(self.state().log), 2)
+
+    def test_parse_and_tag_take_by(self):
+        self.cli("parse", "--by", "Ann")
+        self.cli("tag", "offline", "C3", "--by", "Ann")
+
+    def test_the_reference_example_axis_is_what_record_writes(self):
+        with open(os.path.join(SKILL, "references", "interviewing.md"), encoding="utf-8") as fh:
+            doc = fh.read()
+        block = doc.split("```text\n## Q14\n", 1)[1].split("```", 1)[0]
+        recs, problems = records(iv.LOG_TITLE + "\n\n## Q1\n" + block, iv.LOG_TITLE)
+        self.assertEqual(problems.errors, [])
+        rec = recs[0]
+        concerns = iv.parse_weights("seed", iv.seed_lines(), iv.Problems())
+        tags, by_id = iv.tag_map(concerns), {c.cid: c for c in concerns}
+        a = iv.axis(iv.vector(rec.selected()[0], tags), iv.vector(rec.choice(rec.fields["concern-only"]), tags))
+        self.assertEqual(rec.fields["axis"], iv.axis_text(a, by_id))
+
+
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_interview_files(self):
         work = tempfile.mkdtemp(prefix="skel-interview-tree-")

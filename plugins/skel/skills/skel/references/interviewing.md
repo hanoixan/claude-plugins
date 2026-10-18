@@ -63,9 +63,9 @@ changed `user.name` starts a new history, so pass `--by` with the old name to ke
 
 3. **Predict:** `python3 "SKILL_DIR/scripts/interview.py" predict skel`. It marks each question's predicted choice
    with `*`, adds the person as `by:` on the meta line (`record` refuses anyone else), and writes `prediction:`,
-   `concern-only:` and, on a question that touches a trade-off the user has gone against before, `<probe>` and
-   `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names the command that
-   fixes each.
+   `concern-only:`, `round-id:` and, on a question that touches a trade-off the user has gone against before,
+   `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names the
+   command that fixes each.
 
 4. **Ask** the questions in draft order. Copy each question, label and description from the draft word for word:
    the log records the draft, so anything reworded when asked is not what the log says was asked. To change the
@@ -112,7 +112,8 @@ header: History · round: 3 · select: single · asked: 2026-10-17 10:42:11 -040
     addresses: reliability 3
 prediction: Not kept (Recommended) · score 12 · gap 4 · model: fitted+rec
 concern-only: Not kept (Recommended)
-axis: C8 effort vs C10 reliability
+axis: C10 reliability vs C8 effort
+round-id: 3f91df49
 ```
 
 - `<sel>` marks the choice taken and `*` the one predicted; `<sel>` comes first.
@@ -120,6 +121,7 @@ axis: C8 effort vs C10 reliability
   the concern the answer gained most against the one it gave up most.
 - `<probe>` (with `probes:`): when asked, the question touched a trade-off with an earlier tracer.
 - `answer: none (declined)` marks a question the user declined.
+- `round-id:` is the same on every question of a round. `record` refuses a draft whose round is already logged.
 - Don't edit recorded rounds, apart from adding annotation lines that are missing.
 
 **`skel/.interview-weights.md`** holds the concerns, shared by everyone on the repository, and each person's ratings:
