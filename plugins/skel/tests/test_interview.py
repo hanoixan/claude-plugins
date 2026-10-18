@@ -401,7 +401,7 @@ class Predict(Case):
         self.cli("predict", "--by", "Ann")
         text = self.read(iv.DRAFT)
         self.assertNotIn("\n", text.replace("\r\n", ""))
-        self.assertIn("header: H1 · select: single\r\n", text)
+        self.assertIn("header: H1 · select: single · by: Ann\r\n", text)
         self.assertIn("    concern: a worry about cheap.\r\n", text)
 
 
@@ -640,6 +640,59 @@ class Docs(unittest.TestCase):
 
     def test_the_system_template_has_principles(self):
         self.assertIn("## Principles", self.read("assets", "templates", "SYSTEM.md"))
+
+
+class ReviewFixes(Case):
+    def test_a_draft_with_log_only_lines_is_refused(self):
+        text = draft(question(1)).replace("Which way?", "<tracer> Which way?") + "axis: C2 effort vs C1 reliability\n"
+        self.write(iv.DRAFT, text)
+        result = self.cli("predict", "--by", "Ann", ok=False)
+        self.assertIn("only `record` writes", result.stderr)
+        self.assertEqual(self.read(iv.DRAFT), text)
+
+    def test_a_name_with_the_separator_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        result = self.cli("rate", "C2=4", "--by", "A · B", ok=False)
+        self.assertIn("--by", result.stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_a_bad_new_concern_name_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        for name in ("", "a\nb"):
+            self.cli("tag", "offline", "--new", name, "works offline.", ok=False)
+        self.cli("tag", "offline", "--new", "offline", "a\nb", ok=False)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_record_refuses_a_person_other_than_the_predicted_one(self):
+        text = WEIGHTS
+        for ann in ("rating: 10 · by: Ann · 2026-10-01\n", "rating: 1 · by: Ann · 2026-10-01\n"):
+            text = text.replace(ann, ann + "rating: 5 · by: Bob · 2026-10-01\n")
+        self.write(iv.WEIGHTS, text)
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        result = self.cli("record", "--by", "Bob", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertIn("predicted for Ann", result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.LOG)))
+
+    def test_record_refuses_a_prediction_that_names_no_choice(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("**Sturdy**", "**Strong**"))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertIn("run `interview.py predict` again", result.stderr)
+
+    def test_record_refuses_a_prediction_without_concern_only(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, "".join(l for l in self.read(iv.DRAFT).splitlines(keepends=True)
+                                     if not l.startswith("concern-only:")))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("run `interview.py predict` again", result.stderr)
+
+    def test_the_reference_says_a_renamed_user_is_a_new_person(self):
+        with open(os.path.join(SKILL, "references", "interviewing.md"), encoding="utf-8") as fh:
+            self.assertIn("starts a new history", fh.read())
 
 
 class Coexistence(unittest.TestCase):

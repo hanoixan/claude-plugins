@@ -13,7 +13,8 @@ python3 "SKILL_DIR/scripts/interview.py" parse skel
 ```
 
 `--by NAME` names the person answering; it defaults to `git config user.name`. If that is not set, ask the user
-their name once and pass it on every command for the rest of the session.
+their name once and pass it on every command for the rest of the session. History is kept per name: a
+changed `user.name` starts a new history, so pass `--by` with the old name to keep using the old one.
 
 ## A round
 
@@ -61,9 +62,10 @@ their name once and pass it on every command for the rest of the session.
      logged.
 
 3. **Predict:** `python3 "SKILL_DIR/scripts/interview.py" predict skel`. It marks each question's predicted choice
-   with `*` and writes `prediction:`, `concern-only:` and, on a question that touches a trade-off the user has gone
-   against before, `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern,
-   and names the command that fixes each.
+   with `*`, adds the person as `by:` on the meta line (`record` refuses anyone else), and writes `prediction:`,
+   `concern-only:` and, on a question that touches a trade-off the user has gone against before, `<probe>` and
+   `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names the command that
+   fixes each.
 
 4. **Ask** the questions in draft order. Copy each question, label and description from the draft word for word:
    the log records the draft, so anything reworded when asked is not what the log says was asked. To change the

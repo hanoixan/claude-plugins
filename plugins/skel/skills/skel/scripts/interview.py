@@ -343,6 +343,9 @@ def validate_records(path, records, problems, log):
         if not log:
             if chosen:
                 problems.error(path, at, f"Q{rec.number}: a round is answered by `record`; remove <sel>")
+            stale = (["<tracer>"] if "tracer" in rec.marks else []) + [f"{k}:" for k in ("answer", "axis") if k in rec.fields]
+            if stale:
+                problems.error(path, at, f"Q{rec.number}: only `record` writes {', '.join(stale)}; remove it from the round")
         elif rec.declined and chosen:
             problems.error(path, at, f"Q{rec.number}: a declined question has no <sel>")
         elif not rec.declined and not chosen:
@@ -612,6 +615,22 @@ def rebuild(lines, records):
     return "".join(out)
 
 
+def checked(path, text):
+    """The text, if it parses cleanly as the file it is about to replace; otherwise exit and write nothing."""
+    problems = Problems()
+    lines = text.splitlines(keepends=True)
+    name = os.path.basename(path)
+    if name == WEIGHTS:
+        parse_weights(path, lines, problems)
+    else:
+        log = name == LOG
+        recs = parse_records(path, lines, LOG_TITLE if log else DRAFT_TITLE, problems)
+        validate_records(path, recs, problems, log=log)
+    if problems.errors:
+        sys.exit("\n".join(["nothing written: the result would not parse"] + problems.errors))
+    return text
+
+
 def fail_on_errors(state):
     if state.problems.errors:
         for line in state.problems.errors:
@@ -619,9 +638,15 @@ def fail_on_errors(state):
         sys.exit("fix these first (`interview.py parse SKEL_DIR` lists them)")
 
 
+def check_name(name, what):
+    if not name.strip() or "\n" in name or "\r" in name or SEP.strip() in name:
+        sys.exit(f"{what} must be one line, not empty, and without `{SEP.strip()}`: {name!r}")
+    return name
+
+
 def person(args):
     if getattr(args, "by", None):
-        return args.by
+        return check_name(args.by, "--by")
     try:
         name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True,
                               cwd=os.path.abspath(args.skel)).stdout.strip()
@@ -629,7 +654,7 @@ def person(args):
         name = ""
     if not name:
         sys.exit("no --by given and `git config user.name` is not set; pass --by NAME")
-    return name
+    return check_name(name, "`git config user.name`")
 
 
 def relevant(state, by):
@@ -692,7 +717,7 @@ def cmd_tag(args):
     lines = list(state.weights_lines)
     nl = newline_of(lines)
     if args.new:
-        name, meaning = args.new
+        name, meaning = (check_name(x, "--new NAME and MEANING") for x in args.new)
         cid = max((c.cid for c in state.concerns), default=0) + 1
         if lines and not lines[-1].endswith(("\n", "\r")):
             lines[-1] += nl
@@ -706,7 +731,7 @@ def cmd_tag(args):
         k = concern.tags_line
         lines[k] = "tags: " + ", ".join(concern.tags + [tag]) + line_end(lines[k], nl)
         title = concern.title
-    write(state.path(WEIGHTS), "".join(lines))
+    write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
     print(f"`{tag}` belongs to {title}")
     return 0
 
@@ -739,7 +764,7 @@ def cmd_rate(args):
         if not lines[at - 1].endswith(("\n", "\r")):
             lines[at - 1] += nl
         lines.insert(at, f"rating: {fmt(value)} · by: {by} · {date}{nl}")
-    write(state.path(WEIGHTS), "".join(lines))
+    write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
     for concern, value in ratings:
         print(f"{concern.title}: {fmt(value)} ({by})")
     return 0
@@ -788,6 +813,8 @@ def cmd_predict(args):
         rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
                                     f"gap {fmt(gap)} · model: {model}")
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
+        rec.meta["by"] = by
+        rec.meta_raw = SEP.join(f"{key}: {rec.meta[key]}" for key in META_KEYS if key in rec.meta)
         rec.marks = [m for m in rec.marks if m != "probe"]
         rec.fields.pop("probes", None)
         a = probe_axis(vecs, counts)
@@ -796,7 +823,7 @@ def cmd_predict(args):
             rec.fields["probes"] = axis_text(a, by_id)
         print(f"Q{rec.number}: {labels} (lead {fmt(gap)})" + (f", probe: {rec.fields['probes']}" if a else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
-    write(state.path(DRAFT), rebuild(state.draft_lines, state.draft))
+    write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
     return 0
 
 
@@ -818,12 +845,18 @@ def parse_answers(text):
     return answers
 
 
-def answer_errors(rec, tokens, tags):
+def answer_errors(rec, tokens, tags, by):
     errors = []
     offered = [c for c in rec.choices if c.label != "Other"]
     other = rec.choice("Other")
     if "prediction" not in rec.fields:
         errors.append(f"Q{rec.number} has no prediction: run `interview.py predict` first")
+    elif ("concern-only" not in rec.fields or not rec.predicted()
+          or any(rec.choice(label) is None for label in rec.fields["concern-only"].split(" | "))):
+        errors.append(f"Q{rec.number}: its prediction does not match its choices; "
+                      f"run `interview.py predict` again, then ask it")
+    elif rec.by != by:
+        errors.append(f"Q{rec.number} was predicted for {rec.by}, not {by}; run `interview.py predict --by {by}`")
     if tokens == ["none"]:
         return errors
     if "none" in tokens:
@@ -868,7 +901,7 @@ def cmd_record(args):
     errors += [f"Q{n} has no answer; use Q{n}=none to record it as declined" for n in sorted(numbers - set(answers))]
     for rec in state.draft:
         if rec.number in answers:
-            errors += answer_errors(rec, answers[rec.number], tags)
+            errors += answer_errors(rec, answers[rec.number], tags, by)
     if errors:
         sys.exit("\n".join(errors))
     by_id = {c.cid: c for c in state.concerns}
@@ -898,7 +931,7 @@ def cmd_record(args):
         text += nl
     for rec in state.draft:
         text += nl + "".join(render_record(rec, nl))
-    write(state.path(LOG), text)
+    write(state.path(LOG), checked(state.path(LOG), text))
     os.remove(state.path(DRAFT))
     hits = answered = 0
     for rec in state.draft:
