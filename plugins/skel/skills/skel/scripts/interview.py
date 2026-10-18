@@ -479,6 +479,132 @@ def fail_on_errors(state):
         sys.exit("fix these first (`interview.py parse SKEL_DIR` lists them)")
 
 
+def person(args):
+    if getattr(args, "by", None):
+        return args.by
+    try:
+        name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True,
+                              cwd=os.path.abspath(args.skel)).stdout.strip()
+    except OSError:
+        name = ""
+    if not name:
+        sys.exit("no --by given and `git config user.name` is not set; pass --by NAME")
+    return name
+
+
+def relevant(state, by):
+    """The records whose concerns matter for this person: their own history and the round being asked."""
+    return [r for r in state.log if r.by == by] + (state.draft or [])
+
+
+def used_concerns(state, records):
+    tags = tag_map(state.concerns)
+    unmapped, used = set(), set()
+    for rec in records:
+        for c in rec.choices:
+            for tag in c.tags():
+                if tag in tags:
+                    used.add(tags[tag].cid)
+                else:
+                    unmapped.add(tag)
+    return unmapped, used
+
+
+def line_end(line, nl):
+    return line[len(line.rstrip("\r\n")):] or nl
+
+
+def cmd_concerns(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    unmapped, used = used_concerns(state, relevant(state, by))
+    rated = stated(state.concerns, by)
+    unrated = [c for c in state.concerns if c.cid in used and c.cid not in rated]
+    if args.json:
+        print(json.dumps({"by": by, "unmapped": sorted(unmapped),
+                          "unrated": [{"id": c.cid, "name": c.name, "meaning": c.meaning} for c in unrated]}))
+        return 0
+    if unmapped:
+        print("Tags with no concern (map each with `interview.py tag`):")
+        for tag in sorted(unmapped):
+            print(f"  {tag}")
+    if unrated:
+        print(f"Concerns {by} has not rated (rate them with `interview.py rate`):")
+        for c in unrated:
+            print(f"  {c.title}: {c.meaning}")
+    if not unmapped and not unrated:
+        print(f"Nothing to map or rate for {by}.")
+    return 0
+
+
+def cmd_tag(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    tag = args.tag
+    if not TAG_RE.match(tag):
+        sys.exit(f"`{tag}` is not a tag: lower case, digits and hyphens, optionally after `NEW:`")
+    if bool(args.concern) == bool(args.new):
+        sys.exit("give a concern (`C<n>`) or `--new NAME MEANING`, not both")
+    tags = tag_map(state.concerns)
+    if tag in tags:
+        sys.exit(f"`{tag}` already belongs to {tags[tag].title}; a tag belongs to one concern")
+    lines = list(state.weights_lines)
+    nl = newline_of(lines)
+    if args.new:
+        name, meaning = args.new
+        cid = max((c.cid for c in state.concerns), default=0) + 1
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += nl
+        lines += [nl, f"## C{cid} {name}{nl}", f"meaning: {meaning}{nl}", f"tags: {tag}{nl}"]
+        title = f"C{cid} {name}"
+    else:
+        m = re.match(r"^C(\d+)$", args.concern)
+        concern = next((c for c in state.concerns if m and c.cid == int(m.group(1))), None)
+        if concern is None:
+            sys.exit(f"no concern {args.concern} in {WEIGHTS}")
+        k = concern.tags_line
+        lines[k] = "tags: " + ", ".join(concern.tags + [tag]) + line_end(lines[k], nl)
+        title = concern.title
+    write(state.path(WEIGHTS), "".join(lines))
+    print(f"`{tag}` belongs to {title}")
+    return 0
+
+
+def cmd_rate(args):
+    state = load(args.skel)
+    fail_on_errors(state)
+    by = person(args)
+    date = args.date or datetime.date.today().isoformat()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        sys.exit("--date is YYYY-MM-DD")
+    by_id = {c.cid: c for c in state.concerns}
+    ratings, errors = [], []
+    for item in args.ratings:
+        m = re.match(r"^C(\d+)=(\d+(?:\.\d+)?)$", item)
+        if not m:
+            errors.append(f"a rating is `C<n>=<0-10>`: {item}")
+        elif int(m.group(1)) not in by_id:
+            errors.append(f"no concern C{m.group(1)} in {WEIGHTS}")
+        elif not 0 <= float(m.group(2)) <= 10:
+            errors.append(f"a rating is from 0 to 10: {item}")
+        else:
+            ratings.append((by_id[int(m.group(1))], float(m.group(2))))
+    if errors:
+        sys.exit("\n".join(errors))
+    lines = list(state.weights_lines)
+    nl = newline_of(lines)
+    for concern, value in sorted(ratings, key=lambda r: -r[0].end):
+        at = concern.end
+        if not lines[at - 1].endswith(("\n", "\r")):
+            lines[at - 1] += nl
+        lines.insert(at, f"rating: {fmt(value)} · by: {by} · {date}{nl}")
+    write(state.path(WEIGHTS), "".join(lines))
+    for concern, value in ratings:
+        print(f"{concern.title}: {fmt(value)} ({by})")
+    return 0
+
+
 def cmd_parse(args):
     state = load(args.skel)
     for line in state.problems.errors:
@@ -492,7 +618,7 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse}
+COMMANDS = {"parse": cmd_parse, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate}
 
 
 def main(argv=None):
@@ -509,6 +635,14 @@ def main(argv=None):
         return p
 
     command("parse", by=False)
+    command("concerns", json_flag=True)
+    p = command("tag", by=False)
+    p.add_argument("tag")
+    p.add_argument("concern", nargs="?")
+    p.add_argument("--new", nargs=2, metavar=("NAME", "MEANING"))
+    p = command("rate")
+    p.add_argument("ratings", nargs="+")
+    p.add_argument("--date")
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 

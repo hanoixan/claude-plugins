@@ -231,6 +231,79 @@ class Parsing(Case):
         self.assertEqual(iv.rebuild(lines, recs), text)
 
 
+class Concerns(Case):
+    def test_concerns_lists_unmapped_tags_and_unrated_concerns(self):
+        self.write(iv.DRAFT, draft(question(1, choices=(CHEAP, ("Offline", "offline 1", "reliability 1")))))
+        result = self.cli("concerns", "--by", "Bob")
+        self.assertIn("offline", result.stdout)
+        self.assertIn("C1 reliability", result.stdout)
+        self.assertNotIn("C3 privacy", result.stdout)
+
+    def test_concerns_json(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        data = json.loads(self.cli("concerns", "--by", "Bob", "--json").stdout)
+        self.assertEqual(data["unmapped"], [])
+        self.assertEqual([c["id"] for c in data["unrated"]], [1, 2])
+
+    def test_nothing_to_do_says_so(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.assertIn("Nothing to map or rate", self.cli("concerns", "--by", "Ann").stdout)
+
+
+class TagAndRate(Case):
+    def test_tag_adds_a_tag_to_a_concern(self):
+        self.cli("tag", "offline", "C1")
+        self.assertIn("tags: reliability, offline\n", self.read(iv.WEIGHTS))
+
+    def test_tag_new_appends_a_concern_with_the_next_id(self):
+        self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.")
+        self.assertTrue(self.read(iv.WEIGHTS).endswith(
+            "\n## C4 offline use\nmeaning: works without a network.\ntags: NEW:offline\n"))
+
+    def test_a_tag_maps_to_one_concern(self):
+        result = self.cli("tag", "reliability", "C2", ok=False)
+        self.assertIn("already belongs to C1 reliability", result.stderr)
+
+    def test_tag_needs_a_concern_or_new(self):
+        self.cli("tag", "offline", ok=False)
+
+    def test_tag_creates_the_weights_from_the_seed(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.")
+        text = self.read(iv.WEIGHTS)
+        self.assertTrue(text.startswith(iv.WEIGHTS_TITLE + "\n\n## C1 security\n"))
+        self.assertIn("## C17 offline use\n", text)
+
+    def test_rate_appends_a_rating(self):
+        self.cli("rate", "C2=4", "C3=5.5", "--by", "Ann", "--date", "2026-10-05")
+        text = self.read(iv.WEIGHTS)
+        self.assertIn("rating: 1 · by: Ann · 2026-10-01\nrating: 4 · by: Ann · 2026-10-05\n", text)
+        self.assertIn("rating: 5.5 · by: Ann · 2026-10-05\n", text)
+        self.assertEqual(iv.stated(self.state().concerns, "Ann"), {1: 10.0, 2: 4.0, 3: 5.5})
+
+    def test_rate_refuses_a_value_out_of_range(self):
+        before = self.read(iv.WEIGHTS)
+        self.cli("rate", "C2=4", "C3=12", "--by", "Ann", ok=False)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_rate_refuses_an_unknown_concern(self):
+        self.cli("rate", "C9=4", "--by", "Ann", ok=False)
+
+    def test_crlf_weights_stay_crlf(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n", "\r\n"))
+        self.cli("rate", "C2=4", "--by", "Ann", "--date", "2026-10-05")
+        self.cli("tag", "offline", "C1")
+        text = self.read(iv.WEIGHTS)
+        self.assertNotIn("\n", text.replace("\r\n", ""))
+        self.assertIn("tags: reliability, offline\r\n", text)
+
+    def test_by_defaults_to_the_git_user(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        subprocess.run(["git", "-C", self.dir, "config", "user.name", "Ann"], check=True)
+        self.cli("rate", "C2=3", "--date", "2026-10-05")
+        self.assertIn("rating: 3 · by: Ann · 2026-10-05", self.read(iv.WEIGHTS))
+
+
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_interview_files(self):
         work = tempfile.mkdtemp(prefix="skel-interview-tree-")
