@@ -695,6 +695,45 @@ class Domains(Case):
         self.assertIn("refiner.py tag NEW:pacing --catalog", out)
 
 
+class Exempting(Case):
+    def test_exempt_appends_a_line(self):
+        self.cli("exempt", "--question", "Merge or open a PR?", "--reason", "a menu, no trade-off", "--by", "Ann",
+                 "--asked", ASKED)
+        self.assertEqual(self.read(iv.EXEMPT), iv.EXEMPT_TITLE + "\n\n- 2026-10-02 10:00:00 +0000 · by: Ann · "
+                                                                 "question: Merge or open a PR? · reason: a menu, no trade-off\n")
+        self.cli("parse")
+
+    def test_a_question_in_the_round_cannot_be_exempted(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("exempt", "--question", "Which way?", "--reason", "x", "--by", "Ann", ok=False)
+        self.assertIn(iv.DRAFT, result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.EXEMPT)))
+
+    def test_the_separator_is_refused(self):
+        result = self.cli("exempt", "--question", "A · B?", "--reason", "x", "--by", "Ann", ok=False)
+        self.assertIn("--question must be one line", result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.EXEMPT)))
+
+    def test_a_bad_exempt_line_fails_parse(self):
+        self.write(iv.EXEMPT, iv.EXEMPT_TITLE + "\n\n- yesterday · question: x\n")
+        self.assertIn("an exempt line is", self.cli("parse", ok=False).stdout)
+
+    def test_hits_ignore_exempt_questions(self):
+        self.round(question(1), answers="Q1=1")
+        before = self.cli("hits", "--by", "Ann", "--json").stdout
+        self.cli("exempt", "--question", "Merge?", "--reason", "a menu", "--by", "Ann")
+        self.assertEqual(self.cli("hits", "--by", "Ann", "--json").stdout, before)
+
+    def test_passable_is_predicted_and_recent_exempt(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, self.read(iv.DRAFT) + "\n" + question(2, text="Not predicted?"))
+        for text, at in (("Recent?", "2026-10-02 10:25:00 +0000"), ("Old?", "2026-10-02 10:10:00 +0000")):
+            self.cli("exempt", "--question", text, "--reason", "a menu", "--by", "Ann", "--asked", at)
+        now = datetime.datetime(2026, 10, 2, 10, 30, tzinfo=datetime.timezone.utc)
+        self.assertEqual(iv.passable(self.state(), now), {"Which way?", "Recent?"})
+
+
 class Docs(unittest.TestCase):
     def read(self):
         with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:

@@ -15,6 +15,7 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   predict                                     mark the round's predicted choices
   record --answers "Q1=2, Q2=Other, Q3=none" [--asked STAMP]
   hits [--json]                               hit rates of logged predictions
+  exempt --question TEXT --reason TEXT        log a question with no trade-off; the gate passes it for 10 minutes
 
 Standard library only.
 """
@@ -38,6 +39,11 @@ DRAFT = "round.md"
 LOG_TITLE = "# question-refiner interviews"
 WEIGHTS_TITLE = "# question-refiner weights"
 DRAFT_TITLE = "# question-refiner round"
+EXEMPT = "exempt.md"
+EXEMPT_TITLE = "# question-refiner exempt questions"
+EXEMPT_WINDOW = 600     # seconds an exempt question passes the gate
+EXEMPT_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}) · by: (.+?) · question: (.+?) · "
+                       r"reason: (.+)$")
 CATALOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "concerns.md")
 DOMAINS = ("software", "infrastructure", "product", "fiction", "nonfiction", "research", "planning")
 
@@ -170,6 +176,8 @@ class State:
     weights_lines: list
     draft: list               # None when there is no round
     draft_lines: list
+    exempt: list              # Exempt entries, in file order
+    exempt_lines: list        # None when exempt.md does not exist
 
     def path(self, name):
         return os.path.join(self.store, name)
@@ -438,6 +446,36 @@ def parse_weights(path, lines, problems):
 
 
 @dataclass
+class Exempt:
+    asked: datetime.datetime
+    by: str
+    question: str
+    reason: str
+
+
+def parse_exempt(path, lines, problems):
+    texts = [line.rstrip("\r\n") for line in lines]
+    start = first_line(texts)
+    if start is None or texts[start] != EXEMPT_TITLE:
+        problems.error(path, (start or 0) + 1, f"the file must start with `{EXEMPT_TITLE}`")
+    out = []
+    for k, t in enumerate(texts):
+        if k == start or not t.strip():
+            continue
+        m = EXEMPT_RE.match(t)
+        try:
+            asked = datetime.datetime.strptime(m.group(1), STAMP_FORMAT) if m else None
+        except ValueError:
+            asked = None
+        if asked is None:
+            problems.error(path, k + 1, "an exempt line is `- <YYYY-MM-DD HH:MM:SS ±ZZZZ> · by: <name> · "
+                                        "question: <text> · reason: <text>`")
+            continue
+        out.append(Exempt(asked, m.group(2), m.group(3), m.group(4)))
+    return out
+
+
+@dataclass
 class Entry:
     name: str
     meaning: str = None
@@ -635,6 +673,8 @@ def load(store):
         return read_lines(path) if os.path.exists(path) else None
 
     log_lines, weights_lines, draft_lines = lines_of(LOG), lines_of(WEIGHTS), lines_of(DRAFT)
+    exempt_lines = lines_of(EXEMPT)
+    exempt = parse_exempt(os.path.join(store, EXEMPT), exempt_lines, problems) if exempt_lines is not None else []
     log = []
     if log_lines is not None:
         log = parse_records(os.path.join(store, LOG), log_lines, LOG_TITLE, problems)
@@ -654,7 +694,7 @@ def load(store):
                     if tag not in tags:
                         problems.warn(os.path.join(store, name), c.line + 1,
                                       f"tag `{tag}` belongs to no concern; map it with `refiner.py tag`")
-    return State(store, problems, log, log_lines, concerns, weights_lines, draft, draft_lines)
+    return State(store, problems, log, log_lines, concerns, weights_lines, draft, draft_lines, exempt, exempt_lines)
 
 
 def render_record(rec, nl):
@@ -686,7 +726,9 @@ def checked(path, text):
     problems = Problems()
     lines = text.splitlines(keepends=True)
     name = os.path.basename(path)
-    if name == WEIGHTS:
+    if name == EXEMPT:
+        parse_exempt(path, lines, problems)
+    elif name == WEIGHTS:
         parse_weights(path, lines, problems)
     else:
         log = name == LOG
@@ -1032,6 +1074,40 @@ def answer_errors(rec, tokens, tags, by):
     return errors
 
 
+def now_stamp():
+    return datetime.datetime.now().astimezone().strftime(STAMP_FORMAT)
+
+
+def cmd_exempt(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    by = person(args)
+    question = check_name(args.question.strip(), "--question")
+    reason = check_name(args.reason.strip(), "--reason")
+    if any(r.question.strip() == question for r in state.draft or []):
+        sys.exit(f"`{question}` is in {DRAFT}: a question in the round is predicted and recorded, not exempted")
+    asked = args.asked or now_stamp()
+    try:
+        datetime.datetime.strptime(asked, STAMP_FORMAT)
+    except ValueError:
+        sys.exit("--asked is `YYYY-MM-DD HH:MM:SS ±ZZZZ`")
+    lines = list(state.exempt_lines) if state.exempt_lines is not None else [EXEMPT_TITLE + "\n", "\n"]
+    nl = newline_of(lines)
+    if not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += nl
+    lines.append(f"- {asked} · by: {by} · question: {question} · reason: {reason}{nl}")
+    write(state.path(EXEMPT), checked(state.path(EXEMPT), "".join(lines)))
+    print(f"exempt: {question} ({reason})")
+    return 0
+
+
+def passable(state, now):
+    """Questions the gate lets through: predicted in the round, or exempted in the last EXEMPT_WINDOW seconds."""
+    ok = {r.question.strip() for r in state.draft or [] if "prediction" in r.fields}
+    ok |= {e.question for e in state.exempt if 0 <= (now - e.asked).total_seconds() <= EXEMPT_WINDOW}
+    return ok
+
+
 def cmd_record(args):
     state = load(store_of(args))
     fail_on_errors(state)
@@ -1043,7 +1119,7 @@ def cmd_record(args):
         answers = parse_answers(args.answers)
     except ValueError as e:
         sys.exit(str(e))
-    asked = args.asked or datetime.datetime.now().astimezone().strftime(STAMP_FORMAT)
+    asked = args.asked or now_stamp()
     try:
         datetime.datetime.strptime(asked, STAMP_FORMAT)
     except ValueError:
@@ -1173,7 +1249,7 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
             "predict": cmd_predict, "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
@@ -1206,6 +1282,10 @@ def main(argv=None):
     command("predict")
     p = command("record")
     p.add_argument("--answers", required=True)
+    p.add_argument("--asked")
+    p = command("exempt")
+    p.add_argument("--question", required=True)
+    p.add_argument("--reason", required=True)
     p.add_argument("--asked")
     command("fit", json_flag=True)
     command("hits", json_flag=True)
