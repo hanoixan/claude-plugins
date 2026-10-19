@@ -14,6 +14,7 @@ HOOKS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks")
 GATE = os.path.join(HOOKS, "gate.py")
 DETECT = os.path.join(HOOKS, "detect.py")
 RULE = os.path.join(HOOKS, "rule.sh")
+RUN = os.path.join(HOOKS, "run.sh")
 
 
 class Hook(unittest.TestCase):
@@ -128,6 +129,63 @@ class Hook(unittest.TestCase):
     def test_detect_is_silent_once_the_data_is_moved(self):
         self.write(rf.MOVED, "# Moved\n", self.legacy())
         self.assertIsNone(self.detect())
+
+    def test_the_refusal_names_the_full_round_path(self):
+        self.predicted()
+        reason = self.gate("Something else?")["permissionDecisionReason"]
+        self.assertIn(os.path.join(self.store, rf.DRAFT), reason)
+
+    def test_the_refusal_points_to_a_near_match(self):
+        self.predicted()
+        reason = self.gate("Which way now?")["permissionDecisionReason"]
+        self.assertIn("closest in the round: `Which way?`", reason)
+
+    def test_the_refusal_says_a_drafted_question_needs_predict(self):
+        self.write(rf.DRAFT, draft(question(1)))
+        self.assertIn("in the round but not predicted yet", self.gate("Which way?")["permissionDecisionReason"])
+
+    def test_the_refusal_says_when_there_are_no_weights(self):
+        os.remove(os.path.join(self.store, rf.WEIGHTS))
+        self.assertIn("no weights.md yet", self.gate("Which way?")["permissionDecisionReason"])
+
+    def test_the_fail_open_note_names_the_error_and_the_script(self):
+        context = self.gate(stdin="not json")["additionalContext"]
+        self.assertIn("JSONDecodeError", context)
+        self.assertIn(os.path.abspath(SCRIPT), context)
+
+    def test_detect_gives_import_a_full_path(self):
+        self.legacy()
+        self.assertIn(f'import "{os.path.join(self.dir, "skel")}"', self.detect())
+
+    def run_wrapped(self, script, payload, path):
+        bash = shutil.which("bash")
+        result = subprocess.run([bash, RUN, script], input=payload, capture_output=True, text=True,
+                                env={**os.environ, "PATH": path})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["hookSpecificOutput"] if result.stdout.strip() else None
+
+    @unittest.skipUnless(shutil.which("bash"), "needs bash")
+    def test_without_python3_the_gate_lets_the_question_through_and_says_why(self):
+        out = self.run_wrapped("gate.py", "{}", os.path.join(self.dir, "empty"))
+        self.assertNotIn("permissionDecision", out)
+        self.assertIn("needs python3", out["additionalContext"])
+
+    @unittest.skipUnless(shutil.which("bash"), "needs bash")
+    def test_without_python3_detect_is_silent(self):
+        self.assertIsNone(self.run_wrapped("detect.py", "{}", os.path.join(self.dir, "empty")))
+
+    @unittest.skipUnless(shutil.which("bash") and shutil.which("python3"), "needs bash and python3")
+    def test_the_wrapper_runs_the_hook_with_python3(self):
+        payload = json.dumps({"tool_input": {"questions": [{"question": "Q?"}]}, "cwd": self.dir})
+        out = self.run_wrapped("gate.py", payload, os.environ["PATH"])
+        self.assertEqual(out["permissionDecision"], "deny")
+
+    def test_hooks_json_runs_python_through_the_wrapper(self):
+        with open(os.path.join(HOOKS, "hooks.json"), encoding="utf-8") as fh:
+            hooks = json.load(fh)["hooks"]
+        for event, script in (("PreToolUse", "gate.py"), ("SessionStart", "detect.py")):
+            self.assertEqual(hooks[event][0]["hooks"][0]["command"],
+                             f'bash "${{CLAUDE_PLUGIN_ROOT}}/hooks/run.sh" {script}')
 
     @unittest.skipUnless(shutil.which("bash") and shutil.which("jq"), "needs bash and jq")
     def test_the_rule_is_added_every_turn(self):

@@ -48,6 +48,12 @@ class Docs(unittest.TestCase):
     def test_old_files_point_to_question_refiner(self):
         self.assertIn(".interview-moved.md", read("SKILL.md"))
 
+    def test_the_templates_say_nothing_of_interviews(self):
+        folder = os.path.join(SKILL, "assets", "templates")
+        for name in os.listdir(folder):
+            with open(os.path.join(folder, name), encoding="utf-8") as fh:
+                self.assertNotIn("interview", fh.read().lower(), name)
+
 
 class Coexistence(unittest.TestCase):
     def test_check_ignores_the_old_interview_files(self):

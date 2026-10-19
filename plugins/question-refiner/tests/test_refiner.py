@@ -1015,5 +1015,95 @@ class DeferredMinors(Case):
         self.assertEqual(rec.fields["axis"], iv.axis_text(a, by_id))
 
 
+class BranchMinors(Case):
+    def legacy(self, folder="skel", log=LEGACY_LOG):
+        return Migration.legacy(self, folder, log=log)
+
+    def test_a_dot_inside_a_name_or_question_is_accepted(self):
+        self.cli("rate", "C2=4", "--by", "A·B")
+        self.cli("exempt", "--question", "Pick A·B?", "--reason", "a menu", "--by", "A·B")
+        self.cli("parse")
+        self.assertIn("Pick A·B?", iv.passable(self.state(), datetime.datetime.now().astimezone()))
+
+    def test_a_dot_at_either_end_of_a_name_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        for name in ("A ·", "· A", "A · B"):
+            self.assertIn("--by", self.cli("rate", "C2=4", "--by", name, ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_domains_add_with_dir_searches_the_stores_repository(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy()
+        store = os.path.join(self.dir, "sub", iv.STORE)
+        result = subprocess.run([sys.executable, SCRIPT, "domains", "add", "software", "--dir", store],
+                                capture_output=True, text=True, cwd=self.dir)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'import "{os.path.join(os.path.realpath(self.dir), "skel")}"',
+                      result.stderr.replace(self.dir, os.path.realpath(self.dir)))
+        self.assertFalse(os.path.exists(os.path.join(store, iv.WEIGHTS)))
+
+    def test_the_legacy_search_asks_git_for_the_two_names_only(self):
+        calls = []
+        real = iv.subprocess.run
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return real(argv, **kw)
+        iv.subprocess.run = run
+        self.addCleanup(setattr, iv.subprocess, "run", real)
+        iv.legacy_folders(self.dir)
+        self.assertEqual(calls[0][-3:], ["--", f":(glob)**/{iv.LEGACY_LOG}", f":(glob)**/{iv.LEGACY_WEIGHTS}"])
+
+    def test_legacy_data_at_the_root_and_in_skel_is_found_in_git(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy(".")
+        self.legacy("skel")
+        self.assertEqual(iv.legacy_folders(self.dir), [".", "skel"])
+
+    def test_import_refuses_a_store_with_a_round(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("import", self.legacy(), ok=False)
+        self.assertIn(iv.DRAFT, result.stderr)
+        self.assertEqual(self.read(iv.DRAFT), draft(question(1)))
+        self.assertFalse(os.path.exists(self.path(iv.LOG)))
+
+    def test_import_leaves_out_a_round_already_logged(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        predicted = self.read(iv.DRAFT)
+        round_id = next(l for l in predicted.splitlines() if l.startswith("round-id: "))
+        os.remove(self.path(iv.WEIGHTS))
+        os.remove(self.path(iv.DRAFT))
+        d = self.legacy(log=LEGACY_LOG + round_id + "\n")
+        with open(os.path.join(d, iv.LEGACY_DRAFT), "w", encoding="utf-8") as fh:
+            fh.write(predicted.replace(iv.DRAFT_TITLE, "# skel interview round"))
+        result = self.cli("import", d)
+        self.assertFalse(os.path.exists(self.path(iv.DRAFT)))
+        self.assertIn("already recorded", result.stdout)
+        self.assertTrue(os.path.exists(self.path(iv.LOG)))
+
+    def test_no_line_is_wider_than_120_columns(self):
+        hooks = os.path.join(SKILL, "..", "..", "hooks")
+        for path in (SCRIPT, os.path.join(hooks, "gate.py"), os.path.join(hooks, "detect.py")):
+            with open(path, encoding="utf-8") as fh:
+                for k, line in enumerate(fh, 1):
+                    self.assertLessEqual(len(line.rstrip("\n")), 120, f"{path}:{k}")
+
+    def test_the_readme_names_every_command(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
+        for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
+                        "hits", "import"):
+            self.assertIn(f"\nrefiner.py {command} ", section)
+        self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
+
+    def test_the_skill_says_what_to_do_without_python3(self):
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("If `refiner.py` cannot run", text)
+        self.assertIn("ask directly", text)
+
+
 if __name__ == "__main__":
     unittest.main()

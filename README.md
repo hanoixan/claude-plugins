@@ -50,8 +50,8 @@ Then install whichever plugins you want:
 degrades to its skill rather than erroring.
 
 skel has no hooks and needs `python3` instead, for its two scripts. question-refiner needs `python3` for its
-script and two of its three hooks; without it those two hooks fail open and questions are asked as usual. All
-of these use only the standard library.
+script and two of its three hooks; without it the gate lets questions through and says that `python3` is
+missing, and the session-start check stays silent. All of these use only the standard library.
 
 wrist has no hooks either. Its scripts need `python3` (standard library only); publishing
 also needs `pandoc` 3.2+ and `typst` 0.12+, and wrist prints install steps if either is
@@ -282,7 +282,7 @@ that confident ones can be skipped in a later version.
 
 | Piece | Role |
 | --- | --- |
-| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data. 1996 words. |
+| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data. 2065 words. |
 | `PreToolUse` hook on `AskUserQuestion` | Refuses a question that was neither predicted nor exempted, and names the missing step. When it cannot check, it lets the question through. |
 | `UserPromptSubmit` hook | One line each turn, for questions asked in plain chat, which no hook sees. |
 | `SessionStart` hook | Finds skel 3.1.0 interview data that has not been moved, and has the agent ask about moving it. |
@@ -299,8 +299,12 @@ nonfiction, research and planning. The agent infers the domains that fit the wor
 a domain added later appends its concerns, and a choice that fits no concern gets a new one.
 
 ```
+refiner.py parse                     check every file in .question-refiner/ and summarize it
+refiner.py domains                   list the domains in use and the catalog's
 refiner.py domains add DOMAIN ...    create or extend weights.md from the catalog
 refiner.py concerns                  tags to map and concerns to rate before a round
+refiner.py tag TAG CONCERN ...       map a tag to a concern, a catalog concern or a new one
+refiner.py rate C1=7 ...             store a person's 0 to 10 ratings
 refiner.py predict                   mark the predicted choice on each question of the round
 refiner.py record --answers ...      log the answers, mark tracers, number the questions
 refiner.py exempt --question ...     log a question with no trade-off, so the gate lets it through

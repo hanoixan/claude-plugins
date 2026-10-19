@@ -232,16 +232,27 @@ def write(path, text):
 
 def store_for(cwd):
     """`.question-refiner/` at the git root of cwd, or in cwd outside a repository."""
-    try:
-        top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True,
-                             text=True).stdout.strip()
-    except OSError:
-        top = ""
-    return os.path.join(top or os.path.abspath(cwd), STORE)
+    return os.path.join(git_root(cwd) or os.path.abspath(cwd), STORE)
 
 
 def store_of(args):
     return os.path.abspath(args.dir) if getattr(args, "dir", None) else store_for(os.getcwd())
+
+
+def git_root(folder):
+    try:
+        return subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True,
+                              text=True).stdout.strip()
+    except OSError:
+        return ""
+
+
+def project_of(store):
+    """The folder whose skel 3.1.0 data belongs with this store: the git root holding it, else its parent."""
+    parent = near = os.path.dirname(store)
+    while not os.path.isdir(near) and os.path.dirname(near) != near:
+        near = os.path.dirname(near)
+    return git_root(near) or parent
 
 def legacy_folders(root):
     """Folders under root holding skel 3.1.0 interview files that were neither imported nor set aside.
@@ -252,8 +263,8 @@ def legacy_folders(root):
     names = (LEGACY_LOG, LEGACY_WEIGHTS)
     paths = None
     try:
-        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                             capture_output=True, text=True)
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                              "--", *(f":(glob)**/{name}" for name in names)], capture_output=True, text=True)
         if out.returncode == 0:
             paths = [p for p in out.stdout.split("\0") if p]
     except OSError:
@@ -426,9 +437,11 @@ def validate_records(path, records, problems, log):
         if not log:
             if chosen:
                 problems.error(path, at, f"Q{rec.number}: a round is answered by `record`; remove <sel>")
-            stale = (["<tracer>"] if "tracer" in rec.marks else []) + [f"{k}:" for k in ("answer", "axis") if k in rec.fields]
+            stale = ((["<tracer>"] if "tracer" in rec.marks else [])
+                     + [f"{k}:" for k in ("answer", "axis") if k in rec.fields])
             if stale:
-                problems.error(path, at, f"Q{rec.number}: only `record` writes {', '.join(stale)}; remove it from the round")
+                problems.error(path, at, f"Q{rec.number}: only `record` writes {', '.join(stale)}; "
+                                         f"remove it from the round")
         elif rec.declined and chosen:
             problems.error(path, at, f"Q{rec.number}: a declined question has no <sel>")
         elif not rec.declined and not chosen:
@@ -799,8 +812,9 @@ def need_weights(state):
 
 
 def check_name(name, what):
-    if not name.strip() or "\n" in name or "\r" in name or SEP.strip() in name:
-        sys.exit(f"{what} must be one line, not empty, and without `{SEP.strip()}`: {name!r}")
+    if not name.strip() or "\n" in name or "\r" in name or SEP in f" {name} ":
+        sys.exit(f"{what} must be one line, not empty, and without `{SEP.strip()}` between spaces or at either end: "
+                 f"{name!r}")
     return name
 
 
@@ -846,6 +860,8 @@ def cmd_import(args):
     if state.log_lines is not None or state.weights_lines is not None:
         sys.exit(f"{store} already has {LOG} or {WEIGHTS}: import only into an empty store, so two histories are "
                  f"never merged")
+    if state.draft_lines is not None:
+        sys.exit(f"{store} already has {DRAFT}: record or delete that round first, so import does not replace it")
     found = [name for name in LEGACY if os.path.exists(os.path.join(src, name))]
     if LEGACY_LOG not in found and LEGACY_WEIGHTS not in found:
         sys.exit(f"no skel 3.1.0 interview files ({LEGACY_LOG}, {LEGACY_WEIGHTS}) in {src}")
@@ -863,14 +879,31 @@ def cmd_import(args):
             lines[k + 1:k + 1] = [nl, f"domains: software{nl}"]
         path = os.path.join(store, new_name)
         out[path] = checked(path, "".join(lines))
+    skipped = stale_round(out, store)
+    if skipped:
+        del out[os.path.join(store, DRAFT)]
     for path, text in out.items():
         write(path, text)
     today = datetime.date.today().isoformat()
     write(os.path.join(src, MOVED), moved_note(f"These files moved to {STORE}/ on {today} (refiner.py import). "
                                                 f"They are no longer updated."))
     for name in found:
-        print(f"{os.path.join(src, name)} -> {os.path.join(store, LEGACY[name][1])}")
+        if name == LEGACY_DRAFT and skipped:
+            print(f"{os.path.join(src, name)}: not copied, its round is already recorded")
+        else:
+            print(f"{os.path.join(src, name)} -> {os.path.join(store, LEGACY[name][1])}")
     return 0
+
+
+def stale_round(out, store):
+    """True when the round being imported is already in the log being imported (skel left its draft behind)."""
+    log, draft = (out.get(os.path.join(store, name)) for name in (LOG, DRAFT))
+    if log is None or draft is None:
+        return False
+    logged = parse_records(LOG, log.splitlines(keepends=True), LOG_TITLE, Problems())
+    rounds = parse_records(DRAFT, draft.splitlines(keepends=True), DRAFT_TITLE, Problems())
+    ids = {r.fields.get("round-id") for r in logged} - {None}
+    return any(r.fields.get("round-id") in ids for r in rounds)
 
 
 def cmd_concerns(args):
@@ -918,11 +951,12 @@ def cmd_domains(args):
     bad = [d for d in args.names if d not in DOMAINS]
     if bad or not args.names:
         sys.exit(f"name domains from: {', '.join(DOMAINS)}" + (f"; not {', '.join(bad)}" if bad else ""))
-    root = os.path.dirname(store_of(args))
+    root = project_of(store_of(args))
     legacy = legacy_folders(root) if state.weights_lines is None else []
     if legacy and not args.fresh:
         sys.exit(f"skel 3.1.0 interview data has not been moved: {', '.join(legacy)}. Move it with "
-                 f"`refiner.py import {legacy[0]}`, or start fresh with `refiner.py domains add ... --fresh`")
+                 f"`refiner.py import \"{os.path.normpath(os.path.join(root, legacy[0]))}\"`, or start fresh with "
+                 f"`refiner.py domains add ... --fresh`")
     for folder in legacy:
         write(os.path.join(root, folder, MOVED),
               moved_note(f"Not imported: a fresh start was chosen on {datetime.date.today().isoformat()} "
@@ -1344,8 +1378,9 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
-            "predict": cmd_predict, "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import,
+            "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict, "record": cmd_record,
+            "fit": cmd_fit, "hits": cmd_hits}
 
 
 def main(argv=None):

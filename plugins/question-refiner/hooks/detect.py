@@ -28,7 +28,7 @@ def main():
         store = rf.store_for(data.get("cwd") or os.getcwd())
         if os.path.exists(os.path.join(store, rf.LOG)):
             return 0
-        root = os.path.dirname(store)
+        root = rf.project_of(store)
         folders = rf.legacy_folders(root)
         parts = []
         for folder in folders:
@@ -46,7 +46,9 @@ def main():
             f"it with the choices \"Move it (Recommended)\" and \"Not now\". "
             + ("There is more than one folder: ask which one to move; only one can be imported. "
                if len(folders) > 1 else "")
-            + f"On yes, run `python3 \"{script}\" import <folder>`. On no, don't ask again this session, and "
+            + f"On yes, run `python3 \"{script}\" import \"{os.path.normpath(os.path.join(root, folders[0]))}\"`"
+            + (" (or the folder chosen, as a full path)" if len(folders) > 1 else "")
+            + f". On no, don't ask again this session, and "
               f"exempt this session's questions with the reason \"migrating data deferred\" rather than starting "
               f"new weights: pass `domains add` its --fresh only when the user chooses a fresh start, since it "
               f"sets the old data aside for good.")

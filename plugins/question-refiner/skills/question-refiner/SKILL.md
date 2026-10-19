@@ -21,6 +21,9 @@ overrides that. `--by NAME` names the person answering; it defaults to `git conf
 ask the user their name once and pass it on every command for the rest of the session. History is kept per name: a
 changed `user.name` starts a new history, so pass `--by` with the old name to keep using the old one.
 
+If `refiner.py` cannot run (no `python3`; the gate then says so), ask directly, as if this plugin were not installed,
+and tell the user once that question-refiner needs `python3`.
+
 ## Questions with no trade-off
 
 A confirmation, a menu of next steps, or asking for a name trades no concern against another, so predicting it
