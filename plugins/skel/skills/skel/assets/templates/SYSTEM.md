@@ -13,7 +13,7 @@ Out of scope: ...
 
 ## Principles
 
-- <Optional. A rule the project weighs choices by, e.g. "open source over a moat". Interview rounds judge choices against these.>
+- <Optional. A rule the project weighs choices by, e.g. "open source over a moat". Questions about a choice weigh it against these.>
 
 ## Global decisions
 

@@ -1,12 +1,13 @@
-"""Tests for interview.py.
+"""Tests for refiner.py.
 
-Each test works in a temporary skel/ folder with a small weights file for "Ann",
+Each test works in a temporary .question-refiner/ store with a small weights file for "Ann",
 and runs the script as the agent would.
 
 Run from the repository root:
 
-    python3 -m unittest discover -s plugins/skel/tests
+    python3 -m unittest discover -s plugins/question-refiner/tests
 """
+import datetime
 import importlib.util
 import json
 import os
@@ -17,16 +18,14 @@ import tempfile
 import time
 import unittest
 
-SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "skel")
-SCRIPT = os.path.join(SKILL, "scripts", "interview.py")
-CHECK = os.path.join(SKILL, "scripts", "skel_check.py")
-EXAMPLE = os.path.join(SKILL, "assets", "examples", "undo-system", "skel")
+SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "question-refiner")
+SCRIPT = os.path.join(SKILL, "scripts", "refiner.py")
 
-_spec = importlib.util.spec_from_file_location("interview", SCRIPT)
+_spec = importlib.util.spec_from_file_location("refiner", SCRIPT)
 iv = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(iv)
 
-WEIGHTS = """# skel interview weights
+WEIGHTS = """# question-refiner weights
 
 ## C1 reliability
 meaning: keeps working when something fails.
@@ -50,7 +49,7 @@ PRIVATE = ("Private", "impl-effort 1", "privacy 2")
 PLAIN = ("Plain", "privacy 1", "impl-effort 1")
 ASKED = "2026-10-02 10:00:00 +0000"
 
-LOG_RECORD = """# skel interviews
+LOG_RECORD = """# question-refiner interviews
 
 ## Q1
 <tracer> Where is undo history kept?
@@ -68,6 +67,9 @@ concern-only: Sturdy
 axis: C2 effort vs C1 reliability
 """
 
+
+LEGACY_LOG = LOG_RECORD.replace(iv.LOG_TITLE, "# skel interviews")
+LEGACY_WEIGHTS = WEIGHTS.replace(iv.WEIGHTS_TITLE, "# skel interview weights")
 
 def question(n, text="Which way?", choices=(CHEAP, STURDY), select="single", annotated=True):
     lines = [f"## Q{n}", text, f"header: H{n} · select: {select}"]
@@ -91,14 +93,14 @@ def records(text, title=None):
 
 class Case(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp(prefix="skel-interview-")
+        self.dir = tempfile.mkdtemp(prefix="question-refiner-")
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self.skel = os.path.join(self.dir, "skel")
-        os.mkdir(self.skel)
+        self.store = os.path.join(self.dir, iv.STORE)
+        os.mkdir(self.store)
         self.write(iv.WEIGHTS, WEIGHTS)
 
     def path(self, name):
-        return os.path.join(self.skel, name)
+        return os.path.join(self.store, name)
 
     def write(self, name, text):
         with open(self.path(name), "w", encoding="utf-8", newline="") as fh:
@@ -109,7 +111,7 @@ class Case(unittest.TestCase):
             return fh.read()
 
     def cli(self, command, *args, ok=True):
-        result = subprocess.run([sys.executable, SCRIPT, command, self.skel, *args],
+        result = subprocess.run([sys.executable, SCRIPT, command, "--dir", self.store, *args],
                                 capture_output=True, text=True, cwd=self.dir)
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -123,7 +125,7 @@ class Case(unittest.TestCase):
         return self.cli("record", "--by", by, "--answers", answers, "--asked", ASKED)
 
     def state(self):
-        return iv.load(self.skel)
+        return iv.load(self.store)
 
 
 class Parsing(Case):
@@ -154,7 +156,7 @@ class Parsing(Case):
     def test_errors_name_the_file_and_line(self):
         self.write(iv.LOG, LOG_RECORD.replace("- <sel> **Cheap", "- * <sel> **Cheap"))
         result = self.cli("parse", ok=False)
-        self.assertIn(".interviews.md:6:", result.stdout + result.stderr)
+        self.assertIn(f"{iv.LOG}:6:", result.stdout + result.stderr)
 
     def test_a_choice_that_raises_nothing_is_an_error(self):
         self.write(iv.LOG, LOG_RECORD.replace("    raises: reliability 2", "    raises: none"))
@@ -217,13 +219,6 @@ class Parsing(Case):
                                                "rating: 1 · by: Ann · 2026-10-01\nrating: 4 · by: Ann · 2026-10-05"))
         self.assertEqual(iv.stated(self.state().concerns, "Ann"), {1: 10.0, 2: 4.0, 3: 7.0})
 
-    def test_the_seed_has_16_concerns_and_18_tags(self):
-        problems = iv.Problems()
-        concerns = iv.parse_weights("seed", iv.seed_lines(), problems)
-        self.assertEqual(problems.errors, [])
-        self.assertEqual(len(concerns), 16)
-        self.assertEqual(sum(len(c.tags) for c in concerns), 18)
-
     def test_rebuild_of_an_unchanged_file_is_byte_identical(self):
         text = LOG_RECORD.replace("\n", "\r\n")
         lines = text.splitlines(keepends=True)
@@ -267,12 +262,10 @@ class TagAndRate(Case):
     def test_tag_needs_a_concern_or_new(self):
         self.cli("tag", "offline", ok=False)
 
-    def test_tag_creates_the_weights_from_the_seed(self):
+    def test_tag_without_weights_says_to_choose_domains(self):
         os.remove(self.path(iv.WEIGHTS))
-        self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.")
-        text = self.read(iv.WEIGHTS)
-        self.assertTrue(text.startswith(iv.WEIGHTS_TITLE + "\n\n## C1 security\n"))
-        self.assertIn("## C17 offline use\n", text)
+        result = self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.", ok=False)
+        self.assertIn("domains add", result.stderr)
 
     def test_rate_appends_a_rating(self):
         self.cli("rate", "C2=4", "C3=5.5", "--by", "Ann", "--date", "2026-10-05")
@@ -376,7 +369,7 @@ class Predict(Case):
     def test_predict_refuses_an_unmapped_tag(self):
         self.write(iv.DRAFT, draft(question(1, choices=(CHEAP, ("Offline", "offline 1", "reliability 1")))))
         result = self.cli("predict", "--by", "Ann", ok=False)
-        self.assertIn("interview.py tag", result.stderr)
+        self.assertIn("refiner.py tag", result.stderr)
 
     def test_predict_refuses_a_concern_the_person_has_not_rated(self):
         self.write(iv.DRAFT, draft(question(1)))
@@ -459,7 +452,7 @@ class Record(Case):
     def test_record_refuses_a_round_that_was_not_predicted(self):
         self.write(iv.DRAFT, draft(question(1)))
         result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
-        self.assertIn("run `interview.py predict` first", result.stderr)
+        self.assertIn("run `refiner.py predict` first", result.stderr)
 
     def test_none_records_a_declined_question(self):
         self.round(question(1), answers="Q1=none")
@@ -479,6 +472,11 @@ class Record(Case):
     def test_the_round_summary_leaves_declined_questions_out(self):
         result = self.round(question(1), question(2), answers="Q1=2, Q2=none")
         self.assertIn("round 1: 1 of 1 predictions hit", result.stdout)
+
+    def test_the_round_summary_says_which_predictions_hit(self):
+        result = self.round(question(1), question(2), answers="Q1=2, Q2=1")
+        self.assertIn("Q1: Sturdy (predicted)\n", result.stdout)
+        self.assertIn("Q2: Cheap (Recommended) (predicted: Sturdy), tracer:", result.stdout)
 
     def test_multi_select_answers_join_with_plus(self):
         self.round(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"), answers="Q1=1+2")
@@ -623,23 +621,272 @@ class Hits(Case):
         self.assertEqual(data["rounds"][1], {"round": 2, "shown": 1, "stated": 1, "total": 2})
 
 
+class Domains(Case):
+    def test_the_catalog_has_30_concerns_in_the_seven_domains(self):
+        entries = iv.catalog()
+        self.assertEqual(len(entries), 30)
+        self.assertEqual(len({e.name for e in entries}), 30)
+        tags = [t for e in entries for t in e.tags]
+        self.assertEqual(len(tags), len(set(tags)))
+        for e in entries:
+            self.assertTrue(e.meaning and e.tags and e.domains, e.name)
+            self.assertLessEqual(set(e.domains), set(iv.DOMAINS), e.name)
+        self.assertEqual({d for e in entries for d in e.domains}, set(iv.DOMAINS))
+
+    def test_the_first_16_are_the_3_1_0_seed(self):
+        self.assertEqual([e.name for e in iv.catalog()[:16]], [
+            "security", "open source", "owner control", "privacy", "user friction", "platform reach",
+            "maintenance and operations", "effort", "performance", "reliability", "scalability",
+            "interoperability", "flexibility", "cost", "third-party dependency", "testability"])
+
+    def test_software_numbers_as_3_1_0_then_accessibility(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        self.assertTrue(self.read(iv.WEIGHTS).startswith(iv.WEIGHTS_TITLE + "\n\ndomains: software\n\n## C1 security\n"))
+        titles = [c.title for c in self.state().concerns]
+        self.assertEqual(len(titles), 17)
+        self.assertEqual((titles[7], titles[9], titles[16]), ("C8 effort", "C10 reliability", "C17 accessibility"))
+
+    def test_two_domains_give_each_concern_once(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software", "fiction")
+        want = [e.name for e in iv.catalog() if {"software", "fiction"} & set(e.domains)]
+        self.assertEqual([c.name for c in self.state().concerns], want)
+
+    def test_a_later_domain_appends_and_keeps_numbers(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        before = [c.title for c in self.state().concerns]
+        self.cli("domains", "add", "fiction")
+        after = [c.title for c in self.state().concerns]
+        self.assertEqual(after[:17], before)
+        self.assertEqual(after[17], "C18 clarity")
+        self.assertIn("domains: software, fiction\n", self.read(iv.WEIGHTS))
+
+    def test_a_weights_file_without_a_domains_line_gets_one(self):
+        self.cli("domains", "add", "research")
+        self.assertTrue(self.read(iv.WEIGHTS).startswith(
+            iv.WEIGHTS_TITLE + "\n\ndomains: research\n\n## C1 reliability\n"))
+
+    def test_an_unknown_domain_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        self.assertIn("software", self.cli("domains", "add", "poetry", ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_domains_lists_the_catalog(self):
+        out = self.cli("domains").stdout
+        self.assertIn("Domains in use: none", out)
+        self.assertIn("software: 17 concerns", out)
+
+    def test_a_bad_domain_line_fails_parse(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\n\ndomains: poetry\n\n## C1", 1))
+        self.assertIn("not a domain", self.cli("parse", ok=False).stdout)
+
+    def test_commands_without_weights_say_to_choose_domains(self):
+        os.remove(self.path(iv.WEIGHTS))
+        for command in ("concerns", "predict", "fit", "hits"):
+            self.assertIn("domains add", self.cli(command, "--by", "Ann", ok=False).stderr)
+
+    def test_tag_catalog_pulls_in_the_concern(self):
+        self.cli("tag", "NEW:clarity", "--catalog")
+        self.assertIn("## C4 clarity\nmeaning: the reader understands it the first time.\n"
+                      "tags: clarity, NEW:clarity\n", self.read(iv.WEIGHTS))
+
+    def test_tag_catalog_refuses_a_concern_already_there(self):
+        self.assertIn("C1", self.cli("tag", "NEW:reliability", "--catalog", ok=False).stderr)
+
+    def test_concerns_points_a_new_tag_to_the_catalog(self):
+        self.write(iv.DRAFT, draft(question(1, choices=(("Fast (Recommended)", "NEW:pacing 2", "impl-effort 1"),
+                                                        STURDY))))
+        out = self.cli("concerns", "--by", "Ann").stdout
+        self.assertIn("NEW:pacing", out)
+        self.assertIn("refiner.py tag NEW:pacing --catalog", out)
+
+
+class Exempting(Case):
+    def test_exempt_appends_a_line(self):
+        self.cli("exempt", "--question", "Merge or open a PR?", "--reason", "a menu, no trade-off", "--by", "Ann",
+                 "--asked", ASKED)
+        self.assertEqual(self.read(iv.EXEMPT), iv.EXEMPT_TITLE + "\n\n- 2026-10-02 10:00:00 +0000 · by: Ann · "
+                                                                 "question: Merge or open a PR? · reason: a menu, no trade-off\n")
+        self.cli("parse")
+
+    def test_a_question_in_the_round_cannot_be_exempted(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("exempt", "--question", "Which way?", "--reason", "x", "--by", "Ann", ok=False)
+        self.assertIn(iv.DRAFT, result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.EXEMPT)))
+
+    def test_the_separator_is_refused(self):
+        result = self.cli("exempt", "--question", "A · B?", "--reason", "x", "--by", "Ann", ok=False)
+        self.assertIn("--question must be one line", result.stderr)
+        self.assertFalse(os.path.exists(self.path(iv.EXEMPT)))
+
+    def test_a_bad_exempt_line_fails_parse(self):
+        self.write(iv.EXEMPT, iv.EXEMPT_TITLE + "\n\n- yesterday · question: x\n")
+        self.assertIn("an exempt line is", self.cli("parse", ok=False).stdout)
+
+    def test_hits_ignore_exempt_questions(self):
+        self.round(question(1), answers="Q1=1")
+        before = self.cli("hits", "--by", "Ann", "--json").stdout
+        self.cli("exempt", "--question", "Merge?", "--reason", "a menu", "--by", "Ann")
+        self.assertEqual(self.cli("hits", "--by", "Ann", "--json").stdout, before)
+
+    def test_passable_is_predicted_and_recent_exempt(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, self.read(iv.DRAFT) + "\n" + question(2, text="Not predicted?"))
+        for text, at in (("Recent?", "2026-10-02 10:25:00 +0000"), ("Old?", "2026-10-02 10:10:00 +0000")):
+            self.cli("exempt", "--question", text, "--reason", "a menu", "--by", "Ann", "--asked", at)
+        now = datetime.datetime(2026, 10, 2, 10, 30, tzinfo=datetime.timezone.utc)
+        self.assertEqual(iv.passable(self.state(), now), {"Which way?", "Recent?"})
+
+
+class Migration(Case):
+    def legacy(self, folder="skel", log=LEGACY_LOG, weights=LEGACY_WEIGHTS):
+        d = os.path.join(self.dir, folder)
+        os.makedirs(d, exist_ok=True)
+        for name, text in ((iv.LEGACY_LOG, log), (iv.LEGACY_WEIGHTS, weights)):
+            with open(os.path.join(d, name), "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+        return d
+
+    def empty_store(self):
+        os.remove(self.path(iv.WEIGHTS))
+
+    def test_import_copies_the_files_and_keeps_the_originals(self):
+        self.empty_store()
+        d = self.legacy()
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD)
+        self.assertEqual(self.read(iv.WEIGHTS),
+                         WEIGHTS.replace(iv.WEIGHTS_TITLE + "\n", iv.WEIGHTS_TITLE + "\n\ndomains: software\n", 1))
+        with open(os.path.join(d, iv.LEGACY_LOG), encoding="utf-8", newline="") as fh:
+            self.assertEqual(fh.read(), LEGACY_LOG)
+        with open(os.path.join(d, iv.MOVED), encoding="utf-8") as fh:
+            self.assertIn("They are no longer updated.", fh.read())
+        self.cli("parse")
+
+    def test_import_keeps_crlf(self):
+        self.empty_store()
+        d = self.legacy(log=LEGACY_LOG.replace("\n", "\r\n"), weights=LEGACY_WEIGHTS.replace("\n", "\r\n"))
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD.replace("\n", "\r\n"))
+        self.assertIn("\r\ndomains: software\r\n", self.read(iv.WEIGHTS))
+
+    def test_import_refuses_a_store_with_history(self):
+        d = self.legacy()
+        before = self.read(iv.WEIGHTS)
+        self.assertIn("already has", self.cli("import", d, ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+        self.assertFalse(os.path.exists(os.path.join(d, iv.MOVED)))
+
+    def test_import_needs_legacy_files(self):
+        self.empty_store()
+        d = os.path.join(self.dir, "skel")
+        os.mkdir(d)
+        self.assertIn("no skel 3.1.0", self.cli("import", d, ok=False).stderr)
+
+    def test_import_writes_nothing_when_a_file_would_not_parse(self):
+        self.empty_store()
+        d = self.legacy(log=LEGACY_LOG.replace("- <sel> **Cheap", "- **Cheap"))
+        self.assertIn("nothing written", self.cli("import", d, ok=False).stderr)
+        for name in (iv.LOG, iv.WEIGHTS):
+            self.assertFalse(os.path.exists(self.path(name)))
+        self.assertFalse(os.path.exists(os.path.join(d, iv.MOVED)))
+
+    def test_import_moves_a_left_over_round(self):
+        self.empty_store()
+        d = self.legacy()
+        with open(os.path.join(d, iv.LEGACY_DRAFT), "w", encoding="utf-8") as fh:
+            fh.write(draft(question(1)).replace(iv.DRAFT_TITLE, "# skel interview round"))
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.DRAFT), draft(question(1)))
+
+    def test_outside_git_only_the_root_and_skel_are_searched(self):
+        self.legacy("skel")
+        self.legacy(os.path.join("docs", "design"))
+        self.assertEqual(iv.legacy_folders(self.dir), ["skel"])
+
+    def test_outside_git_another_repository_is_not_searched(self):
+        nested = os.path.join(self.dir, "projects", "foo")
+        os.makedirs(nested)
+        subprocess.run(["git", "init", "-q", nested], check=True)
+        self.legacy(os.path.join("projects", "foo", "skel"))
+        self.assertEqual(iv.legacy_folders(self.dir), [])
+
+    def test_legacy_folders_in_git_see_uncommitted_files(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy()
+        self.assertEqual(iv.legacy_folders(self.dir), ["skel"])
+
+    def test_an_imported_folder_is_not_legacy(self):
+        self.empty_store()
+        self.cli("import", self.legacy())
+        self.assertEqual(iv.legacy_folders(self.dir), [])
+
+    def test_the_store_is_at_the_git_root(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        sub = os.path.join(self.dir, "a", "b")
+        os.makedirs(sub)
+        self.assertEqual(os.path.realpath(iv.store_for(sub)), os.path.realpath(os.path.join(self.dir, iv.STORE)))
+
+    def test_domains_add_refuses_while_data_is_unmigrated(self):
+        self.empty_store()
+        self.legacy()
+        self.assertIn("refiner.py import", self.cli("domains", "add", "software", ok=False).stderr)
+        self.assertFalse(os.path.exists(self.path(iv.WEIGHTS)))
+
+    def test_domains_add_fresh_sets_the_old_data_aside(self):
+        self.empty_store()
+        d = self.legacy()
+        self.cli("domains", "add", "software", "--fresh")
+        with open(os.path.join(d, iv.MOVED), encoding="utf-8") as fh:
+            self.assertIn("a fresh start was chosen", fh.read())
+        self.assertEqual(iv.legacy_folders(self.dir), [])
+
+
 class Docs(unittest.TestCase):
-    def read(self, *parts):
-        with open(os.path.join(SKILL, *parts), encoding="utf-8") as fh:
+    def read(self):
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
             return fh.read()
 
-    def test_the_reference_names_every_command(self):
-        text = self.read("references", "interviewing.md")
-        for command in ("parse", "concerns", "tag", "rate", "fit", "predict", "record", "hits"):
-            self.assertIn(f"interview.py\" {command}", text)
+    def test_the_skill_has_front_matter(self):
+        self.assertTrue(self.read().startswith("---\nname: question-refiner\ndescription: "))
 
-    def test_every_place_that_asks_points_to_the_reference(self):
-        self.assertGreaterEqual(self.read("SKILL.md").count("interviewing.md"), 3)
-        self.assertIn("interviewing.md", self.read("references", "implementing.md"))
-        self.assertIn("interviewing.md", self.read("references", "abstract-systems.md"))
+    def test_the_skill_names_every_command(self):
+        text = self.read()
+        for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
+                        "import"):
+            self.assertIn(f"refiner.py\" {command}", text)
 
-    def test_the_system_template_has_principles(self):
-        self.assertIn("## Principles", self.read("assets", "templates", "SYSTEM.md"))
+    def test_the_skill_confirms_inferred_domains(self):
+        text = self.read()
+        for words in ("Use these (Recommended)", "Change them", "(inferred)", "[x]", "choosing domains"):
+            self.assertIn(words, text)
+
+    def test_the_skill_says_a_fresh_start_is_the_users_choice(self):
+        text = self.read()
+        self.assertIn("only when the user chooses a fresh start", text)
+        self.assertIn("migrating data deferred", text)
+
+    def test_the_skill_says_to_ask_without_marks(self):
+        self.assertIn("without its `<probe>` mark", self.read())
+
+    def test_the_skill_keeps_the_round_out_of_git(self):
+        self.assertIn("add `.question-refiner/round.md` to `.gitignore`", self.read())
+
+    def test_the_readme_describes_the_plugin(self):
+        root = os.path.join(SKILL, "..", "..", "..", "..")
+        with open(os.path.join(root, "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        with open(os.path.join(SKILL, "..", "..", "hooks", "rule.txt"), encoding="utf-8") as fh:
+            words = len(fh.read().split())
+        self.assertIn("\n## question-refiner\n", readme)
+        self.assertIn("/plugin install question-refiner@hanoixan-claude-plugins", readme)
+        self.assertIn(f"| yes | {words} words |", readme.split("[question-refiner](#question-refiner) |", 1)[1]
+                      .split("\n", 1)[0])
+        self.assertNotIn("interview.py", readme)
 
 
 class ReviewFixes(Case):
@@ -679,7 +926,7 @@ class ReviewFixes(Case):
         self.cli("predict", "--by", "Ann")
         self.write(iv.DRAFT, self.read(iv.DRAFT).replace("**Sturdy**", "**Strong**"))
         result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
-        self.assertIn("run `interview.py predict` again", result.stderr)
+        self.assertIn("run `refiner.py predict` again", result.stderr)
 
     def test_record_refuses_a_prediction_without_concern_only(self):
         self.write(iv.DRAFT, draft(question(1)))
@@ -688,10 +935,10 @@ class ReviewFixes(Case):
                                      if not l.startswith("concern-only:")))
         result = self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED, ok=False)
         self.assertNotIn("Traceback", result.stderr)
-        self.assertIn("run `interview.py predict` again", result.stderr)
+        self.assertIn("run `refiner.py predict` again", result.stderr)
 
     def test_the_reference_says_a_renamed_user_is_a_new_person(self):
-        with open(os.path.join(SKILL, "references", "interviewing.md"), encoding="utf-8") as fh:
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
             self.assertIn("starts a new history", fh.read())
 
 
@@ -754,29 +1001,108 @@ class DeferredMinors(Case):
         self.cli("tag", "offline", "C3", "--by", "Ann")
 
     def test_the_reference_example_axis_is_what_record_writes(self):
-        with open(os.path.join(SKILL, "references", "interviewing.md"), encoding="utf-8") as fh:
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
             doc = fh.read()
         block = doc.split("```text\n## Q14\n", 1)[1].split("```", 1)[0]
         recs, problems = records(iv.LOG_TITLE + "\n\n## Q1\n" + block, iv.LOG_TITLE)
         self.assertEqual(problems.errors, [])
         rec = recs[0]
-        concerns = iv.parse_weights("seed", iv.seed_lines(), iv.Problems())
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        concerns = self.state().concerns
         tags, by_id = iv.tag_map(concerns), {c.cid: c for c in concerns}
         a = iv.axis(iv.vector(rec.selected()[0], tags), iv.vector(rec.choice(rec.fields["concern-only"]), tags))
         self.assertEqual(rec.fields["axis"], iv.axis_text(a, by_id))
 
 
-class Coexistence(unittest.TestCase):
-    def test_check_ignores_the_interview_files(self):
-        work = tempfile.mkdtemp(prefix="skel-interview-tree-")
-        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
-        skel = os.path.join(work, "skel")
-        shutil.copytree(EXAMPLE, skel)
-        for name, text in ((iv.LOG, LOG_RECORD), (iv.WEIGHTS, WEIGHTS), (iv.DRAFT, draft(question(1)))):
-            with open(os.path.join(skel, name), "w", encoding="utf-8") as fh:
-                fh.write(text)
-        result = subprocess.run([sys.executable, CHECK, "check", skel], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+class BranchMinors(Case):
+    def legacy(self, folder="skel", log=LEGACY_LOG):
+        return Migration.legacy(self, folder, log=log)
+
+    def test_a_dot_inside_a_name_or_question_is_accepted(self):
+        self.cli("rate", "C2=4", "--by", "A·B")
+        self.cli("exempt", "--question", "Pick A·B?", "--reason", "a menu", "--by", "A·B")
+        self.cli("parse")
+        self.assertIn("Pick A·B?", iv.passable(self.state(), datetime.datetime.now().astimezone()))
+
+    def test_a_dot_at_either_end_of_a_name_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        for name in ("A ·", "· A", "A · B"):
+            self.assertIn("--by", self.cli("rate", "C2=4", "--by", name, ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_domains_add_with_dir_searches_the_stores_repository(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy()
+        store = os.path.join(self.dir, "sub", iv.STORE)
+        result = subprocess.run([sys.executable, SCRIPT, "domains", "add", "software", "--dir", store],
+                                capture_output=True, text=True, cwd=self.dir)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'import "{os.path.join(os.path.realpath(self.dir), "skel")}"',
+                      result.stderr.replace(self.dir, os.path.realpath(self.dir)))
+        self.assertFalse(os.path.exists(os.path.join(store, iv.WEIGHTS)))
+
+    def test_the_legacy_search_asks_git_for_the_two_names_only(self):
+        calls = []
+        real = iv.subprocess.run
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return real(argv, **kw)
+        iv.subprocess.run = run
+        self.addCleanup(setattr, iv.subprocess, "run", real)
+        iv.legacy_folders(self.dir)
+        self.assertEqual(calls[0][-3:], ["--", f":(glob)**/{iv.LEGACY_LOG}", f":(glob)**/{iv.LEGACY_WEIGHTS}"])
+
+    def test_legacy_data_at_the_root_and_in_skel_is_found_in_git(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy(".")
+        self.legacy("skel")
+        self.assertEqual(iv.legacy_folders(self.dir), [".", "skel"])
+
+    def test_import_refuses_a_store_with_a_round(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.write(iv.DRAFT, draft(question(1)))
+        result = self.cli("import", self.legacy(), ok=False)
+        self.assertIn(iv.DRAFT, result.stderr)
+        self.assertEqual(self.read(iv.DRAFT), draft(question(1)))
+        self.assertFalse(os.path.exists(self.path(iv.LOG)))
+
+    def test_import_leaves_out_a_round_already_logged(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        predicted = self.read(iv.DRAFT)
+        round_id = next(l for l in predicted.splitlines() if l.startswith("round-id: "))
+        os.remove(self.path(iv.WEIGHTS))
+        os.remove(self.path(iv.DRAFT))
+        d = self.legacy(log=LEGACY_LOG + round_id + "\n")
+        with open(os.path.join(d, iv.LEGACY_DRAFT), "w", encoding="utf-8") as fh:
+            fh.write(predicted.replace(iv.DRAFT_TITLE, "# skel interview round"))
+        result = self.cli("import", d)
+        self.assertFalse(os.path.exists(self.path(iv.DRAFT)))
+        self.assertIn("already recorded", result.stdout)
+        self.assertTrue(os.path.exists(self.path(iv.LOG)))
+
+    def test_no_line_is_wider_than_120_columns(self):
+        hooks = os.path.join(SKILL, "..", "..", "hooks")
+        for path in (SCRIPT, os.path.join(hooks, "gate.py"), os.path.join(hooks, "detect.py")):
+            with open(path, encoding="utf-8") as fh:
+                for k, line in enumerate(fh, 1):
+                    self.assertLessEqual(len(line.rstrip("\n")), 120, f"{path}:{k}")
+
+    def test_the_readme_names_every_command(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
+        for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
+                        "hits", "import"):
+            self.assertIn(f"\nrefiner.py {command} ", section)
+        self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
+
+    def test_the_skill_says_what_to_do_without_python3(self):
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("If `refiner.py` cannot run", text)
+        self.assertIn("ask directly", text)
 
 
 if __name__ == "__main__":

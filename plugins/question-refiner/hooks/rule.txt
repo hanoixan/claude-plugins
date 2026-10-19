@@ -1,0 +1,1 @@
+Every question you ask the user, in the question tool or in plain chat, goes through a question-refiner round.

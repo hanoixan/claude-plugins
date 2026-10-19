@@ -6,7 +6,7 @@ During development, `skel/` is the implementation plan. Every stand-in becomes e
 
 1. Run `skel_check.py check skel/`. Fix the tree, not the code, until there are no errors. A broken link or a missing backlink means the plan itself is inconsistent.
 2. Run `skel_check.py unknowns skel/`. It lists the open decisions by kind:
-   - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask them in an interview round (`interviewing.md`) before implementing the affected file, every place that follows the decision, and anything that depends on them. Give each question its consequence and what it unlocks in the choices' descriptions.
+   - **Blocking** unknowns change an interface, a schema, or a file's existence. Ask them in a round (SKILL.md, **Questions**) before implementing the affected file, every place that follows the decision, and anything that depends on them. Give each question its consequence and what it unlocks in the choices' descriptions.
    - **Local** unknowns affect only a function body, such as a tuning constant, and each carries a `Proposed:` value. Ask each one already in the tree in the same round, its proposal the recommended choice, and implement the answer. Then record the choice in the stand-in and remove the unknown.
 3. If any stand-in is abstract (`.code`, `.data`, `.iac`), adapt it first; see `abstract-systems.md`.
 4. Run `skel_check.py batches skel/` to get the build plan. Each batch lists units that can be built once the earlier batches exist. A unit is a stand-in plus the stand-ins that name it in `unit:`, such as a header and its source. Units flagged as a cycle should be implemented together, and a cycle is often a sign that an interface should be extracted. Mention it to the user. A cycle can also appear only because files were joined into one unit; `order` gives the same dependencies file by file and shows whether the files themselves form one.
@@ -36,7 +36,7 @@ Don't let code and skel drift. The skel is updated first:
 - **A new dependency** means you add `Depends on:` to the stand-in, then run `fix-backlinks --write`.
 - **A new file** means you write its stand-in before writing it.
 - **A changed contract** means you update the stand-in, then follow its `Referred by:` links and check each referrer's assumptions. This check is the main payoff of bidirectional links, so don't skip it.
-- **A new unknown** means you add a formal `*UNKNOWN*:` with its `Kind:`. If it is blocking, stop and ask it in an interview round. If it is local, which includes anything you would otherwise just decide, write your choice as its `Proposed:`, build to that proposal, and leave the marker in place. It is asked in the next batch's interview round; a rejected proposal means that code is redone.
+- **A new unknown** means you add a formal `*UNKNOWN*:` with its `Kind:`. If it is blocking, stop and ask it in a round (**Questions**). If it is local, which includes anything you would otherwise just decide, write your choice as its `Proposed:`, build to that proposal, and leave the marker in place. It is asked in the next batch's round; a rejected proposal means that code is redone.
 - **A resolved unknown** means you replace it with the decided specification and delete the declaration and every follower of it.
 
 Rerun `check` after every batch of skel edits.
@@ -71,7 +71,7 @@ Trees stamped before skel 3 carry the stamp in a `# Spec: skel/<path>.skel.md @ 
 
 After each implementation batch, report in this shape:
 
-1. **Decisions needed:** blocking unknowns that remain or that this batch raised, asked in an interview round, and the answers taken.
+1. **Decisions needed:** blocking unknowns that remain or that this batch raised, asked in a round (**Questions**), and the answers taken.
 2. **Proposals to accept or change:** local unknowns, each with its proposal, saying which ones this batch was built to.
 3. **What was built:** which batches and files were realized, the test results, any cycles that `batches` flagged, and anything `status` still lists under Stale, Edited, Diverged, Unstamped, Legacy, or Names not found in code.
 4. **Changes to the plan:** every stand-in you changed and why, including contract changes that rippled to referrers.
