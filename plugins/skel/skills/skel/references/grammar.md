@@ -315,7 +315,7 @@ Images, fonts, stylesheets, templates, and similar assets use `# resource: <name
 - purpose and scope
 - glossary
 - global decisions (language, platform, frameworks), each either stated or recorded as an unknown
-- principles (optional, `## Principles`): the rules the project weighs choices by, such as "open source over a moat". Interview rounds judge choices against them.
+- principles (optional, `## Principles`): the rules the project weighs choices by, such as "open source over a moat". question-refiner judges choices against them when it annotates a round.
 - cross-cutting concerns (logging, error policy, concurrency model)
 - a test strategy: which levels of test the plan contains, what each covers, and any level left out on purpose with the reason
 - an entry-point index linking to the main stand-ins
