@@ -1,6 +1,6 @@
 # hanoixan-claude-plugins
 
-A Claude Code plugin marketplace. Seven plugins.
+A Claude Code plugin marketplace. Eight plugins.
 
 Four are small. Three of them are built around the same observation: **a skill body
 reaches the model once, when it is invoked, and then sits at a fixed point in the
@@ -17,6 +17,9 @@ skel adapted for writing: the same stand-in tree, checker and unknowns, applied 
 story, novel, screenplay or poem instead of a codebase, and carried through to a published
 PDF and EPUB. The seventh, [statusline-builder](#statusline-builder), sets up your status
 line from a menu and keeps it as a preset you can share.
+
+The eighth, [question-refiner](#question-refiner), turns every question the agent asks, whichever plugin asks
+it, into a recorded round with a predicted answer, and learns the person's priorities from their answers.
 
 ---
 
@@ -35,6 +38,7 @@ Then install whichever plugins you want:
 /plugin install do-next@hanoixan-claude-plugins
 /plugin install plan-batch-execution@hanoixan-claude-plugins
 /plugin install ask-questions@hanoixan-claude-plugins
+/plugin install question-refiner@hanoixan-claude-plugins
 /plugin install skel@hanoixan-claude-plugins
 /plugin install wrist@hanoixan-claude-plugins
 /plugin install statusline-builder@hanoixan-claude-plugins
@@ -45,8 +49,9 @@ Then install whichever plugins you want:
 `bash` and `jq` on `PATH`. Every hook exits quietly if `jq` is missing, so a plugin
 degrades to its skill rather than erroring.
 
-skel has no hooks and needs `python3` instead, for its three scripts. They use only the
-standard library.
+skel has no hooks and needs `python3` instead, for its two scripts. question-refiner needs `python3` for its
+script and two of its three hooks; without it those two hooks fail open and questions are asked as usual. All
+of these use only the standard library.
 
 wrist has no hooks either. Its scripts need `python3` (standard library only); publishing
 also needs `pandoc` 3.2+ and `typst` 0.12+, and wrist prints install steps if either is
@@ -65,6 +70,7 @@ PowerShell 5.1 or PowerShell 7) with nothing else.
 | [do-next](#do-next) | Working a prompt queue | none | yes | none |
 | [plan-batch-execution](#plan-batch-execution) | How many subagents get dispatched | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | yes | 19 words |
 | [ask-questions](#ask-questions) | Asking instead of assuming | `UserPromptSubmit` | no | 10 words |
+| [question-refiner](#question-refiner) | How questions are asked, and learning from the answers | `UserPromptSubmit`, `PreToolUse`, `SessionStart` | yes | 19 words |
 | [skel](#skel) | Designing a codebase before writing it | none | yes | none |
 | [wrist](#wrist) | Writing a story, novel, screenplay or poem from a checked outline | none | yes | none |
 | [statusline-builder](#statusline-builder) | Your status line, built from a menu and saved as a preset | none | yes | none |
@@ -263,6 +269,59 @@ before it was split out for doing a different job than concision.
 
 ---
 
+## question-refiner
+
+Turns every question the agent asks into a recorded round, whichever plugin asks it. Before asking, the agent
+writes the question's choices into a round file and annotates each with the concerns it raises and addresses.
+`refiner.py predict` marks the choice the person is predicted to take, from the 0 to 10 ratings they give those
+concerns. The answer is logged; an answer that goes against the prediction is a tracer, and from five tracers the
+ratings are fitted to the person's answers. Every question is still asked; the logged predictions are there so
+that confident ones can be skipped in a later version.
+
+**What ships**
+
+| Piece | Role |
+| --- | --- |
+| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data. 1996 words. |
+| `PreToolUse` hook on `AskUserQuestion` | Refuses a question that was neither predicted nor exempted, and names the missing step. When it cannot check, it lets the question through. |
+| `UserPromptSubmit` hook | One line each turn, for questions asked in plain chat, which no hook sees. |
+| `SessionStart` hook | Finds skel 3.1.0 interview data that has not been moved, and has the agent ask about moving it. |
+| `scripts/refiner.py` | The commands below. |
+| `references/concerns.md` | 30 seed concerns, each tagged with the domains it applies to. |
+
+**Files.** `.question-refiner/` at the repository root holds `interviews.md` (every question, its choices, the
+prediction and the answer), `weights.md` (the concerns and each person's ratings), `exempt.md` (questions with no
+trade-off, and why) and `round.md` (the round being asked, git-ignored). The first three are committed: a team
+shares one set of concerns, and each person's ratings and history stay their own.
+
+**Domains.** The concerns come from a catalog tagged by domain: software, infrastructure, product, fiction,
+nonfiction, research and planning. The agent infers the domains that fit the work and asks you to confirm them;
+a domain added later appends its concerns, and a choice that fits no concern gets a new one.
+
+```
+refiner.py domains add DOMAIN ...    create or extend weights.md from the catalog
+refiner.py concerns                  tags to map and concerns to rate before a round
+refiner.py predict                   mark the predicted choice on each question of the round
+refiner.py record --answers ...      log the answers, mark tracers, number the questions
+refiner.py exempt --question ...     log a question with no trade-off, so the gate lets it through
+refiner.py fit                       stated against fitted weights
+refiner.py hits                      hit rates of the logged predictions
+refiner.py import SKEL_FOLDER        copy skel 3.1.0 interview data into .question-refiner/
+```
+
+Pairs with [ask-questions](#ask-questions), which makes the agent ask more; this one shapes each question and
+learns from the answer. With [skel](#skel), every unknown skel asks about goes through a round.
+
+**Upgrading from skel 3.1.0.** Its interview files lived in `skel/`. At the start of a session question-refiner
+finds them and asks whether to move them; `refiner.py import skel` copies them and leaves the originals in place
+with a note that they moved.
+
+```
+/plugin install question-refiner@hanoixan-claude-plugins
+```
+
+---
+
 ## skel
 
 Designs a codebase in prose before any of it is written. A `skel/` folder mirrors the
@@ -286,11 +345,10 @@ agent can follow file by file.
 
 | Piece | Role |
 | --- | --- |
-| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1929 words. |
+| `/skel` skill | The workflow for three jobs: authoring a tree, describing a system independent of language and platform, and implementing code from a tree. 1919 words. |
 | `references/` | The normative grammar, plus a guide each for abstract systems and for implementing. Read only for the job at hand. |
 | `scripts/skel_check.py` | The checker, below. |
 | `scripts/skel_mv.py` | Moves or renames stand-ins and rewrites every link that pointed at them. |
-| `scripts/interview.py` | Records every question and answer, and predicts answers from the concerns the user rates. Below. |
 | `assets/templates/` | A starting stand-in for each kind: code, data, infrastructure, and the tree's `SYSTEM.md`. |
 | `assets/examples/undo-system/` | A complete abstract tree for an undo system, which passes the checker. |
 
@@ -317,22 +375,9 @@ skel_check.py batches SKEL_DIR          buildable batches of units, manifests se
 tree consistent. It never reads code; `status` is what reports files that have drifted from
 the tree, in either direction.
 
-**Interviews.** Every question skel asks goes through a round. The agent turns each unknown into two to four
-choices, its proposal the recommended one, and annotates each choice with the concerns it raises and addresses
-before asking. The predicted choice is marked `*`. Questions and answers are kept in `skel/.interviews.md`, and the
-concerns and each person's 0 to 10 ratings of them in `skel/.interview-weights.md`; both are committed. An answer
-that goes against the prediction from the stated ratings is a tracer. From five tracers the weights are fitted to
-the person's answers, and a new question on a trade-off they have gone against before is marked as a probe. Every
-question is still asked; the logged predictions and their margins are there so that confident ones can be skipped
-in a later version.
-
-```
-interview.py concerns SKEL_DIR          tags to map and concerns to rate before a round
-interview.py predict SKEL_DIR           mark the predicted choice on each question of the round
-interview.py record SKEL_DIR --answers  log the answers, mark tracers, number the questions
-interview.py fit SKEL_DIR               stated against fitted weights
-interview.py hits SKEL_DIR              hit rates of the logged predictions
-```
+**Questions.** With [question-refiner](#question-refiner) installed, every question skel asks goes through a
+recorded round with a predicted answer; without it, skel asks directly. The interview files skel 3.1.0 kept in
+`skel/` now belong to question-refiner, which offers to move them.
 
 **Upgrading a tree stamped with skel 2.x.** Stamps now live in the stand-in, with a hash of each side, so
 `status` reports both a stand-in that changed (stale) and a file that changed (edited). Run

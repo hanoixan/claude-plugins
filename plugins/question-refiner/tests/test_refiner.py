@@ -856,6 +856,18 @@ class Docs(unittest.TestCase):
     def test_the_skill_keeps_the_round_out_of_git(self):
         self.assertIn("add `.question-refiner/round.md` to `.gitignore`", self.read())
 
+    def test_the_readme_describes_the_plugin(self):
+        root = os.path.join(SKILL, "..", "..", "..", "..")
+        with open(os.path.join(root, "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        with open(os.path.join(SKILL, "..", "..", "hooks", "rule.txt"), encoding="utf-8") as fh:
+            words = len(fh.read().split())
+        self.assertIn("\n## question-refiner\n", readme)
+        self.assertIn("/plugin install question-refiner@hanoixan-claude-plugins", readme)
+        self.assertIn(f"| yes | {words} words |", readme.split("[question-refiner](#question-refiner) |", 1)[1]
+                      .split("\n", 1)[0])
+        self.assertNotIn("interview.py", readme)
+
 
 class ReviewFixes(Case):
     def test_a_draft_with_log_only_lines_is_refused(self):
