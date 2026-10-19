@@ -839,10 +839,22 @@ class Docs(unittest.TestCase):
         with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
             return fh.read()
 
+    def test_the_skill_has_front_matter(self):
+        self.assertTrue(self.read().startswith("---\nname: question-refiner\ndescription: "))
+
     def test_the_skill_names_every_command(self):
         text = self.read()
-        for command in ("parse", "concerns", "tag", "rate", "fit", "predict", "record", "hits"):
+        for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
+                        "import"):
             self.assertIn(f"refiner.py\" {command}", text)
+
+    def test_the_skill_confirms_inferred_domains(self):
+        text = self.read()
+        for words in ("Use these (Recommended)", "Change them", "(inferred)", "[x]", "choosing domains"):
+            self.assertIn(words, text)
+
+    def test_the_skill_keeps_the_round_out_of_git(self):
+        self.assertIn("add `.question-refiner/round.md` to `.gitignore`", self.read())
 
 
 class ReviewFixes(Case):
