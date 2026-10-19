@@ -1254,10 +1254,16 @@ def cmd_record(args):
     hits = answered = 0
     for rec in state.draft:
         sel = {c.label for c in rec.selected()}
+        shown = {c.label for c in rec.predicted()}
         answered += bool(sel)
-        hits += bool(sel) and sel == {c.label for c in rec.predicted()}
+        hits += bool(sel) and sel == shown
         note = f", tracer: {rec.fields['axis']}" if "tracer" in rec.marks else ""
-        answer = " + ".join(sorted(sel)) if sel else "declined"
+        if not sel:
+            answer = "declined"
+        elif sel == shown:
+            answer = " + ".join(sorted(sel)) + " (predicted)"
+        else:
+            answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
     print(f"round {rnd}: {hits} of {answered} predictions hit")
     return 0

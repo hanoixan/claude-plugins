@@ -473,6 +473,11 @@ class Record(Case):
         result = self.round(question(1), question(2), answers="Q1=2, Q2=none")
         self.assertIn("round 1: 1 of 1 predictions hit", result.stdout)
 
+    def test_the_round_summary_says_which_predictions_hit(self):
+        result = self.round(question(1), question(2), answers="Q1=2, Q2=1")
+        self.assertIn("Q1: Sturdy (predicted)\n", result.stdout)
+        self.assertIn("Q2: Cheap (Recommended) (predicted: Sturdy), tracer:", result.stdout)
+
     def test_multi_select_answers_join_with_plus(self):
         self.round(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"), answers="Q1=1+2")
         text = self.read(iv.LOG)
