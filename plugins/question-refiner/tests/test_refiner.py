@@ -216,13 +216,6 @@ class Parsing(Case):
                                                "rating: 1 · by: Ann · 2026-10-01\nrating: 4 · by: Ann · 2026-10-05"))
         self.assertEqual(iv.stated(self.state().concerns, "Ann"), {1: 10.0, 2: 4.0, 3: 7.0})
 
-    def test_the_seed_has_16_concerns_and_18_tags(self):
-        problems = iv.Problems()
-        concerns = iv.parse_weights("seed", iv.seed_lines(), problems)
-        self.assertEqual(problems.errors, [])
-        self.assertEqual(len(concerns), 16)
-        self.assertEqual(sum(len(c.tags) for c in concerns), 18)
-
     def test_rebuild_of_an_unchanged_file_is_byte_identical(self):
         text = LOG_RECORD.replace("\n", "\r\n")
         lines = text.splitlines(keepends=True)
@@ -266,12 +259,10 @@ class TagAndRate(Case):
     def test_tag_needs_a_concern_or_new(self):
         self.cli("tag", "offline", ok=False)
 
-    def test_tag_creates_the_weights_from_the_seed(self):
+    def test_tag_without_weights_says_to_choose_domains(self):
         os.remove(self.path(iv.WEIGHTS))
-        self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.")
-        text = self.read(iv.WEIGHTS)
-        self.assertTrue(text.startswith(iv.WEIGHTS_TITLE + "\n\n## C1 security\n"))
-        self.assertIn("## C17 offline use\n", text)
+        result = self.cli("tag", "NEW:offline", "--new", "offline use", "works without a network.", ok=False)
+        self.assertIn("domains add", result.stderr)
 
     def test_rate_appends_a_rating(self):
         self.cli("rate", "C2=4", "C3=5.5", "--by", "Ann", "--date", "2026-10-05")
@@ -622,6 +613,88 @@ class Hits(Case):
         self.assertEqual(data["rounds"][1], {"round": 2, "shown": 1, "stated": 1, "total": 2})
 
 
+class Domains(Case):
+    def test_the_catalog_has_30_concerns_in_the_seven_domains(self):
+        entries = iv.catalog()
+        self.assertEqual(len(entries), 30)
+        self.assertEqual(len({e.name for e in entries}), 30)
+        tags = [t for e in entries for t in e.tags]
+        self.assertEqual(len(tags), len(set(tags)))
+        for e in entries:
+            self.assertTrue(e.meaning and e.tags and e.domains, e.name)
+            self.assertLessEqual(set(e.domains), set(iv.DOMAINS), e.name)
+        self.assertEqual({d for e in entries for d in e.domains}, set(iv.DOMAINS))
+
+    def test_the_first_16_are_the_3_1_0_seed(self):
+        self.assertEqual([e.name for e in iv.catalog()[:16]], [
+            "security", "open source", "owner control", "privacy", "user friction", "platform reach",
+            "maintenance and operations", "effort", "performance", "reliability", "scalability",
+            "interoperability", "flexibility", "cost", "third-party dependency", "testability"])
+
+    def test_software_numbers_as_3_1_0_then_accessibility(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        self.assertTrue(self.read(iv.WEIGHTS).startswith(iv.WEIGHTS_TITLE + "\n\ndomains: software\n\n## C1 security\n"))
+        titles = [c.title for c in self.state().concerns]
+        self.assertEqual(len(titles), 17)
+        self.assertEqual((titles[7], titles[9], titles[16]), ("C8 effort", "C10 reliability", "C17 accessibility"))
+
+    def test_two_domains_give_each_concern_once(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software", "fiction")
+        want = [e.name for e in iv.catalog() if {"software", "fiction"} & set(e.domains)]
+        self.assertEqual([c.name for c in self.state().concerns], want)
+
+    def test_a_later_domain_appends_and_keeps_numbers(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        before = [c.title for c in self.state().concerns]
+        self.cli("domains", "add", "fiction")
+        after = [c.title for c in self.state().concerns]
+        self.assertEqual(after[:17], before)
+        self.assertEqual(after[17], "C18 clarity")
+        self.assertIn("domains: software, fiction\n", self.read(iv.WEIGHTS))
+
+    def test_a_weights_file_without_a_domains_line_gets_one(self):
+        self.cli("domains", "add", "research")
+        self.assertTrue(self.read(iv.WEIGHTS).startswith(
+            iv.WEIGHTS_TITLE + "\n\ndomains: research\n\n## C1 reliability\n"))
+
+    def test_an_unknown_domain_is_refused(self):
+        before = self.read(iv.WEIGHTS)
+        self.assertIn("software", self.cli("domains", "add", "poetry", ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+
+    def test_domains_lists_the_catalog(self):
+        out = self.cli("domains").stdout
+        self.assertIn("Domains in use: none", out)
+        self.assertIn("software: 17 concerns", out)
+
+    def test_a_bad_domain_line_fails_parse(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\n\ndomains: poetry\n\n## C1", 1))
+        self.assertIn("not a domain", self.cli("parse", ok=False).stdout)
+
+    def test_commands_without_weights_say_to_choose_domains(self):
+        os.remove(self.path(iv.WEIGHTS))
+        for command in ("concerns", "predict", "fit", "hits"):
+            self.assertIn("domains add", self.cli(command, "--by", "Ann", ok=False).stderr)
+
+    def test_tag_catalog_pulls_in_the_concern(self):
+        self.cli("tag", "NEW:clarity", "--catalog")
+        self.assertIn("## C4 clarity\nmeaning: the reader understands it the first time.\n"
+                      "tags: clarity, NEW:clarity\n", self.read(iv.WEIGHTS))
+
+    def test_tag_catalog_refuses_a_concern_already_there(self):
+        self.assertIn("C1", self.cli("tag", "NEW:reliability", "--catalog", ok=False).stderr)
+
+    def test_concerns_points_a_new_tag_to_the_catalog(self):
+        self.write(iv.DRAFT, draft(question(1, choices=(("Fast (Recommended)", "NEW:pacing 2", "impl-effort 1"),
+                                                        STURDY))))
+        out = self.cli("concerns", "--by", "Ann").stdout
+        self.assertIn("NEW:pacing", out)
+        self.assertIn("refiner.py tag NEW:pacing --catalog", out)
+
+
 class Docs(unittest.TestCase):
     def read(self):
         with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
@@ -751,7 +824,9 @@ class DeferredMinors(Case):
         recs, problems = records(iv.LOG_TITLE + "\n\n## Q1\n" + block, iv.LOG_TITLE)
         self.assertEqual(problems.errors, [])
         rec = recs[0]
-        concerns = iv.parse_weights("seed", iv.seed_lines(), iv.Problems())
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        concerns = self.state().concerns
         tags, by_id = iv.tag_map(concerns), {c.cid: c for c in concerns}
         a = iv.axis(iv.vector(rec.selected()[0], tags), iv.vector(rec.choice(rec.fields["concern-only"]), tags))
         self.assertEqual(rec.fields["axis"], iv.axis_text(a, by_id))

@@ -38,7 +38,8 @@ DRAFT = "round.md"
 LOG_TITLE = "# question-refiner interviews"
 WEIGHTS_TITLE = "# question-refiner weights"
 DRAFT_TITLE = "# question-refiner round"
-SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "concerns.md")
+CATALOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "concerns.md")
+DOMAINS = ("software", "infrastructure", "product", "fiction", "nonfiction", "research", "planning")
 
 SEP = " · "
 RECOMMENDED = "(Recommended)"
@@ -167,7 +168,6 @@ class State:
     log_lines: list           # None when the log does not exist yet
     concerns: list
     weights_lines: list
-    seeded: bool              # True when the weights come from the seed, not a file
     draft: list               # None when there is no round
     draft_lines: list
 
@@ -397,6 +397,10 @@ def parse_weights(path, lines, problems):
             c = Concern(int(m.group(1)), m.group(2).strip(), k, k + 1)
             concerns.append(c)
             continue
+        if c is None and t.startswith("domains:"):
+            for bad in (d for d in split_list(t[len("domains:"):]) if d not in DOMAINS):
+                problems.error(path, k + 1, f"`{bad}` is not a domain: {', '.join(DOMAINS)}")
+            continue
         if c is None:
             problems.error(path, k + 1, "text before the first `## C<n>` concern")
             continue
@@ -433,10 +437,46 @@ def parse_weights(path, lines, problems):
     return concerns
 
 
-def seed_lines():
-    lines = read_lines(SEED)
-    first = next(k for k, line in enumerate(lines) if CONCERN_RE.match(line.rstrip("\r\n")))
-    return [WEIGHTS_TITLE + "\n", "\n"] + lines[first:]
+@dataclass
+class Entry:
+    name: str
+    meaning: str = None
+    tags: list = field(default_factory=list)
+    domains: list = field(default_factory=list)
+
+
+def split_list(value):
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def catalog():
+    """The concerns `domains add` copies from, in order."""
+    entries, e = [], None
+    for line in read_lines(CATALOG):
+        t = line.rstrip("\r\n")
+        if t.startswith("## "):
+            e = Entry(t[3:].strip())
+            entries.append(e)
+        elif e is not None:
+            key, sep, value = t.partition(": ")
+            if sep and key == "meaning":
+                e.meaning = value
+            elif sep and key in ("tags", "domains"):
+                setattr(e, key, split_list(value))
+    return entries
+
+
+def weights_domains(lines):
+    for line in lines or []:
+        t = line.rstrip("\r\n")
+        if t.startswith("domains:"):
+            return split_list(t[len("domains:"):])
+    return []
+
+
+def concern_lines(cid, e, nl, extra=()):
+    return [nl, f"## C{cid} {e.name}{nl}", f"meaning: {e.meaning}{nl}",
+            f"tags: {', '.join(list(e.tags) + list(extra))}{nl}"]
 
 
 def tag_map(concerns):
@@ -599,10 +639,9 @@ def load(store):
     if log_lines is not None:
         log = parse_records(os.path.join(store, LOG), log_lines, LOG_TITLE, problems)
         validate_records(os.path.join(store, LOG), log, problems, log=True)
-    seeded = weights_lines is None
-    if seeded:
-        weights_lines = seed_lines()
-    concerns = parse_weights(os.path.join(store, WEIGHTS), weights_lines, problems)
+    concerns = []
+    if weights_lines is not None:
+        concerns = parse_weights(os.path.join(store, WEIGHTS), weights_lines, problems)
     draft = None
     if draft_lines is not None:
         draft = parse_records(os.path.join(store, DRAFT), draft_lines, DRAFT_TITLE, problems)
@@ -615,7 +654,7 @@ def load(store):
                     if tag not in tags:
                         problems.warn(os.path.join(store, name), c.line + 1,
                                       f"tag `{tag}` belongs to no concern; map it with `refiner.py tag`")
-    return State(store, problems, log, log_lines, concerns, weights_lines, seeded, draft, draft_lines)
+    return State(store, problems, log, log_lines, concerns, weights_lines, draft, draft_lines)
 
 
 def render_record(rec, nl):
@@ -665,6 +704,12 @@ def fail_on_errors(state):
         sys.exit("fix these first (`refiner.py parse` lists them)")
 
 
+def need_weights(state):
+    if state.weights_lines is None:
+        sys.exit(f"no {WEIGHTS} yet: choose the domains with `refiner.py domains add DOMAIN ...` "
+                 f"({', '.join(DOMAINS)})")
+
+
 def check_name(name, what):
     if not name.strip() or "\n" in name or "\r" in name or SEP.strip() in name:
         sys.exit(f"{what} must be one line, not empty, and without `{SEP.strip()}`: {name!r}")
@@ -709,18 +754,27 @@ def line_end(line, nl):
 def cmd_concerns(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     unmapped, used = used_concerns(state, relevant(state, by))
     rated = stated(state.concerns, by)
     unrated = [c for c in state.concerns if c.cid in used and c.cid not in rated]
+    have = {c.name for c in state.concerns}
+    hints = {}
+    for tag in unmapped:
+        bare = tag[len("NEW:"):] if tag.startswith("NEW:") else tag
+        e = next((e for e in catalog() if bare in e.tags and e.name not in have), None)
+        if e is not None:
+            hints[tag] = e.name
     if args.json:
-        print(json.dumps({"by": by, "unmapped": sorted(unmapped),
+        print(json.dumps({"by": by, "unmapped": sorted(unmapped), "catalog": hints,
                           "unrated": [{"id": c.cid, "name": c.name, "meaning": c.meaning} for c in unrated]}))
         return 0
     if unmapped:
         print("Tags with no concern (map each with `refiner.py tag`):")
         for tag in sorted(unmapped):
-            print(f"  {tag}")
+            hint = f"  (catalog: {hints[tag]}; `refiner.py tag {tag} --catalog`)" if tag in hints else ""
+            print(f"  {tag}{hint}")
     if unrated:
         print(f"Concerns {by} has not rated (rate them with `refiner.py rate`):")
         for c in unrated:
@@ -730,14 +784,62 @@ def cmd_concerns(args):
     return 0
 
 
+def cmd_domains(args):
+    state = load(store_of(args))
+    entries = catalog()
+    if args.action is None:
+        print("Domains in use: " + (", ".join(weights_domains(state.weights_lines)) or "none"))
+        for d in DOMAINS:
+            print(f"  {d}: {sum(d in e.domains for e in entries)} concerns")
+        return 0
+    fail_on_errors(state)
+    bad = [d for d in args.names if d not in DOMAINS]
+    if bad or not args.names:
+        sys.exit(f"name domains from: {', '.join(DOMAINS)}" + (f"; not {', '.join(bad)}" if bad else ""))
+    path = state.path(WEIGHTS)
+    lines = [WEIGHTS_TITLE + "\n", "\n", "domains:\n"] if state.weights_lines is None else list(state.weights_lines)
+    nl = newline_of(lines)
+    texts = [line.rstrip("\r\n") for line in lines]
+    k = next((i for i, t in enumerate(texts) if t.startswith("domains:")), None)
+    if k is None:
+        k = first_line(texts) + 1
+        lines[k:k] = [nl, ""]
+        k += 1
+    used = weights_domains(lines)
+    want = used + [d for d in args.names if d not in used]
+    lines[k] = f"domains: {', '.join(want)}{nl}"
+    have = {c.name for c in state.concerns}
+    taken = set(tag_map(state.concerns))
+    cid = max((c.cid for c in state.concerns), default=0)
+    added, skipped = [], []
+    for e in entries:
+        if e.name in have or not set(e.domains) & set(want):
+            continue
+        if set(e.tags) & taken:
+            skipped.append(e.name)
+            continue
+        cid += 1
+        if not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += nl
+        lines += concern_lines(cid, e, nl)
+        added.append(f"C{cid} {e.name}")
+    write(path, checked(path, "".join(lines)))
+    print(f"Domains: {', '.join(want)}")
+    print("Added: " + (", ".join(added) or "nothing"))
+    if skipped:
+        print("Not added, a tag is already in use: " + ", ".join(skipped))
+    return 0
+
+
 def cmd_tag(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     tag = args.tag
     if not TAG_RE.match(tag):
         sys.exit(f"`{tag}` is not a tag: lower case, digits and hyphens, optionally after `NEW:`")
-    if bool(args.concern) == bool(args.new):
-        sys.exit("give a concern (`C<n>`) or `--new NAME MEANING`, not both")
+    if bool(args.concern) + bool(args.new) + bool(args.catalog) != 1:
+        sys.exit("give one of a concern (`C<n>`), `--new NAME MEANING` or `--catalog`")
     tags = tag_map(state.concerns)
     if tag in tags:
         sys.exit(f"`{tag}` already belongs to {tags[tag].title}; a tag belongs to one concern")
@@ -750,6 +852,22 @@ def cmd_tag(args):
             lines[-1] += nl
         lines += [nl, f"## C{cid} {name}{nl}", f"meaning: {meaning}{nl}", f"tags: {tag}{nl}"]
         title = f"C{cid} {name}"
+    elif args.catalog:
+        bare = tag[len("NEW:"):] if tag.startswith("NEW:") else tag
+        e = next((e for e in catalog() if bare in e.tags), None)
+        if e is None:
+            sys.exit(f"no catalog concern has the tag `{bare}`")
+        have = next((c for c in state.concerns if c.name == e.name), None)
+        if have is not None:
+            sys.exit(f"{e.name} is already {have.title}: run `refiner.py tag {tag} C{have.cid}`")
+        clash = [t for t in e.tags if t in tags]
+        if clash:
+            sys.exit(f"`{clash[0]}` already belongs to {tags[clash[0]].title}")
+        cid = max((c.cid for c in state.concerns), default=0) + 1
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += nl
+        lines += concern_lines(cid, e, nl, extra=[tag] if tag != bare else [])
+        title = f"C{cid} {e.name}"
     else:
         m = re.match(r"^C(\d+)$", args.concern)
         concern = next((c for c in state.concerns if m and c.cid == int(m.group(1))), None)
@@ -766,6 +884,7 @@ def cmd_tag(args):
 def cmd_rate(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     date = args.date or datetime.date.today().isoformat()
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
@@ -814,6 +933,7 @@ def readiness(state, by):
 def cmd_predict(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     if state.draft is None:
         sys.exit(f"no round to predict: write {DRAFT} first")
@@ -915,6 +1035,7 @@ def answer_errors(rec, tokens, tags, by):
 def cmd_record(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     if state.draft is None:
         sys.exit(f"no round to record: {DRAFT} does not exist")
@@ -983,6 +1104,7 @@ def cmd_record(args):
 def cmd_fit(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     errors = readiness(state, by)
     if errors:
@@ -1014,6 +1136,7 @@ def cmd_fit(args):
 def cmd_hits(args):
     state = load(store_of(args))
     fail_on_errors(state)
+    need_weights(state)
     by = person(args)
     rows = hit_rows(state.log, by)
     rounds = sorted({r for r, _, _ in rows})
@@ -1045,12 +1168,12 @@ def cmd_parse(args):
         print("warning: " + line)
     n = len(state.log)
     draft = f", round being asked: {len(state.draft)} questions" if state.draft is not None else ""
-    seeded = " (from the seed; no weights file yet)" if state.seeded else ""
-    print(f"{n} record{'s' if n != 1 else ''}, {len(state.concerns)} concerns{seeded}{draft}")
+    no_weights = f" (no {WEIGHTS} yet: run `refiner.py domains add`)" if state.weights_lines is None else ""
+    print(f"{n} record{'s' if n != 1 else ''}, {len(state.concerns)} concerns{no_weights}{draft}")
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
             "predict": cmd_predict, "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
@@ -1068,7 +1191,12 @@ def main(argv=None):
 
     command("parse")
     command("concerns", json_flag=True)
+    p = command("domains")
+    p.add_argument("action", nargs="?", choices=["add"])
+    p.add_argument("names", nargs="*")
+    p.add_argument("--fresh", action="store_true", help="start new weights although skel 3.1.0 data is not moved")
     p = command("tag")
+    p.add_argument("--catalog", action="store_true")
     p.add_argument("tag")
     p.add_argument("concern", nargs="?")
     p.add_argument("--new", nargs=2, metavar=("NAME", "MEANING"))
