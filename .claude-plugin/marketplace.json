@@ -28,6 +28,11 @@
       "description": "Ask rather than assume, restated every turn"
     },
     {
+      "name": "question-refiner",
+      "source": "./plugins/question-refiner",
+      "description": "Every question becomes a recorded round with a predicted answer, learned from past answers"
+    },
+    {
       "name": "skel",
       "source": "./plugins/skel",
       "description": "Code-shaped prose specs: one stand-in per file, checked links, formal unknowns"
