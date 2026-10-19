@@ -15,6 +15,8 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   predict                                     mark the round's predicted choices
   record --answers "Q1=2, Q2=Other, Q3=none" [--asked STAMP]
   hits [--json]                               hit rates of logged predictions
+  domains [add DOMAIN ... [--fresh]]          list the domains, or create or extend weights.md from the catalog
+  import SKEL_FOLDER                          copy skel 3.1.0 interview files into the store
   exempt --question TEXT --reason TEXT        log a question with no trade-off; the gate passes it for 10 minutes
 
 Standard library only.
@@ -44,6 +46,13 @@ EXEMPT_TITLE = "# question-refiner exempt questions"
 EXEMPT_WINDOW = 600     # seconds an exempt question passes the gate
 EXEMPT_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}) · by: (.+?) · question: (.+?) · "
                        r"reason: (.+)$")
+LEGACY_LOG = ".interviews.md"
+LEGACY_WEIGHTS = ".interview-weights.md"
+LEGACY_DRAFT = ".interview-round.md"
+MOVED = ".interview-moved.md"
+LEGACY = {LEGACY_LOG: ("# skel interviews", LOG, LOG_TITLE),
+          LEGACY_WEIGHTS: ("# skel interview weights", WEIGHTS, WEIGHTS_TITLE),
+          LEGACY_DRAFT: ("# skel interview round", DRAFT, DRAFT_TITLE)}
 CATALOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "concerns.md")
 DOMAINS = ("software", "infrastructure", "product", "fiction", "nonfiction", "research", "planning")
 
@@ -233,6 +242,40 @@ def store_for(cwd):
 
 def store_of(args):
     return os.path.abspath(args.dir) if getattr(args, "dir", None) else store_for(os.getcwd())
+
+def legacy_folders(root):
+    """Folders under root holding skel 3.1.0 interview files that were neither imported nor set aside."""
+    paths = None
+    try:
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, text=True)
+        if out.returncode == 0:
+            paths = [p for p in out.stdout.split("\0") if p]
+    except OSError:
+        pass
+    if paths is None:
+        paths = []
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if x not in (".git", STORE)]
+            paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
+    found = {os.path.dirname(p) or "." for p in paths if os.path.basename(p) in (LEGACY_LOG, LEGACY_WEIGHTS)}
+    return sorted(f for f in found if not os.path.exists(os.path.join(root, f, MOVED)))
+
+
+def legacy_summary(folder):
+    """(records in the legacy log, people with ratings in the legacy weights)."""
+    def lines(name):
+        path = os.path.join(folder, name)
+        return [line.rstrip("\r\n") for line in read_lines(path)] if os.path.exists(path) else []
+    records = sum(1 for t in lines(LEGACY_LOG) if RECORD_RE.match(t))
+    raters = {m.group(2) for t in lines(LEGACY_WEIGHTS) if t.startswith("rating: ")
+              for m in [RATING_RE.match(t[len("rating: "):])] if m}
+    return records, len(raters)
+
+
+def moved_note(text):
+    return f"# Moved\n\n{text}\n"
+
 
 def first_line(texts):
     return next((k for k, t in enumerate(texts) if t.strip()), None)
@@ -793,6 +836,40 @@ def line_end(line, nl):
     return line[len(line.rstrip("\r\n")):] or nl
 
 
+def cmd_import(args):
+    store = store_of(args)
+    src = os.path.abspath(args.source)
+    state = load(store)
+    if state.log_lines is not None or state.weights_lines is not None:
+        sys.exit(f"{store} already has {LOG} or {WEIGHTS}: import only into an empty store, so two histories are "
+                 f"never merged")
+    found = [name for name in LEGACY if os.path.exists(os.path.join(src, name))]
+    if LEGACY_LOG not in found and LEGACY_WEIGHTS not in found:
+        sys.exit(f"no skel 3.1.0 interview files ({LEGACY_LOG}, {LEGACY_WEIGHTS}) in {src}")
+    out = {}
+    for name in found:
+        old_title, new_name, new_title = LEGACY[name]
+        lines = read_lines(os.path.join(src, name))
+        texts = [line.rstrip("\r\n") for line in lines]
+        k = first_line(texts)
+        if k is None or texts[k] != old_title:
+            sys.exit(f"{name} does not start with `{old_title}`; nothing imported")
+        nl = newline_of(lines)
+        lines[k] = new_title + line_end(lines[k], nl)
+        if name == LEGACY_WEIGHTS:
+            lines[k + 1:k + 1] = [nl, f"domains: software{nl}"]
+        path = os.path.join(store, new_name)
+        out[path] = checked(path, "".join(lines))
+    for path, text in out.items():
+        write(path, text)
+    today = datetime.date.today().isoformat()
+    write(os.path.join(src, MOVED), moved_note(f"These files moved to {STORE}/ on {today} (refiner.py import). "
+                                                f"They are no longer updated."))
+    for name in found:
+        print(f"{os.path.join(src, name)} -> {os.path.join(store, LEGACY[name][1])}")
+    return 0
+
+
 def cmd_concerns(args):
     state = load(store_of(args))
     fail_on_errors(state)
@@ -838,6 +915,15 @@ def cmd_domains(args):
     bad = [d for d in args.names if d not in DOMAINS]
     if bad or not args.names:
         sys.exit(f"name domains from: {', '.join(DOMAINS)}" + (f"; not {', '.join(bad)}" if bad else ""))
+    root = os.path.dirname(store_of(args))
+    legacy = legacy_folders(root) if state.weights_lines is None else []
+    if legacy and not args.fresh:
+        sys.exit(f"skel 3.1.0 interview data has not been moved: {', '.join(legacy)}. Move it with "
+                 f"`refiner.py import {legacy[0]}`, or start fresh with `refiner.py domains add ... --fresh`")
+    for folder in legacy:
+        write(os.path.join(root, folder, MOVED),
+              moved_note(f"Not imported: a fresh start was chosen on {datetime.date.today().isoformat()} "
+                         f"(refiner.py domains add --fresh)."))
     path = state.path(WEIGHTS)
     lines = [WEIGHTS_TITLE + "\n", "\n", "domains:\n"] if state.weights_lines is None else list(state.weights_lines)
     nl = newline_of(lines)
@@ -1249,7 +1335,7 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate,
             "predict": cmd_predict, "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
@@ -1287,6 +1373,8 @@ def main(argv=None):
     p.add_argument("--question", required=True)
     p.add_argument("--reason", required=True)
     p.add_argument("--asked")
+    p = command("import")
+    p.add_argument("source", help="the folder holding skel 3.1.0's .interviews.md and .interview-weights.md")
     command("fit", json_flag=True)
     command("hits", json_flag=True)
     args = ap.parse_args(argv)

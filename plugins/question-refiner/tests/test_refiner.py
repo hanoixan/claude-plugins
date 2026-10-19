@@ -68,6 +68,9 @@ axis: C2 effort vs C1 reliability
 """
 
 
+LEGACY_LOG = LOG_RECORD.replace(iv.LOG_TITLE, "# skel interviews")
+LEGACY_WEIGHTS = WEIGHTS.replace(iv.WEIGHTS_TITLE, "# skel interview weights")
+
 def question(n, text="Which way?", choices=(CHEAP, STURDY), select="single", annotated=True):
     lines = [f"## Q{n}", text, f"header: H{n} · select: {select}"]
     for label, raises, addresses in choices:
@@ -732,6 +735,103 @@ class Exempting(Case):
             self.cli("exempt", "--question", text, "--reason", "a menu", "--by", "Ann", "--asked", at)
         now = datetime.datetime(2026, 10, 2, 10, 30, tzinfo=datetime.timezone.utc)
         self.assertEqual(iv.passable(self.state(), now), {"Which way?", "Recent?"})
+
+
+class Migration(Case):
+    def legacy(self, folder="skel", log=LEGACY_LOG, weights=LEGACY_WEIGHTS):
+        d = os.path.join(self.dir, folder)
+        os.makedirs(d, exist_ok=True)
+        for name, text in ((iv.LEGACY_LOG, log), (iv.LEGACY_WEIGHTS, weights)):
+            with open(os.path.join(d, name), "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+        return d
+
+    def empty_store(self):
+        os.remove(self.path(iv.WEIGHTS))
+
+    def test_import_copies_the_files_and_keeps_the_originals(self):
+        self.empty_store()
+        d = self.legacy()
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD)
+        self.assertEqual(self.read(iv.WEIGHTS),
+                         WEIGHTS.replace(iv.WEIGHTS_TITLE + "\n", iv.WEIGHTS_TITLE + "\n\ndomains: software\n", 1))
+        with open(os.path.join(d, iv.LEGACY_LOG), encoding="utf-8", newline="") as fh:
+            self.assertEqual(fh.read(), LEGACY_LOG)
+        with open(os.path.join(d, iv.MOVED), encoding="utf-8") as fh:
+            self.assertIn("They are no longer updated.", fh.read())
+        self.cli("parse")
+
+    def test_import_keeps_crlf(self):
+        self.empty_store()
+        d = self.legacy(log=LEGACY_LOG.replace("\n", "\r\n"), weights=LEGACY_WEIGHTS.replace("\n", "\r\n"))
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD.replace("\n", "\r\n"))
+        self.assertIn("\r\ndomains: software\r\n", self.read(iv.WEIGHTS))
+
+    def test_import_refuses_a_store_with_history(self):
+        d = self.legacy()
+        before = self.read(iv.WEIGHTS)
+        self.assertIn("already has", self.cli("import", d, ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+        self.assertFalse(os.path.exists(os.path.join(d, iv.MOVED)))
+
+    def test_import_needs_legacy_files(self):
+        self.empty_store()
+        d = os.path.join(self.dir, "skel")
+        os.mkdir(d)
+        self.assertIn("no skel 3.1.0", self.cli("import", d, ok=False).stderr)
+
+    def test_import_writes_nothing_when_a_file_would_not_parse(self):
+        self.empty_store()
+        d = self.legacy(log=LEGACY_LOG.replace("- <sel> **Cheap", "- **Cheap"))
+        self.assertIn("nothing written", self.cli("import", d, ok=False).stderr)
+        for name in (iv.LOG, iv.WEIGHTS):
+            self.assertFalse(os.path.exists(self.path(name)))
+        self.assertFalse(os.path.exists(os.path.join(d, iv.MOVED)))
+
+    def test_import_moves_a_left_over_round(self):
+        self.empty_store()
+        d = self.legacy()
+        with open(os.path.join(d, iv.LEGACY_DRAFT), "w", encoding="utf-8") as fh:
+            fh.write(draft(question(1)).replace(iv.DRAFT_TITLE, "# skel interview round"))
+        self.cli("import", d)
+        self.assertEqual(self.read(iv.DRAFT), draft(question(1)))
+
+    def test_legacy_folders_outside_git(self):
+        self.legacy("skel")
+        self.legacy(os.path.join("docs", "design"))
+        self.assertEqual(iv.legacy_folders(self.dir), [os.path.join("docs", "design"), "skel"])
+
+    def test_legacy_folders_in_git_see_uncommitted_files(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        self.legacy()
+        self.assertEqual(iv.legacy_folders(self.dir), ["skel"])
+
+    def test_an_imported_folder_is_not_legacy(self):
+        self.empty_store()
+        self.cli("import", self.legacy())
+        self.assertEqual(iv.legacy_folders(self.dir), [])
+
+    def test_the_store_is_at_the_git_root(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        sub = os.path.join(self.dir, "a", "b")
+        os.makedirs(sub)
+        self.assertEqual(os.path.realpath(iv.store_for(sub)), os.path.realpath(os.path.join(self.dir, iv.STORE)))
+
+    def test_domains_add_refuses_while_data_is_unmigrated(self):
+        self.empty_store()
+        self.legacy()
+        self.assertIn("refiner.py import", self.cli("domains", "add", "software", ok=False).stderr)
+        self.assertFalse(os.path.exists(self.path(iv.WEIGHTS)))
+
+    def test_domains_add_fresh_sets_the_old_data_aside(self):
+        self.empty_store()
+        d = self.legacy()
+        self.cli("domains", "add", "software", "--fresh")
+        with open(os.path.join(d, iv.MOVED), encoding="utf-8") as fh:
+            self.assertIn("a fresh start was chosen", fh.read())
+        self.assertEqual(iv.legacy_folders(self.dir), [])
 
 
 class Docs(unittest.TestCase):
