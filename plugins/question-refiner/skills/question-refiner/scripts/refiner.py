@@ -244,7 +244,12 @@ def store_of(args):
     return os.path.abspath(args.dir) if getattr(args, "dir", None) else store_for(os.getcwd())
 
 def legacy_folders(root):
-    """Folders under root holding skel 3.1.0 interview files that were neither imported nor set aside."""
+    """Folders under root holding skel 3.1.0 interview files that were neither imported nor set aside.
+
+    In a git repository, every file git lists (tracked, or untracked and not ignored). Outside one, only root and
+    root/skel, where skel 3.1.0 kept them: walking an arbitrary folder is slow and reaches into other repositories.
+    """
+    names = (LEGACY_LOG, LEGACY_WEIGHTS)
     paths = None
     try:
         out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -254,11 +259,9 @@ def legacy_folders(root):
     except OSError:
         pass
     if paths is None:
-        paths = []
-        for d, dirs, files in os.walk(root):
-            dirs[:] = [x for x in dirs if x not in (".git", STORE)]
-            paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
-    found = {os.path.dirname(p) or "." for p in paths if os.path.basename(p) in (LEGACY_LOG, LEGACY_WEIGHTS)}
+        paths = [os.path.join(folder, name) for folder in ("", "skel") for name in names
+                 if os.path.isfile(os.path.join(root, folder, name))]
+    found = {os.path.dirname(p) or "." for p in paths if os.path.basename(p) in names}
     return sorted(f for f in found if not os.path.exists(os.path.join(root, f, MOVED)))
 
 

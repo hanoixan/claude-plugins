@@ -46,7 +46,10 @@ def main():
             f"it with the choices \"Move it (Recommended)\" and \"Not now\". "
             + ("There is more than one folder: ask which one to move; only one can be imported. "
                if len(folders) > 1 else "")
-            + f"On yes, run `python3 \"{script}\" import <folder>`. On no, don't ask again this session.")
+            + f"On yes, run `python3 \"{script}\" import <folder>`. On no, don't ask again this session, and "
+              f"exempt this session's questions with the reason \"migrating data deferred\" rather than starting "
+              f"new weights: pass `domains add` its --fresh only when the user chooses a fresh start, since it "
+              f"sets the old data aside for good.")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
     return 0
 

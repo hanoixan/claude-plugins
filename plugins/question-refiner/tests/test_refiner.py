@@ -803,10 +803,17 @@ class Migration(Case):
         self.cli("import", d)
         self.assertEqual(self.read(iv.DRAFT), draft(question(1)))
 
-    def test_legacy_folders_outside_git(self):
+    def test_outside_git_only_the_root_and_skel_are_searched(self):
         self.legacy("skel")
         self.legacy(os.path.join("docs", "design"))
-        self.assertEqual(iv.legacy_folders(self.dir), [os.path.join("docs", "design"), "skel"])
+        self.assertEqual(iv.legacy_folders(self.dir), ["skel"])
+
+    def test_outside_git_another_repository_is_not_searched(self):
+        nested = os.path.join(self.dir, "projects", "foo")
+        os.makedirs(nested)
+        subprocess.run(["git", "init", "-q", nested], check=True)
+        self.legacy(os.path.join("projects", "foo", "skel"))
+        self.assertEqual(iv.legacy_folders(self.dir), [])
 
     def test_legacy_folders_in_git_see_uncommitted_files(self):
         subprocess.run(["git", "init", "-q", self.dir], check=True)
@@ -857,6 +864,14 @@ class Docs(unittest.TestCase):
         text = self.read()
         for words in ("Use these (Recommended)", "Change them", "(inferred)", "[x]", "choosing domains"):
             self.assertIn(words, text)
+
+    def test_the_skill_says_a_fresh_start_is_the_users_choice(self):
+        text = self.read()
+        self.assertIn("only when the user chooses a fresh start", text)
+        self.assertIn("migrating data deferred", text)
+
+    def test_the_skill_says_to_ask_without_marks(self):
+        self.assertIn("without its `<probe>` mark", self.read())
 
     def test_the_skill_keeps_the_round_out_of_git(self):
         self.assertIn("add `.question-refiner/round.md` to `.gitignore`", self.read())

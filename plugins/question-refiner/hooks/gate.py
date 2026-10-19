@@ -31,8 +31,15 @@ def main():
         asked = [q["question"].strip() for q in data["tool_input"]["questions"]]
         rf = refiner()
         state = rf.load(rf.store_for(data.get("cwd") or os.getcwd()))
-        if state.problems.errors:
-            raise ValueError(f"{rf.STORE}/ does not parse: {state.problems.errors[0]}")
+        errors = state.problems.errors
+        if errors and all(e.startswith(rf.DRAFT + ":") for e in errors):
+            emit(permissionDecision="deny", permissionDecisionReason=(
+                f"question-refiner: {rf.STORE}/{rf.DRAFT} does not parse, so no question in it counts as "
+                f"predicted:\n" + "".join(f"- {e}\n" for e in errors[:5])
+                + "Fix the round, run `refiner.py predict` again, then ask."))
+            return 0
+        if errors:
+            raise ValueError(f"{rf.STORE}/ does not parse: {errors[0]}")
         ok = rf.passable(state, datetime.datetime.now().astimezone())
     except (Exception, SystemExit) as e:
         emit(additionalContext=f"question-refiner could not check this question ({e}); it was let through. "
@@ -45,7 +52,8 @@ def main():
             "question-refiner: these questions have not been through a round:\n"
             + "".join(f"- {q}\n" for q in missing)
             + f"Write each in {rf.STORE}/{rf.DRAFT}, run `python3 \"{script}\" predict`, then ask it with the "
-              f"draft's text word for word. If it trades nothing off (a confirmation, a menu, asking for a name), "
+              f"draft's text word for word, without its `<probe>` mark. If it trades nothing off (a confirmation, "
+              f"a menu, asking for a name), "
               f"run `python3 \"{script}\" exempt --question \"<text>\" --reason \"<why>\"` first. See the "
               f"question-refiner skill."))
     return 0

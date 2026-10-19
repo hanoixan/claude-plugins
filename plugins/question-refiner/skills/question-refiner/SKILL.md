@@ -110,7 +110,8 @@ numbers already given never change. `domains` with no arguments lists the domain
    command that fixes each.
 
 4. **Ask** the questions in draft order. Copy each question, label and description from the draft word for word:
-   the log records the draft, and the gate matches the question text exactly. To change the wording, edit the draft
+   the log records the draft, and the gate matches the question text exactly. Ask a probed question
+   without its `<probe>` mark. To change the wording, edit the draft
    and run `predict` again before asking.
    - With a multiple-choice tool (AskUserQuestion in Claude Code): four questions per call; the predicted choice's
      label starts with `* `; `(Recommended)` stays in its label; the predicted choice's description ends with
@@ -207,4 +208,6 @@ python3 "SKILL_DIR/scripts/refiner.py" import skel
 
 It copies the files into `.question-refiner/`, keeps the originals, and writes `.interview-moved.md` beside them so
 nothing asks again. It refuses a store that already has a log or weights. Until the data is moved, `domains add`
-refuses; `domains add ... --fresh` starts new weights instead and marks the old files as set aside.
+refuses. If the user says not now, exempt that session's questions with the reason "migrating data deferred", and
+ask again next session. Use `domains add ... --fresh` only when the user chooses a fresh start: it starts new
+weights and marks the old files as set aside for good.

@@ -94,6 +94,25 @@ class Hook(unittest.TestCase):
         self.assertNotIn("permissionDecision", out)
         self.assertIn("could not check", out["additionalContext"])
 
+    def test_a_round_that_does_not_parse_is_refused(self):
+        self.predicted()
+        with open(os.path.join(self.store, rf.DRAFT), encoding="utf-8") as fh:
+            text = fh.read()
+        self.write(rf.DRAFT, "".join(l for l in text.splitlines(keepends=True) if not l.startswith("header:")))
+        out = self.gate("Which way?")
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("round.md", out["permissionDecisionReason"])
+
+    def test_the_refusal_mentions_marks(self):
+        self.predicted()
+        self.assertIn("without its `<probe>` mark", self.gate("<probe> Which way?")["permissionDecisionReason"])
+
+    def test_detect_says_a_fresh_start_needs_the_user(self):
+        self.legacy()
+        text = self.detect()
+        self.assertIn("--fresh only when the user chooses a fresh start", text)
+        self.assertIn("migrating data deferred", text)
+
     def test_detect_names_unmigrated_data(self):
         self.legacy()
         text = self.detect()
