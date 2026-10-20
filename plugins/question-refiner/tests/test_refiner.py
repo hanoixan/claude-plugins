@@ -1174,5 +1174,68 @@ class Threshold(Case):
         self.cli("parse")
 
 
+def logged(results, by="Ann"):
+    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off."""
+    out = [iv.LOG_TITLE, ""]
+    for n, (hit, p) in enumerate(results, 1):
+        shown_p = f" · p {p}%" if p is not None else ""
+        out += [f"## Q{n}", "Which way?",
+                f"header: H · round: {n} · select: single · asked: {ASKED} · by: {by}",
+                f"- {'' if hit else '<sel> '}**Cheap (Recommended)**: about cheap.",
+                "    concern: a worry about cheap.", "    raises: reliability 2", "    addresses: impl-effort 2",
+                f"- {'<sel> ' if hit else ''}* **Sturdy**: about sturdy.",
+                "    concern: a worry about sturdy.", "    raises: impl-effort 2", "    addresses: reliability 2",
+                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated", "concern-only: Sturdy", ""]
+    return "\n".join(out)
+
+
+class Tally(Case):
+    def tally(self):
+        return self.cli("tally", "--by", "Ann").stdout.strip()
+
+    def test_before_8_answers_it_counts_down(self):
+        self.write(iv.LOG, logged([(True, 97)] * 5))
+        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally and auto-answering start")
+
+    def test_the_line_counts_recent_and_all(self):
+        self.write(iv.LOG, logged([(False, 61)] * 10 + [(True, 97)] * 50))
+        self.assertEqual(self.tally(), "Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · threshold off")
+
+    def test_misses_give_the_mean_spread_and_suggestion(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+        self.assertEqual(self.tally(), "Predictions: 8 of 10 recent (80%), 8 of 10 all (80%) · misses at p 61% ± 0 (2) "
+                                       "· threshold off (suggested: 61)")
+
+    def test_one_miss_has_no_spread_or_suggestion(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 87)]))
+        self.assertIn("· misses at p 87% (1) · threshold off", self.tally())
+        self.assertNotIn("suggested", self.tally())
+
+    def test_the_suggestion_is_capped_at_99(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 97), (False, 87)]))
+        self.assertIn("misses at p 92% ± 7 (2) · threshold off (suggested: 99)", self.tally())
+
+    def test_misses_without_p_count_as_misses_only(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, None)]))
+        self.assertEqual(self.tally(), "Predictions: 8 of 9 recent (89%), 8 of 9 all (89%) · threshold off")
+
+    def test_the_threshold_shows(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8))
+        self.cli("auto", "80", "--by", "Ann")
+        self.assertTrue(self.tally().endswith("· threshold 80"))
+        self.assertIn("Predictions: 8 of 8 recent", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_json(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+        data = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)
+        self.assertEqual(data["recent"], {"hits": 8, "total": 10})
+        self.assertEqual(data["misses"]["count"], 2)
+        self.assertEqual(data["suggested"], 61)
+
+    def test_record_prints_the_tally_last(self):
+        out = self.round(question(1), answers="Q1=2").stdout.strip().splitlines()
+        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally and auto-answering start")
+
+
 if __name__ == "__main__":
     unittest.main()

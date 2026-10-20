@@ -28,6 +28,7 @@ import math
 import os
 import re
 import secrets
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,8 @@ STEPS = 1000        # gradient-ascent steps
 RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
 P_RE = re.compile(r" · p (\d+)% · ")
+RECENT = 50         # graded answers the recent hit rate and the miss statistics use
+MIN_ANSWERS = 8     # graded answers before the tally and auto-answering start
 
 TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
@@ -752,16 +755,53 @@ def weights_for(state, by):
     return w, w_rec, "fitted+rec", n
 
 
+def graded(log, by):
+    """The person's answered questions that carry a prediction logged before the answer, in log order."""
+    return [rec for rec in log if rec.by == by and not rec.declined and "prediction" in rec.fields
+            and rec.selected()]
+
+
+def is_hit(rec):
+    return {c.label for c in rec.selected()} == {c.label for c in rec.predicted()}
+
+
 def hit_rows(log, by):
-    rows = []
-    for rec in log:
-        sel = {c.label for c in rec.selected()}
-        if rec.by != by or rec.declined or "prediction" not in rec.fields or not sel:
-            continue
-        shown = {c.label for c in rec.predicted()}
-        only = set(rec.fields.get("concern-only", "").split(" | "))
-        rows.append((int(rec.meta["round"]), shown == sel, only == sel))
-    return rows
+    return [(int(rec.meta["round"]), is_hit(rec),
+             set(rec.fields.get("concern-only", "").split(" | ")) == {c.label for c in rec.selected()})
+            for rec in graded(log, by)]
+
+
+def tally(log, by, threshold, auto=0):
+    recs = graded(log, by)
+    recent = recs[-RECENT:]
+    misses = [p for rec in recent if not rec.multi and not is_hit(rec) for p in [logged_p(rec)] if p is not None]
+    mean = statistics.fmean(misses) if misses else None
+    sd = statistics.stdev(misses) if len(misses) > 1 else None
+    return {"by": by, "answered": len(recs),
+            "recent": {"hits": sum(map(is_hit, recent)), "total": len(recent)},
+            "all": {"hits": sum(map(is_hit, recs)), "total": len(recs)},
+            "misses": {"count": len(misses), "mean": mean, "sd": sd},
+            "threshold": threshold, "auto": auto,
+            "suggested": min(99, math.ceil(mean + 2 * sd)) if sd is not None else None}
+
+
+def tally_line(t):
+    if t["answered"] < MIN_ANSWERS:
+        return (f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally and "
+                f"auto-answering start")
+
+    def rate(d, word):
+        return f"{d['hits']} of {d['total']} {word} ({round(100 * d['hits'] / d['total'])}%)"
+    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}"]
+    m = t["misses"]
+    if m["count"]:
+        spread = f" ± {round(m['sd'])}" if m["sd"] is not None else ""
+        parts.append(f"misses at p {round(m['mean'])}%{spread} ({m['count']})")
+    if t["auto"]:
+        parts.append(f"auto {t['auto']}")
+    suggested = f" (suggested: {t['suggested']})" if t["suggested"] is not None else ""
+    parts.append(f"threshold {threshold_text(t['threshold'])}{suggested}")
+    return SEP.join(parts)
 
 
 def load(store):
@@ -1274,6 +1314,7 @@ def cmd_auto(args):
     by = person(args)
     if args.threshold is None:
         print(f"threshold for {by}: {threshold_text(threshold_of(state.weights_lines, by))}")
+        print(tally_line(tally(state.log, by, threshold_of(state.weights_lines, by))))
         return 0
     if not DIGITS.fullmatch(args.threshold) or int(args.threshold) > 100:
         sys.exit(f"the threshold is a whole number from 0 to 100 (100 turns auto-answering off): {args.threshold}")
@@ -1370,6 +1411,8 @@ def cmd_record(args):
             answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
     print(f"round {rnd}: {hits} of {answered} predictions hit")
+    after = load(state.store)
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by))))
     return 0
 
 
@@ -1432,6 +1475,16 @@ def cmd_hits(args):
     return 0
 
 
+def cmd_tally(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    t = tally(state.log, by, threshold_of(state.weights_lines, by))
+    print(json.dumps(t) if args.json else tally_line(t))
+    return 0
+
+
 def cmd_parse(args):
     state = load(store_of(args))
     for line in state.problems.errors:
@@ -1446,8 +1499,8 @@ def cmd_parse(args):
 
 
 COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
-            "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict, "record": cmd_record,
-            "fit": cmd_fit, "hits": cmd_hits}
+            "tally": cmd_tally, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict,
+            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
 def main(argv=None):
@@ -1490,6 +1543,7 @@ def main(argv=None):
     p.add_argument("source", help="the folder holding skel 3.1.0's .interviews.md and .interview-weights.md")
     command("fit", json_flag=True)
     command("hits", json_flag=True)
+    command("tally", json_flag=True)
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 
