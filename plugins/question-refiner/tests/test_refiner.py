@@ -10,6 +10,7 @@ Run from the repository root:
 import datetime
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -357,7 +358,7 @@ class Predict(Case):
         text = self.read(iv.DRAFT)
         self.assertIn("- * **Sturdy**: about sturdy.\n", text)
         self.assertIn("- **Cheap (Recommended)**: about cheap.\n", text)
-        self.assertIn("prediction: Sturdy · score 18 · gap 36 · model: stated\n", text)
+        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 97% · model: stated\n", text)
         self.assertIn("concern-only: Sturdy\n", text)
         self.assertIn("model: stated", result.stdout)
 
@@ -1103,6 +1104,36 @@ class BranchMinors(Case):
             text = fh.read()
         self.assertIn("If `refiner.py` cannot run", text)
         self.assertIn("ask directly", text)
+
+
+class Probability(Case):
+    def predicted(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        out = self.cli("predict", "--by", "Ann").stdout
+        return out, {r.number: r for r in self.state().draft}
+
+    def test_two_choices_log_the_softmax_probability(self):
+        out, recs = self.predicted(question(1))
+        self.assertIn("· gap 36 · p 97% · model: stated", recs[1].fields["prediction"])
+        self.assertIn("Q1: Sturdy (lead 36, p 97%)", out)
+        self.assertEqual(iv.logged_p(recs[1]), 97)
+
+    def test_three_choices_share_the_probability(self):
+        _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE)))
+        self.assertEqual(iv.logged_p(recs[1]), 61)
+
+    def test_multi_select_has_no_probability(self):
+        _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
+        self.assertNotIn(" p ", recs[1].fields["prediction"])
+        self.assertIsNone(iv.logged_p(recs[1]))
+
+    def test_probability_includes_the_recommended_bonus(self):
+        self.assertAlmostEqual(iv.probability([18.0, -18.0], 0), 1 / (1 + math.exp(-3.6)))
+
+    def test_a_logged_prediction_without_p_still_parses(self):
+        self.write(iv.LOG, LOG_RECORD)
+        self.cli("parse")
+        self.assertIsNone(iv.logged_p(self.state().log[0]))
 
 
 if __name__ == "__main__":

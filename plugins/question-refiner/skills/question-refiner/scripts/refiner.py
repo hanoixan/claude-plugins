@@ -65,6 +65,7 @@ LAMBDA = 0.02       # pull of the fit toward the stated ratings
 STEPS = 1000        # gradient-ascent steps
 RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
+P_RE = re.compile(r" · p (\d+)% · ")
 
 TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
@@ -612,6 +613,19 @@ def choose(rec, vectors, w, w_rec=0.0):
     return picked, scores, gap
 
 
+
+def probability(scores, i):
+    """The chance of choice i under the fit's softmax model (scores already include w_rec)."""
+    top = max(scores)
+    e = [math.exp(T * (s - top)) for s in scores]
+    return e[i] / sum(e)
+
+
+def logged_p(rec):
+    m = P_RE.search(rec.fields.get("prediction", ""))
+    return int(m.group(1)) if m else None
+
+
 def axis(v_to, v_from):
     """(concern gained most, concern lost most) going from one choice to another, or None."""
     d = {cid: v_to.get(cid, 0) - v_from.get(cid, 0) for cid in sorted(set(v_to) | set(v_from))}
@@ -1126,8 +1140,10 @@ def cmd_predict(args):
         for i, c in enumerate(rec.choices):
             c.predicted = i in picked
         labels = " | ".join(rec.choices[i].label for i in picked)
+        p = None if rec.multi else round(100 * probability(scores, picked[0]))
+        shown_p = f" · p {p}%" if p is not None else ""
         rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
-                                    f"gap {fmt(gap)} · model: {model}")
+                                    f"gap {fmt(gap)}{shown_p} · model: {model}")
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
         rec.meta["by"] = by
         rec.fields["round-id"] = round_id
@@ -1138,7 +1154,8 @@ def cmd_predict(args):
         if a:
             rec.marks.insert(0, "probe")
             rec.fields["probes"] = axis_text(a, by_id)
-        print(f"Q{rec.number}: {labels} (lead {fmt(gap)})" + (f", probe: {rec.fields['probes']}" if a else ""))
+        print(f"Q{rec.number}: {labels} (lead {fmt(gap)}" + (f", p {p}%" if p is not None else "") + ")"
+              + (f", probe: {rec.fields['probes']}" if a else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
     write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
     return 0
