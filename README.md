@@ -275,17 +275,19 @@ Turns every question the agent asks into a recorded round, whichever plugin asks
 writes the question's choices into a round file and annotates each with the concerns it raises and addresses.
 `refiner.py predict` marks the choice the person is predicted to take, from the 0 to 10 ratings they give those
 concerns. The answer is logged; an answer that goes against the prediction is a tracer, and from five tracers the
-ratings are fitted to the person's answers. Every question is still asked; the logged predictions are there so
-that confident ones can be skipped in a later version.
+ratings are fitted to the person's answers. After every round a tally line gives the hit rates and how confident
+the wrong predictions were, and `/question-refiner-auto` lets confident predictions answer for you, after you
+confirm them.
 
 **What ships**
 
 | Piece | Role |
 | --- | --- |
-| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data. 2065 words. |
+| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data; confirming auto answers. 2311 words. |
 | `PreToolUse` hook on `AskUserQuestion` | Refuses a question that was neither predicted nor exempted, and names the missing step. When it cannot check, it lets the question through. |
 | `UserPromptSubmit` hook | One line each turn, for questions asked in plain chat, which no hook sees. |
 | `SessionStart` hook | Finds skel 3.1.0 interview data that has not been moved, and has the agent ask about moving it. |
+| `/question-refiner-auto [0-100]` | Sets or shows your auto threshold: the predicted probability at or above which a question is answered by its prediction, shown to you to confirm. 100, the default, is off. Only you can run it. |
 | `scripts/refiner.py` | The commands below. |
 | `references/concerns.md` | 30 seed concerns, each tagged with the domains it applies to. |
 
@@ -310,8 +312,16 @@ refiner.py record --answers ...      log the answers, mark tracers, number the q
 refiner.py exempt --question ...     log a question with no trade-off, so the gate lets it through
 refiner.py fit                       stated against fitted weights
 refiner.py hits                      hit rates of the logged predictions
+refiner.py tally                     the one-line tally shown after every round
+refiner.py auto [N]                  set or show your auto threshold, 0 to 100
 refiner.py import SKEL_FOLDER        copy skel 3.1.0 interview data into .question-refiner/
 ```
+
+**Auto-answering.** Each single-select prediction carries `p`, its probability. The tally line reads like
+`Predictions: 34 of 42 recent (81%), 61 of 80 all (76%) · misses at p 68% ± 9 (8) · threshold off (suggested: 86)`:
+the last 50 answers, all of them, and the mean and spread of `p` on the wrong ones. With a threshold set, a question
+at or above it (not a probe, after your first 8 answers) is shown with its predicted answer for you to confirm or
+change; a confirmed answer counts as yours.
 
 Pairs with [ask-questions](#ask-questions), which makes the agent ask more; this one shapes each question and
 learns from the answer. With [skel](#skel), every unknown skel asks about goes through a round.

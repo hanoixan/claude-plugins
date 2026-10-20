@@ -858,7 +858,7 @@ class Docs(unittest.TestCase):
     def test_the_skill_names_every_command(self):
         text = self.read()
         for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
-                        "import"):
+                        "import", "tally", "auto"):
             self.assertIn(f"refiner.py\" {command}", text)
 
     def test_the_skill_confirms_inferred_domains(self):
@@ -888,6 +888,28 @@ class Docs(unittest.TestCase):
         self.assertIn(f"| yes | {words} words |", readme.split("[question-refiner](#question-refiner) |", 1)[1]
                       .split("\n", 1)[0])
         self.assertNotIn("interview.py", readme)
+
+    def test_the_auto_command_is_for_the_user_only(self):
+        with open(os.path.join(SKILL, "..", "question-refiner-auto", "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith("---\nname: question-refiner-auto\ndescription: "))
+        self.assertIn("\ndisable-model-invocation: true\n", text)
+        self.assertIn('\nargument-hint: "[0-100]"\n', text)
+        self.assertIn('refiner.py" auto $ARGUMENTS', text)
+
+    def test_the_skill_confirms_auto_answers(self):
+        text = self.read()
+        for words in ("confirming auto answers", "Use these (Recommended)", "Change some", "Q3=auto",
+                      "answer: confirmed", "the tally line"):
+            self.assertIn(words, text)
+
+    def test_the_version_is_1_1_0(self):
+        with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["version"], "1.1.0")
+
+    def test_the_readme_lists_the_auto_command(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            self.assertIn("/question-refiner-auto", fh.read())
 
 
 class ReviewFixes(Case):
@@ -1095,7 +1117,7 @@ class BranchMinors(Case):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
         for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
-                        "hits", "import"):
+                        "hits", "import", "tally", "auto"):
             self.assertIn(f"\nrefiner.py {command} ", section)
         self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
 

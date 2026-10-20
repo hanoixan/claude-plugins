@@ -111,8 +111,18 @@ numbers already given never change. `domains` with no arguments lists the domain
    `concern-only:`, `round-id:` and, on a question that touches a trade-off the user has gone against before,
    `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names the
    command that fixes each.
+   - On a single-select question, the prediction line also gives `p`, the predicted choice's probability.
+   - `auto: p 91% ≥ 80` marks a question the user's threshold lets the prediction answer: single-select, not a probe,
+     `p` at least the threshold, after the user's first 8 answers. The user sets the threshold with
+     `/question-refiner-auto` (`python3 "SKILL_DIR/scripts/refiner.py" auto 80`); 100, the default, is off.
 
-4. **Ask** the questions in draft order. Copy each question, label and description from the draft word for word:
+4. **Confirm the auto answers first.** If any question has `auto:`, show those questions in one exempt question
+   (reason "confirming auto answers"): each question, its predicted answer, and the recommended answer when
+   different, with **Use these (Recommended)** and **Change some**. On **Change some**, ask which, as a second exempt
+   multi-select question, and ask those normally with the rest of the round. In plain chat: list them and end
+   "reply ok, or the numbers to change".
+
+   **Ask** the other questions in draft order. Copy each question, label and description from the draft word for word:
    the log records the draft, and the gate matches the question text exactly. Ask a probed question
    without its `<probe>` mark. To change the wording, edit the draft
    and run `predict` again before asking.
@@ -125,6 +135,8 @@ numbers already given never change. `domains` with no arguments lists the domain
 5. **Record:** `python3 "SKILL_DIR/scripts/refiner.py" record --answers "Q1=2, Q2=Other, Q3=none"`.
    - Answers are choice numbers in draft order (`Q4=1+3` for several on a multi-select question), `Other` for a
      typed answer, or `none` when the user declines.
+   - `Q3=auto` records a confirmed auto answer as the prediction, with `answer: confirmed`; it counts as the user's
+     answer. An auto question the user changed is recorded by its choice number.
    - For a typed answer, first add it to that question in the draft as `- **Other**: <the user's words>` with its
      own `concern:`, `raises:` and `addresses:` lines, map any new tag, then record.
    - `record` writes `<sel>`, marks a `<tracer>` where the answer differs from the stated-ratings prediction, numbers
@@ -134,12 +146,14 @@ numbers already given never change. `domains` with no arguments lists the domain
 6. **Apply** the answers where the questions came from, as that plugin or task says (skel writes each decision in
    place of its unknown). A declined question stays open there.
 
-7. **Report** in a few lines: what `record` printed (each answer, new tracers and their trade-offs), the hit rates
+7. **Report** in a few lines, starting with the tally line, which `record` prints last
+   (`python3 "SKILL_DIR/scripts/refiner.py" tally` shows it at any time): what `record` printed (each answer, new tracers and their trade-offs), the hit rates
    from `python3 "SKILL_DIR/scripts/refiner.py" hits`, which model predicted, and, once there is a fit, the weights
    `python3 "SKILL_DIR/scripts/refiner.py" fit` shows as moved, with its warnings. Never present a fitted weight
    that carries an overfit warning as the user's preference.
 
-Every question is still asked in this version, however confident the prediction.
+Every question is asked unless the user's threshold marks it auto, and an auto answer is still shown to the user to
+confirm.
 
 ## The files
 
@@ -167,7 +181,9 @@ round-id: 3f91df49
 - `<tracer>`: the answer went against `concern-only:`, the prediction from the stated ratings alone. `axis:` names
   the concern the answer gained most against the one it gave up most.
 - `<probe>` (with `probes:`): when asked, the question touched a trade-off with an earlier tracer.
-- `answer: none (declined)` marks a question the user declined.
+- `answer: none (declined)` marks a question the user declined; `answer: confirmed`, an auto answer the user
+  confirmed. `auto:` stays on a question predict marked auto.
+- `p 97%` on the prediction line is the predicted choice's probability, on single-select questions.
 - `round-id:` is the same on every question of a round. `record` refuses a draft whose round is already logged.
 - Don't edit recorded rounds, apart from adding annotation lines that are missing.
 
@@ -182,7 +198,8 @@ tags: reliability
 rating: 10 · by: Sean Dunn · 2026-10-17
 ```
 
-The latest `rating:` line per person counts. `domains add` creates the file; `tag` and `rate` change it.
+A `threshold: 80 · by: Sean Dunn · 2026-10-20` line after `domains:` is a person's auto threshold. The latest
+`rating:` and `threshold:` line per person counts. `domains add` creates the file; `tag` and `rate` change it.
 
 **`exempt.md`** is one line per exempt question: when, by whom, the question and why. `hits` and `fit` never read it.
 
