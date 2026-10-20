@@ -1136,5 +1136,43 @@ class Probability(Case):
         self.assertIsNone(iv.logged_p(self.state().log[0]))
 
 
+class Threshold(Case):
+    def test_the_default_is_off(self):
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_setting_writes_a_line_and_the_latest_counts(self):
+        self.cli("auto", "80", "--by", "Ann")
+        self.cli("auto", "70", "--by", "Ann")
+        self.assertIn("threshold: 70 · by: Ann · ", self.read(iv.WEIGHTS))
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 70)
+        self.cli("parse")
+        self.assertIn("threshold for Ann: 70", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_another_persons_threshold_does_not_apply(self):
+        self.cli("auto", "0", "--by", "Bob")
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+
+    def test_the_threshold_is_0_to_100(self):
+        before = self.read(iv.WEIGHTS)
+        for bad in ("101", "-1", "8.5", "x"):
+            self.assertIn("0 to 100", self.cli("auto", bad, "--by", "Ann", ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+        self.cli("auto", "0", "--by", "Ann")
+        self.cli("auto", "100", "--by", "Ann")
+
+    def test_a_bad_threshold_line_does_not_parse(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\nthreshold: 120 · by: Ann · 2026-10-20\n\n## C1", 1))
+        self.assertIn("`threshold:` is", self.cli("parse", ok=False).stdout)
+
+    def test_the_line_goes_after_domains(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        self.cli("auto", "80", "--by", "Ann")
+        text = self.read(iv.WEIGHTS)
+        self.assertIn("domains: software\nthreshold: 80 · by: Ann · ", text)
+        self.cli("parse")
+
+
 if __name__ == "__main__":
     unittest.main()

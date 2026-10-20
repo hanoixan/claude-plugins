@@ -74,6 +74,7 @@ ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
 FIELD_RE = re.compile(r"^(answer|prediction|concern-only|axis|probes|round-id): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
+THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
@@ -469,6 +470,11 @@ def parse_weights(path, lines, problems):
             for bad in (d for d in split_list(t[len("domains:"):]) if d not in DOMAINS):
                 problems.error(path, k + 1, f"`{bad}` is not a domain: {', '.join(DOMAINS)}")
             continue
+        if c is None and t.startswith("threshold:"):
+            m = THRESHOLD_RE.match(t[len("threshold:"):].strip())
+            if not m or int(m.group(1)) > 100:
+                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD>`")
+            continue
         if c is None:
             problems.error(path, k + 1, "text before the first `## C<n>` concern")
             continue
@@ -570,6 +576,26 @@ def weights_domains(lines):
         if t.startswith("domains:"):
             return split_list(t[len("domains:"):])
     return []
+
+
+def thresholds(lines):
+    """Each person's latest threshold, from the lines before the first concern."""
+    out = {}
+    for t in (line.rstrip("\r\n") for line in lines or []):
+        if CONCERN_RE.match(t):
+            break
+        m = THRESHOLD_RE.match(t[len("threshold:"):].strip()) if t.startswith("threshold:") else None
+        if m:
+            out[m.group(2)] = int(m.group(1))
+    return out
+
+
+def threshold_of(lines, by):
+    return thresholds(lines).get(by, 100)
+
+
+def threshold_text(n):
+    return "off" if n >= 100 else str(n)
 
 
 def concern_lines(cid, e, nl, extra=()):
@@ -1241,6 +1267,30 @@ def cmd_exempt(args):
     return 0
 
 
+def cmd_auto(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    if args.threshold is None:
+        print(f"threshold for {by}: {threshold_text(threshold_of(state.weights_lines, by))}")
+        return 0
+    if not DIGITS.fullmatch(args.threshold) or int(args.threshold) > 100:
+        sys.exit(f"the threshold is a whole number from 0 to 100 (100 turns auto-answering off): {args.threshold}")
+    lines = list(state.weights_lines)
+    nl = newline_of(lines)
+    texts = [line.rstrip("\r\n") for line in lines]
+    end = next((k for k, t in enumerate(texts) if CONCERN_RE.match(t)), len(texts))
+    head = [k for k in range(end) if texts[k].startswith(("domains:", "threshold:"))]
+    at = head[-1] + 1 if head else first_line(texts) + 1
+    if not lines[at - 1].endswith(("\n", "\r")):
+        lines[at - 1] += nl
+    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()}{nl}")
+    write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
+    print(f"threshold for {by}: {threshold_text(int(args.threshold))}")
+    return 0
+
+
 def passable(state, now):
     """Questions the gate lets through: predicted in the round, or exempted in the last EXEMPT_WINDOW seconds."""
     ok = {r.question.strip() for r in state.draft or [] if "prediction" in r.fields}
@@ -1395,7 +1445,7 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import,
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
             "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict, "record": cmd_record,
             "fit": cmd_fit, "hits": cmd_hits}
 
@@ -1434,6 +1484,8 @@ def main(argv=None):
     p.add_argument("--question", required=True)
     p.add_argument("--reason", required=True)
     p.add_argument("--asked")
+    p = command("auto")
+    p.add_argument("threshold", nargs="?")
     p = command("import")
     p.add_argument("source", help="the folder holding skel 3.1.0's .interviews.md and .interview-weights.md")
     command("fit", json_flag=True)
