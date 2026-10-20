@@ -74,14 +74,15 @@ TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
 CHOICE_RE = re.compile(r"^- (<sel> )?(\* )?\*\*(.+?)\*\*:(?: (.*))?$")
 ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
-FIELD_RE = re.compile(r"^(answer|prediction|concern-only|axis|probes|round-id): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
 THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
-FIELD_ORDER = ("answer", "prediction", "concern-only", "axis", "probes", "round-id")
+FIELD_RE = re.compile(r"^(answer|prediction|auto|concern-only|axis|probes|round-id): (.*)$")
+FIELD_ORDER = ("answer", "prediction", "auto", "concern-only", "axis", "probes", "round-id")
+CONFIRMED = "confirmed"
 MARK_ORDER = ("probe", "tracer")
 
 
@@ -453,6 +454,12 @@ def validate_records(path, records, problems, log):
             problems.error(path, at, f"Q{rec.number}: an answered question marks its choice with <sel>")
         elif not rec.multi and len(chosen) > 1:
             problems.error(path, at, f"Q{rec.number}: a single-choice question has one <sel>")
+        if "auto" in rec.fields and (rec.multi or "prediction" not in rec.fields):
+            problems.error(path, at, f"Q{rec.number}: `auto:` goes only on a predicted single-select question")
+        if log and rec.fields.get("answer") not in (None, DECLINED, CONFIRMED):
+            problems.error(path, at, f"Q{rec.number}: `answer:` is `{DECLINED}` or `{CONFIRMED}`")
+        if log and rec.fields.get("answer") == CONFIRMED and "auto" not in rec.fields:
+            problems.error(path, at, f"Q{rec.number}: a confirmed answer needs the `auto:` line predict wrote")
 
 
 def parse_weights(path, lines, problems):
@@ -1197,6 +1204,8 @@ def cmd_predict(args):
     tags = tag_map(state.concerns)
     by_id = {c.cid: c for c in state.concerns}
     counts = dissent(state.log, by)
+    threshold = threshold_of(state.weights_lines, by)
+    warm = len(graded(state.log, by)) >= MIN_ANSWERS
     ids = [r.fields["round-id"] for r in state.draft if "round-id" in r.fields]
     round_id = ids[0] if ids else secrets.token_hex(4)
     for rec in state.draft:
@@ -1220,8 +1229,11 @@ def cmd_predict(args):
         if a:
             rec.marks.insert(0, "probe")
             rec.fields["probes"] = axis_text(a, by_id)
+        rec.fields.pop("auto", None)
+        if p is not None and "probe" not in rec.marks and warm and threshold < 100 and p >= threshold:
+            rec.fields["auto"] = f"p {p}% ≥ {threshold}"
         print(f"Q{rec.number}: {labels} (lead {fmt(gap)}" + (f", p {p}%" if p is not None else "") + ")"
-              + (f", probe: {rec.fields['probes']}" if a else ""))
+              + (f", probe: {rec.fields['probes']}" if a else "") + (", auto" if "auto" in rec.fields else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
     write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
     return 0
@@ -1258,6 +1270,12 @@ def answer_errors(rec, tokens, tags, by):
     elif rec.by != by:
         errors.append(f"Q{rec.number} was predicted for {rec.by}, not {by}; run `refiner.py predict --by {by}`")
     if tokens == ["none"]:
+        return errors
+    if "auto" in tokens:
+        if tokens != ["auto"]:
+            errors.append(f"Q{rec.number}: `auto` cannot be combined with choices")
+        elif "auto" not in rec.fields:
+            errors.append(f"Q{rec.number} was not marked auto by predict: ask it, then record its answer")
         return errors
     if "none" in tokens:
         errors.append(f"Q{rec.number}: `none` cannot be combined with choices")
@@ -1375,6 +1393,10 @@ def cmd_record(args):
         offered = [c for c in rec.choices if c.label != "Other"]
         if tokens == ["none"]:
             rec.fields["answer"] = DECLINED
+        elif tokens == ["auto"]:
+            for c in rec.predicted():
+                c.sel = True
+            rec.fields["answer"] = CONFIRMED
         else:
             for t in tokens:
                 (rec.choice("Other") if t == "other" else offered[int(t) - 1]).sel = True
@@ -1406,13 +1428,15 @@ def cmd_record(args):
         if not sel:
             answer = "declined"
         elif sel == shown:
-            answer = " + ".join(sorted(sel)) + " (predicted)"
+            answer = " + ".join(sorted(sel)) + (" (predicted, confirmed)" if rec.fields.get("answer") == CONFIRMED
+                                                else " (predicted)")
         else:
             answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
     print(f"round {rnd}: {hits} of {answered} predictions hit")
     after = load(state.store)
-    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by))))
+    confirmed = sum(r.fields.get("answer") == CONFIRMED for r in state.draft)
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), auto=confirmed)))
     return 0
 
 

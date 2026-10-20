@@ -1237,5 +1237,98 @@ class Tally(Case):
         self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally and auto-answering start")
 
 
+class Auto(Case):
+    def warm(self, n=8):
+        self.write(iv.LOG, logged([(True, 97)] * n))
+
+    def predict(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        out = self.cli("predict", "--by", "Ann").stdout
+        return out, {r.number: r for r in self.state().draft}
+
+    def test_a_likely_question_is_marked_auto(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        out, recs = self.predict(question(1), question(2, choices=(PRIVATE, PLAIN)))
+        self.assertEqual(recs[1].fields["auto"], "p 97% ≥ 90")
+        self.assertNotIn("auto", recs[2].fields)
+        self.assertIn("Q1: Sturdy (lead 36, p 97%), auto", out)
+
+    def test_p_equal_to_the_threshold_is_auto(self):
+        self.warm()
+        self.cli("auto", "97", "--by", "Ann")
+        self.assertIn("auto", self.predict(question(1))[1][1].fields)
+
+    def test_nothing_is_auto_before_8_answers(self):
+        self.warm(7)
+        self.cli("auto", "0", "--by", "Ann")
+        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+
+    def test_100_is_off_and_0_is_everything_eligible(self):
+        self.warm()
+        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1), question(2, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
+        self.assertIn("auto", recs[1].fields)
+        self.assertNotIn("auto", recs[2].fields)
+
+    def test_a_probe_is_never_auto(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8) + "\n" + LOG_RECORD.split("\n", 2)[2].replace("## Q1", "## Q9")
+                   .replace("round: 1", "round: 9"))
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1))
+        self.assertIn("probe", recs[1].marks)
+        self.assertNotIn("auto", recs[1].fields)
+
+    def test_a_raised_threshold_removes_a_stale_auto(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.cli("auto", "99", "--by", "Ann")
+        self.cli("predict", "--by", "Ann")
+        self.assertNotIn("auto", self.state().draft[0].fields)
+
+    def test_record_confirms_an_auto_answer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        out = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED).stdout
+        rec = self.state().log[-1]
+        self.assertEqual(rec.fields["answer"], "confirmed")
+        self.assertEqual([c.label for c in rec.selected()], ["Sturdy"])
+        self.assertIn("Q9: Sturdy (predicted, confirmed)", out)
+        self.assertIn("9 of 9 all (100%) · auto 1 · threshold 90", out.strip().splitlines()[-1])
+        self.cli("parse")
+
+    def test_changing_an_auto_question_is_a_normal_answer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED)
+        rec = self.state().log[-1]
+        self.assertNotIn("answer", rec.fields)
+        self.assertIn("tracer", rec.marks)
+
+    def test_record_refuses_auto_on_a_question_not_marked_auto(self):
+        self.predict(question(1))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED, ok=False)
+        self.assertIn("not marked auto", result.stderr)
+
+    def test_a_confirmed_answer_against_the_stated_ratings_is_a_tracer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only: Sturdy", "concern-only: Cheap (Recommended)"))
+        self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED)
+        self.assertIn("tracer", self.state().log[-1].marks)
+
+    def test_parse_refuses_misplaced_auto_lines(self):
+        self.write(iv.LOG, LOG_RECORD + "answer: maybe\n")
+        self.assertIn("`answer:` is", self.cli("parse", ok=False).stdout)
+        self.write(iv.LOG, LOG_RECORD)
+        self.write(iv.DRAFT, draft(question(1, select="multi")) + "auto: p 90% ≥ 80\n")
+        self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
