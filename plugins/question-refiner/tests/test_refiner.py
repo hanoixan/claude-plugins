@@ -10,6 +10,7 @@ Run from the repository root:
 import datetime
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -357,7 +358,7 @@ class Predict(Case):
         text = self.read(iv.DRAFT)
         self.assertIn("- * **Sturdy**: about sturdy.\n", text)
         self.assertIn("- **Cheap (Recommended)**: about cheap.\n", text)
-        self.assertIn("prediction: Sturdy · score 18 · gap 36 · model: stated\n", text)
+        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 97% · model: stated\n", text)
         self.assertIn("concern-only: Sturdy\n", text)
         self.assertIn("model: stated", result.stdout)
 
@@ -857,7 +858,7 @@ class Docs(unittest.TestCase):
     def test_the_skill_names_every_command(self):
         text = self.read()
         for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
-                        "import"):
+                        "import", "tally", "auto"):
             self.assertIn(f"refiner.py\" {command}", text)
 
     def test_the_skill_confirms_inferred_domains(self):
@@ -887,6 +888,43 @@ class Docs(unittest.TestCase):
         self.assertIn(f"| yes | {words} words |", readme.split("[question-refiner](#question-refiner) |", 1)[1]
                       .split("\n", 1)[0])
         self.assertNotIn("interview.py", readme)
+
+    def test_the_auto_command_is_for_the_user_only(self):
+        with open(os.path.join(SKILL, "..", "question-refiner-auto", "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith("---\nname: question-refiner-auto\ndescription: "))
+        self.assertIn("\ndisable-model-invocation: true\n", text)
+        self.assertIn('\nargument-hint: "[0-100]"\n', text)
+        self.assertIn('refiner.py" auto $ARGUMENTS', text)
+
+    def test_the_skill_confirms_auto_answers(self):
+        text = self.read()
+        for words in ("confirming auto answers", "Use these (Recommended)", "Change some", "Q3=auto",
+                      "answer: confirmed", "the tally line"):
+            self.assertIn(words, text)
+
+    def test_the_version_is_1_1_0(self):
+        with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["version"], "1.1.0")
+
+    def test_the_readme_lists_the_auto_command(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            self.assertIn("/question-refiner-auto", fh.read())
+
+    def test_the_confirmation_fits_the_question_tool(self):
+        text = self.read()
+        self.assertIn("With one auto question, **Change some** means asking it", text)
+        self.assertIn("more than four, split them", text)
+
+    def test_the_confirmation_has_a_fixed_one_line_question(self):
+        text = self.read()
+        self.assertIn('"Use the predicted answers for these N questions?"', text)
+        self.assertIn("in the **Use these** option's description", text)
+
+    def test_only_the_user_sets_the_threshold(self):
+        text = self.read()
+        self.assertNotIn('refiner.py" auto 80', text)
+        self.assertIn("Never run `auto` with a number yourself", text)
 
 
 class ReviewFixes(Case):
@@ -1094,7 +1132,7 @@ class BranchMinors(Case):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
         for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
-                        "hits", "import"):
+                        "hits", "import", "tally", "auto"):
             self.assertIn(f"\nrefiner.py {command} ", section)
         self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
 
@@ -1103,6 +1141,230 @@ class BranchMinors(Case):
             text = fh.read()
         self.assertIn("If `refiner.py` cannot run", text)
         self.assertIn("ask directly", text)
+
+
+class Probability(Case):
+    def predicted(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        out = self.cli("predict", "--by", "Ann").stdout
+        return out, {r.number: r for r in self.state().draft}
+
+    def test_two_choices_log_the_softmax_probability(self):
+        out, recs = self.predicted(question(1))
+        self.assertIn("· gap 36 · p 97% · model: stated", recs[1].fields["prediction"])
+        self.assertIn("Q1: Sturdy (lead 36, p 97%)", out)
+        self.assertEqual(iv.logged_p(recs[1]), 97)
+
+    def test_three_choices_share_the_probability(self):
+        _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE)))
+        self.assertEqual(iv.logged_p(recs[1]), 61)
+
+    def test_multi_select_has_no_probability(self):
+        _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
+        self.assertNotIn(" p ", recs[1].fields["prediction"])
+        self.assertIsNone(iv.logged_p(recs[1]))
+
+    def test_probability_includes_the_recommended_bonus(self):
+        self.assertAlmostEqual(iv.probability([18.0, -18.0], 0), 1 / (1 + math.exp(-3.6)))
+
+    def test_a_logged_prediction_without_p_still_parses(self):
+        self.write(iv.LOG, LOG_RECORD)
+        self.cli("parse")
+        self.assertIsNone(iv.logged_p(self.state().log[0]))
+
+
+class Threshold(Case):
+    def test_the_default_is_off(self):
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_setting_writes_a_line_and_the_latest_counts(self):
+        self.cli("auto", "80", "--by", "Ann")
+        self.cli("auto", "70", "--by", "Ann")
+        self.assertIn("threshold: 70 · by: Ann · ", self.read(iv.WEIGHTS))
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 70)
+        self.cli("parse")
+        self.assertIn("threshold for Ann: 70", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_another_persons_threshold_does_not_apply(self):
+        self.cli("auto", "0", "--by", "Bob")
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+
+    def test_the_threshold_is_0_to_100(self):
+        before = self.read(iv.WEIGHTS)
+        for bad in ("101", "-1", "8.5", "x"):
+            self.assertIn("0 to 100", self.cli("auto", bad, "--by", "Ann", ok=False).stderr)
+        self.assertEqual(self.read(iv.WEIGHTS), before)
+        self.cli("auto", "0", "--by", "Ann")
+        self.cli("auto", "100", "--by", "Ann")
+
+    def test_a_bad_threshold_line_does_not_parse(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\nthreshold: 120 · by: Ann · 2026-10-20\n\n## C1", 1))
+        self.assertIn("`threshold:` is", self.cli("parse", ok=False).stdout)
+
+    def test_the_line_goes_after_domains(self):
+        os.remove(self.path(iv.WEIGHTS))
+        self.cli("domains", "add", "software")
+        self.cli("auto", "80", "--by", "Ann")
+        text = self.read(iv.WEIGHTS)
+        self.assertIn("domains: software\nthreshold: 80 · by: Ann · ", text)
+        self.cli("parse")
+
+
+def logged(results, by="Ann"):
+    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off."""
+    out = [iv.LOG_TITLE, ""]
+    for n, (hit, p) in enumerate(results, 1):
+        shown_p = f" · p {p}%" if p is not None else ""
+        out += [f"## Q{n}", "Which way?",
+                f"header: H · round: {n} · select: single · asked: {ASKED} · by: {by}",
+                f"- {'' if hit else '<sel> '}**Cheap (Recommended)**: about cheap.",
+                "    concern: a worry about cheap.", "    raises: reliability 2", "    addresses: impl-effort 2",
+                f"- {'<sel> ' if hit else ''}* **Sturdy**: about sturdy.",
+                "    concern: a worry about sturdy.", "    raises: impl-effort 2", "    addresses: reliability 2",
+                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated", "concern-only: Sturdy", ""]
+    return "\n".join(out)
+
+
+class Tally(Case):
+    def tally(self):
+        return self.cli("tally", "--by", "Ann").stdout.strip()
+
+    def test_before_8_answers_it_counts_down(self):
+        self.write(iv.LOG, logged([(True, 97)] * 5))
+        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally and auto-answering start")
+
+    def test_the_line_counts_recent_and_all(self):
+        self.write(iv.LOG, logged([(False, 61)] * 10 + [(True, 97)] * 50))
+        self.assertEqual(self.tally(), "Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · threshold off")
+
+    def test_misses_give_the_mean_spread_and_suggestion(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+        self.assertEqual(self.tally(), "Predictions: 8 of 10 recent (80%), 8 of 10 all (80%) · misses at p 61% ± 0 (2) "
+                                       "· threshold off (suggested: 61)")
+
+    def test_one_miss_has_no_spread_or_suggestion(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 87)]))
+        self.assertIn("· misses at p 87% (1) · threshold off", self.tally())
+        self.assertNotIn("suggested", self.tally())
+
+    def test_the_suggestion_is_capped_at_99(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 97), (False, 87)]))
+        self.assertIn("misses at p 92% ± 7 (2) · threshold off (suggested: 99)", self.tally())
+
+    def test_misses_without_p_count_as_misses_only(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, None)]))
+        self.assertEqual(self.tally(), "Predictions: 8 of 9 recent (89%), 8 of 9 all (89%) · threshold off")
+
+    def test_the_threshold_shows(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8))
+        self.cli("auto", "80", "--by", "Ann")
+        self.assertTrue(self.tally().endswith("· threshold 80"))
+        self.assertIn("Predictions: 8 of 8 recent", self.cli("auto", "--by", "Ann").stdout)
+
+    def test_json(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+        data = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)
+        self.assertEqual(data["recent"], {"hits": 8, "total": 10})
+        self.assertEqual(data["misses"]["count"], 2)
+        self.assertEqual(data["suggested"], 61)
+
+    def test_record_prints_the_tally_last(self):
+        out = self.round(question(1), answers="Q1=2").stdout.strip().splitlines()
+        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally and auto-answering start")
+
+
+class Auto(Case):
+    def warm(self, n=8):
+        self.write(iv.LOG, logged([(True, 97)] * n))
+
+    def predict(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        out = self.cli("predict", "--by", "Ann").stdout
+        return out, {r.number: r for r in self.state().draft}
+
+    def test_a_likely_question_is_marked_auto(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        out, recs = self.predict(question(1), question(2, choices=(PRIVATE, PLAIN)))
+        self.assertEqual(recs[1].fields["auto"], "p 97% ≥ 90")
+        self.assertNotIn("auto", recs[2].fields)
+        self.assertIn("Q1: Sturdy (lead 36, p 97%), auto", out)
+
+    def test_p_equal_to_the_threshold_is_auto(self):
+        self.warm()
+        self.cli("auto", "97", "--by", "Ann")
+        self.assertIn("auto", self.predict(question(1))[1][1].fields)
+
+    def test_nothing_is_auto_before_8_answers(self):
+        self.warm(7)
+        self.cli("auto", "0", "--by", "Ann")
+        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+
+    def test_100_is_off_and_0_is_everything_eligible(self):
+        self.warm()
+        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1), question(2, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
+        self.assertIn("auto", recs[1].fields)
+        self.assertNotIn("auto", recs[2].fields)
+
+    def test_a_probe_is_never_auto(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8) + "\n" + LOG_RECORD.split("\n", 2)[2].replace("## Q1", "## Q9")
+                   .replace("round: 1", "round: 9"))
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1))
+        self.assertIn("probe", recs[1].marks)
+        self.assertNotIn("auto", recs[1].fields)
+
+    def test_a_raised_threshold_removes_a_stale_auto(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.cli("auto", "99", "--by", "Ann")
+        self.cli("predict", "--by", "Ann")
+        self.assertNotIn("auto", self.state().draft[0].fields)
+
+    def test_record_confirms_an_auto_answer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        out = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED).stdout
+        rec = self.state().log[-1]
+        self.assertEqual(rec.fields["answer"], "confirmed")
+        self.assertEqual([c.label for c in rec.selected()], ["Sturdy"])
+        self.assertIn("Q9: Sturdy (predicted, confirmed)", out)
+        self.assertIn("9 of 9 all (100%) · auto 1 · threshold 90", out.strip().splitlines()[-1])
+        self.cli("parse")
+
+    def test_changing_an_auto_question_is_a_normal_answer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED)
+        rec = self.state().log[-1]
+        self.assertNotIn("answer", rec.fields)
+        self.assertIn("tracer", rec.marks)
+
+    def test_record_refuses_auto_on_a_question_not_marked_auto(self):
+        self.predict(question(1))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED, ok=False)
+        self.assertIn("not marked auto", result.stderr)
+
+    def test_a_confirmed_answer_against_the_stated_ratings_is_a_tracer(self):
+        self.warm()
+        self.cli("auto", "90", "--by", "Ann")
+        self.predict(question(1))
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only: Sturdy", "concern-only: Cheap (Recommended)"))
+        self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED)
+        self.assertIn("tracer", self.state().log[-1].marks)
+
+    def test_parse_refuses_misplaced_auto_lines(self):
+        self.write(iv.LOG, LOG_RECORD + "answer: maybe\n")
+        self.assertIn("`answer:` is", self.cli("parse", ok=False).stdout)
+        self.write(iv.LOG, LOG_RECORD)
+        self.write(iv.DRAFT, draft(question(1, select="multi")) + "auto: p 90% ≥ 80\n")
+        self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
 
 
 if __name__ == "__main__":

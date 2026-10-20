@@ -28,6 +28,7 @@ import math
 import os
 import re
 import secrets
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -65,18 +66,23 @@ LAMBDA = 0.02       # pull of the fit toward the stated ratings
 STEPS = 1000        # gradient-ascent steps
 RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
+P_RE = re.compile(r" · p (\d+)% · ")
+RECENT = 50         # graded answers the recent hit rate and the miss statistics use
+MIN_ANSWERS = 8     # graded answers before the tally and auto-answering start
 
 TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
 CHOICE_RE = re.compile(r"^- (<sel> )?(\* )?\*\*(.+?)\*\*:(?: (.*))?$")
 ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
-FIELD_RE = re.compile(r"^(answer|prediction|concern-only|axis|probes|round-id): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
+THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
-FIELD_ORDER = ("answer", "prediction", "concern-only", "axis", "probes", "round-id")
+FIELD_RE = re.compile(r"^(answer|prediction|auto|concern-only|axis|probes|round-id): (.*)$")
+FIELD_ORDER = ("answer", "prediction", "auto", "concern-only", "axis", "probes", "round-id")
+CONFIRMED = "confirmed"
 MARK_ORDER = ("probe", "tracer")
 
 
@@ -448,6 +454,12 @@ def validate_records(path, records, problems, log):
             problems.error(path, at, f"Q{rec.number}: an answered question marks its choice with <sel>")
         elif not rec.multi and len(chosen) > 1:
             problems.error(path, at, f"Q{rec.number}: a single-choice question has one <sel>")
+        if "auto" in rec.fields and (rec.multi or "prediction" not in rec.fields):
+            problems.error(path, at, f"Q{rec.number}: `auto:` goes only on a predicted single-select question")
+        if log and rec.fields.get("answer") not in (None, DECLINED, CONFIRMED):
+            problems.error(path, at, f"Q{rec.number}: `answer:` is `{DECLINED}` or `{CONFIRMED}`")
+        if log and rec.fields.get("answer") == CONFIRMED and "auto" not in rec.fields:
+            problems.error(path, at, f"Q{rec.number}: a confirmed answer needs the `auto:` line predict wrote")
 
 
 def parse_weights(path, lines, problems):
@@ -467,6 +479,11 @@ def parse_weights(path, lines, problems):
         if c is None and t.startswith("domains:"):
             for bad in (d for d in split_list(t[len("domains:"):]) if d not in DOMAINS):
                 problems.error(path, k + 1, f"`{bad}` is not a domain: {', '.join(DOMAINS)}")
+            continue
+        if c is None and t.startswith("threshold:"):
+            m = THRESHOLD_RE.match(t[len("threshold:"):].strip())
+            if not m or int(m.group(1)) > 100:
+                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD>`")
             continue
         if c is None:
             problems.error(path, k + 1, "text before the first `## C<n>` concern")
@@ -571,6 +588,26 @@ def weights_domains(lines):
     return []
 
 
+def thresholds(lines):
+    """Each person's latest threshold, from the lines before the first concern."""
+    out = {}
+    for t in (line.rstrip("\r\n") for line in lines or []):
+        if CONCERN_RE.match(t):
+            break
+        m = THRESHOLD_RE.match(t[len("threshold:"):].strip()) if t.startswith("threshold:") else None
+        if m:
+            out[m.group(2)] = int(m.group(1))
+    return out
+
+
+def threshold_of(lines, by):
+    return thresholds(lines).get(by, 100)
+
+
+def threshold_text(n):
+    return "off" if n >= 100 else str(n)
+
+
 def concern_lines(cid, e, nl, extra=()):
     return [nl, f"## C{cid} {e.name}{nl}", f"meaning: {e.meaning}{nl}",
             f"tags: {', '.join(list(e.tags) + list(extra))}{nl}"]
@@ -610,6 +647,19 @@ def choose(rec, vectors, w, w_rec=0.0):
         picked = [order[0]]
         gap = scores[order[0]] - scores[order[1]] if len(order) > 1 else 0.0
     return picked, scores, gap
+
+
+
+def probability(scores, i):
+    """The chance of choice i under the fit's softmax model (scores already include w_rec)."""
+    top = max(scores)
+    e = [math.exp(T * (s - top)) for s in scores]
+    return e[i] / sum(e)
+
+
+def logged_p(rec):
+    m = P_RE.search(rec.fields.get("prediction", ""))
+    return int(m.group(1)) if m else None
 
 
 def axis(v_to, v_from):
@@ -712,16 +762,53 @@ def weights_for(state, by):
     return w, w_rec, "fitted+rec", n
 
 
+def graded(log, by):
+    """The person's answered questions that carry a prediction logged before the answer, in log order."""
+    return [rec for rec in log if rec.by == by and not rec.declined and "prediction" in rec.fields
+            and rec.selected()]
+
+
+def is_hit(rec):
+    return {c.label for c in rec.selected()} == {c.label for c in rec.predicted()}
+
+
 def hit_rows(log, by):
-    rows = []
-    for rec in log:
-        sel = {c.label for c in rec.selected()}
-        if rec.by != by or rec.declined or "prediction" not in rec.fields or not sel:
-            continue
-        shown = {c.label for c in rec.predicted()}
-        only = set(rec.fields.get("concern-only", "").split(" | "))
-        rows.append((int(rec.meta["round"]), shown == sel, only == sel))
-    return rows
+    return [(int(rec.meta["round"]), is_hit(rec),
+             set(rec.fields.get("concern-only", "").split(" | ")) == {c.label for c in rec.selected()})
+            for rec in graded(log, by)]
+
+
+def tally(log, by, threshold, auto=0):
+    recs = graded(log, by)
+    recent = recs[-RECENT:]
+    misses = [p for rec in recent if not rec.multi and not is_hit(rec) for p in [logged_p(rec)] if p is not None]
+    mean = statistics.fmean(misses) if misses else None
+    sd = statistics.stdev(misses) if len(misses) > 1 else None
+    return {"by": by, "answered": len(recs),
+            "recent": {"hits": sum(map(is_hit, recent)), "total": len(recent)},
+            "all": {"hits": sum(map(is_hit, recs)), "total": len(recs)},
+            "misses": {"count": len(misses), "mean": mean, "sd": sd},
+            "threshold": threshold, "auto": auto,
+            "suggested": min(99, math.ceil(mean + 2 * sd)) if sd is not None else None}
+
+
+def tally_line(t):
+    if t["answered"] < MIN_ANSWERS:
+        return (f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally and "
+                f"auto-answering start")
+
+    def rate(d, word):
+        return f"{d['hits']} of {d['total']} {word} ({round(100 * d['hits'] / d['total'])}%)"
+    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}"]
+    m = t["misses"]
+    if m["count"]:
+        spread = f" ± {round(m['sd'])}" if m["sd"] is not None else ""
+        parts.append(f"misses at p {round(m['mean'])}%{spread} ({m['count']})")
+    if t["auto"]:
+        parts.append(f"auto {t['auto']}")
+    suggested = f" (suggested: {t['suggested']})" if t["suggested"] is not None else ""
+    parts.append(f"threshold {threshold_text(t['threshold'])}{suggested}")
+    return SEP.join(parts)
 
 
 def load(store):
@@ -1117,6 +1204,8 @@ def cmd_predict(args):
     tags = tag_map(state.concerns)
     by_id = {c.cid: c for c in state.concerns}
     counts = dissent(state.log, by)
+    threshold = threshold_of(state.weights_lines, by)
+    warm = len(graded(state.log, by)) >= MIN_ANSWERS
     ids = [r.fields["round-id"] for r in state.draft if "round-id" in r.fields]
     round_id = ids[0] if ids else secrets.token_hex(4)
     for rec in state.draft:
@@ -1126,8 +1215,10 @@ def cmd_predict(args):
         for i, c in enumerate(rec.choices):
             c.predicted = i in picked
         labels = " | ".join(rec.choices[i].label for i in picked)
+        p = None if rec.multi else round(100 * probability(scores, picked[0]))
+        shown_p = f" · p {p}%" if p is not None else ""
         rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
-                                    f"gap {fmt(gap)} · model: {model}")
+                                    f"gap {fmt(gap)}{shown_p} · model: {model}")
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
         rec.meta["by"] = by
         rec.fields["round-id"] = round_id
@@ -1138,7 +1229,11 @@ def cmd_predict(args):
         if a:
             rec.marks.insert(0, "probe")
             rec.fields["probes"] = axis_text(a, by_id)
-        print(f"Q{rec.number}: {labels} (lead {fmt(gap)})" + (f", probe: {rec.fields['probes']}" if a else ""))
+        rec.fields.pop("auto", None)
+        if p is not None and "probe" not in rec.marks and warm and threshold < 100 and p >= threshold:
+            rec.fields["auto"] = f"p {p}% ≥ {threshold}"
+        print(f"Q{rec.number}: {labels} (lead {fmt(gap)}" + (f", p {p}%" if p is not None else "") + ")"
+              + (f", probe: {rec.fields['probes']}" if a else "") + (", auto" if "auto" in rec.fields else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
     write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
     return 0
@@ -1175,6 +1270,12 @@ def answer_errors(rec, tokens, tags, by):
     elif rec.by != by:
         errors.append(f"Q{rec.number} was predicted for {rec.by}, not {by}; run `refiner.py predict --by {by}`")
     if tokens == ["none"]:
+        return errors
+    if "auto" in tokens:
+        if tokens != ["auto"]:
+            errors.append(f"Q{rec.number}: `auto` cannot be combined with choices")
+        elif "auto" not in rec.fields:
+            errors.append(f"Q{rec.number} was not marked auto by predict: ask it, then record its answer")
         return errors
     if "none" in tokens:
         errors.append(f"Q{rec.number}: `none` cannot be combined with choices")
@@ -1224,6 +1325,31 @@ def cmd_exempt(args):
     return 0
 
 
+def cmd_auto(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    if args.threshold is None:
+        print(f"threshold for {by}: {threshold_text(threshold_of(state.weights_lines, by))}")
+        print(tally_line(tally(state.log, by, threshold_of(state.weights_lines, by))))
+        return 0
+    if not DIGITS.fullmatch(args.threshold) or int(args.threshold) > 100:
+        sys.exit(f"the threshold is a whole number from 0 to 100 (100 turns auto-answering off): {args.threshold}")
+    lines = list(state.weights_lines)
+    nl = newline_of(lines)
+    texts = [line.rstrip("\r\n") for line in lines]
+    end = next((k for k, t in enumerate(texts) if CONCERN_RE.match(t)), len(texts))
+    head = [k for k in range(end) if texts[k].startswith(("domains:", "threshold:"))]
+    at = head[-1] + 1 if head else first_line(texts) + 1
+    if not lines[at - 1].endswith(("\n", "\r")):
+        lines[at - 1] += nl
+    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()}{nl}")
+    write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
+    print(f"threshold for {by}: {threshold_text(int(args.threshold))}")
+    return 0
+
+
 def passable(state, now):
     """Questions the gate lets through: predicted in the round, or exempted in the last EXEMPT_WINDOW seconds."""
     ok = {r.question.strip() for r in state.draft or [] if "prediction" in r.fields}
@@ -1267,6 +1393,10 @@ def cmd_record(args):
         offered = [c for c in rec.choices if c.label != "Other"]
         if tokens == ["none"]:
             rec.fields["answer"] = DECLINED
+        elif tokens == ["auto"]:
+            for c in rec.predicted():
+                c.sel = True
+            rec.fields["answer"] = CONFIRMED
         else:
             for t in tokens:
                 (rec.choice("Other") if t == "other" else offered[int(t) - 1]).sel = True
@@ -1298,11 +1428,15 @@ def cmd_record(args):
         if not sel:
             answer = "declined"
         elif sel == shown:
-            answer = " + ".join(sorted(sel)) + " (predicted)"
+            answer = " + ".join(sorted(sel)) + (" (predicted, confirmed)" if rec.fields.get("answer") == CONFIRMED
+                                                else " (predicted)")
         else:
             answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
     print(f"round {rnd}: {hits} of {answered} predictions hit")
+    after = load(state.store)
+    confirmed = sum(r.fields.get("answer") == CONFIRMED for r in state.draft)
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), auto=confirmed)))
     return 0
 
 
@@ -1365,6 +1499,16 @@ def cmd_hits(args):
     return 0
 
 
+def cmd_tally(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    t = tally(state.log, by, threshold_of(state.weights_lines, by))
+    print(json.dumps(t) if args.json else tally_line(t))
+    return 0
+
+
 def cmd_parse(args):
     state = load(store_of(args))
     for line in state.problems.errors:
@@ -1378,9 +1522,9 @@ def cmd_parse(args):
     return 1 if state.problems.errors else 0
 
 
-COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import,
-            "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict, "record": cmd_record,
-            "fit": cmd_fit, "hits": cmd_hits}
+COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
+            "tally": cmd_tally, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict,
+            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
 
 
 def main(argv=None):
@@ -1417,10 +1561,13 @@ def main(argv=None):
     p.add_argument("--question", required=True)
     p.add_argument("--reason", required=True)
     p.add_argument("--asked")
+    p = command("auto")
+    p.add_argument("threshold", nargs="?")
     p = command("import")
     p.add_argument("source", help="the folder holding skel 3.1.0's .interviews.md and .interview-weights.md")
     command("fit", json_flag=True)
     command("hits", json_flag=True)
+    command("tally", json_flag=True)
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 
