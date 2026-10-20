@@ -114,13 +114,22 @@ numbers already given never change. `domains` with no arguments lists the domain
    - On a single-select question, the prediction line also gives `p`, the predicted choice's probability.
    - `auto: p 91% ≥ 80` marks a question the user's threshold lets the prediction answer: single-select, not a probe,
      `p` at least the threshold, after the user's first 8 answers. The user sets the threshold with
-     `/question-refiner-auto` (`python3 "SKILL_DIR/scripts/refiner.py" auto 80`); 100, the default, is off.
+     `/question-refiner-auto`; 100, the default, is off. Never run `auto` with a number yourself: only the user
+     chooses how much is answered for them. `python3 "SKILL_DIR/scripts/refiner.py" auto`, with no number,
+     shows the threshold.
 
-4. **Confirm the auto answers first.** If any question has `auto:`, show those questions in one exempt question
-   (reason "confirming auto answers"): each question, its predicted answer, and the recommended answer when
-   different, with **Use these (Recommended)** and **Change some**. On **Change some**, ask which, as a second exempt
-   multi-select question, and ask those normally with the rest of the round. In plain chat: list them and end
-   "reply ok, or the numbers to change".
+4. **Confirm the auto answers first.** If any question has `auto:`, exempt and ask one single-select question,
+   "Use the predicted answers for these N questions?" (N being their count), with the reason
+   "confirming auto answers" and the choices **Use these (Recommended)** and **Change some**. List each auto question, its predicted
+   answer, and the recommended answer when different, in the **Use these** option's description, or in a chat
+   message just before when the list is long. On **Change some**:
+   - With one auto question, **Change some** means asking it: ask it normally with the rest of the round.
+   - With two to four, ask which as one exempt multi-select question, one option per auto question.
+   - With more than four, split them across multi-select questions in one call, four options at most each, all
+     exempt.
+
+   Ask the ones chosen normally with the rest of the round. In plain chat: list the auto questions and end "reply
+   ok, or the numbers to change".
 
    **Ask** the other questions in draft order. Copy each question, label and description from the draft word for word:
    the log records the draft, and the gate matches the question text exactly. Ask a probed question

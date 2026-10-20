@@ -911,6 +911,21 @@ class Docs(unittest.TestCase):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             self.assertIn("/question-refiner-auto", fh.read())
 
+    def test_the_confirmation_fits_the_question_tool(self):
+        text = self.read()
+        self.assertIn("With one auto question, **Change some** means asking it", text)
+        self.assertIn("more than four, split them", text)
+
+    def test_the_confirmation_has_a_fixed_one_line_question(self):
+        text = self.read()
+        self.assertIn('"Use the predicted answers for these N questions?"', text)
+        self.assertIn("in the **Use these** option's description", text)
+
+    def test_only_the_user_sets_the_threshold(self):
+        text = self.read()
+        self.assertNotIn('refiner.py" auto 80', text)
+        self.assertIn("Never run `auto` with a number yourself", text)
+
 
 class ReviewFixes(Case):
     def test_a_draft_with_log_only_lines_is_refused(self):
