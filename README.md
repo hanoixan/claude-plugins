@@ -1,6 +1,6 @@
 # hanoixan-claude-plugins
 
-A Claude Code plugin marketplace. Eight plugins.
+A Claude Code plugin marketplace. Nine plugins.
 
 Four are small. Three of them are built around the same observation: **a skill body
 reaches the model once, when it is invoked, and then sits at a fixed point in the
@@ -20,6 +20,10 @@ line from a menu and keeps it as a preset you can share.
 
 The eighth, [question-refiner](#question-refiner), turns every question the agent asks, whichever plugin asks
 it, into a recorded round with a predicted answer, and learns the person's priorities from their answers.
+
+The ninth, [agentropy-guard](#agentropy-guard), watches the architecture itself: it keeps a ledger of what matters,
+notices what you have probably not been shown, explains it when it becomes relevant, and warns when agent-made
+changes erode it.
 
 ---
 
@@ -42,6 +46,7 @@ Then install whichever plugins you want:
 /plugin install skel@hanoixan-claude-plugins
 /plugin install wrist@hanoixan-claude-plugins
 /plugin install statusline-builder@hanoixan-claude-plugins
+/plugin install agentropy-guard@hanoixan-claude-plugins
 ```
 
 ### Requirements
@@ -52,6 +57,9 @@ degrades to its skill rather than erroring.
 skel has no hooks and needs `python3` instead, for its two scripts. question-refiner needs `python3` for its
 script and two of its three hooks; without it the gate lets questions through and says that `python3` is
 missing, and the session-start check stays silent. All of these use only the standard library.
+
+agentropy-guard needs `python3` for its script and hooks; without it the hooks do nothing. Its report's page check
+uses headless Chrome or Chromium when installed, and its reviewer reads PR discussion with `gh` when signed in.
 
 wrist has no hooks either. Its scripts need `python3` (standard library only); publishing
 also needs `pandoc` 3.2+ and `typst` 0.12+, and wrist prints install steps if either is
@@ -74,6 +82,7 @@ PowerShell 5.1 or PowerShell 7) with nothing else.
 | [skel](#skel) | Designing a codebase before writing it | none | yes | none |
 | [wrist](#wrist) | Writing a story, novel, screenplay or poem from a checked outline | none | yes | none |
 | [statusline-builder](#statusline-builder) | Your status line, built from a menu and saved as a preset | none | yes | none |
+| [agentropy-guard](#agentropy-guard) | Knowing the architecture agents built, and keeping it intact | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `SessionEnd` | yes | none (a note only when it has something to say) |
 
 ---
 
@@ -542,6 +551,52 @@ set of expected outputs.
 
 ---
 
+## agentropy-guard
+
+Agents settle architectural choices among themselves at almost no cost, and show you only what they judge you need.
+That removes the friction that used to force clean boundaries, so whatever isn't designed on purpose settles along
+the lines where a human happened to get involved. agentropy-guard keeps track of the architecture you have probably
+not been shown, explains it when it becomes relevant, and warns when agent-made changes erode it.
+
+**What ships**
+
+| Piece | Role |
+| --- | --- |
+| `/agentropy-guard:scan` | Maps the repository: components, 10 to 40 important architectural facts with evidence, and erosion signals from history. Run it first; until then the plugin does nothing. |
+| `/agentropy-guard:queue` | The education queue: important items you probably don't know, with the scores behind each. |
+| `/agentropy-guard:findings` | Erosion findings, and what you decided about each. |
+| `erosion-check`, `educate`, `ledger-update`, `arch-report` skills | How the agent judges and warns about erosion, gives an architecture note, records architectural facts, and builds a report. |
+| `architecture-scout`, `erosion-reviewer` subagents | Read the code, history and PR discussion so the main conversation doesn't have to. |
+| Six hooks | Session start, each prompt, each edit, each stopping point, compaction and session end. Silent on any failure. |
+| `scripts/guard.py` | All state and scoring: the ledger, your awareness, the queue, the detectors. |
+
+**Files.** `.agentropy-guard/` at the repository root holds `config.json` (components, contract and decision-record
+folders, weights, thresholds, rates), `ledger.json` (the architectural facts) and `findings.json` (erosion
+findings), all committed, so a team shares one picture of the architecture. `pending.json` (this session's edits
+and unreviewed signals) and `reports/` are git-ignored. What you know is private: it lives in
+`~/.claude/agentropy-guard/<project>/awareness.json`, never in the repository.
+
+**How often it speaks:** at most one architecture note a day, at a stopping point, and only when the item touches
+what you just changed; two dismissals in a row double the gap. At most one high-severity erosion warning per
+session, after a reviewer subagent has confirmed it; medium and low findings are listed at the next session's
+start. A change to an important item that the agent's reply never mentioned is pointed out in one line.
+
+**Erosion signals.** Adapter files multiplying between two components, the same model defined in two components, new
+direct imports between components, imports into another component's internals, a change across components that
+updates no contract file, contract churn, and an important change with no decision record. The detectors read
+imports in Python, JavaScript and TypeScript, Go, Rust, Java and Kotlin, C# and C/C++, and suggest only; the
+reviewer decides.
+
+**Reports.** When you want to know more, the agent writes a self-contained HTML explainer of two printed pages at
+most, with a block diagram and a sequence diagram, checks its page count with headless Chrome when available, and
+publishes it as a private artifact.
+
+```
+/plugin install agentropy-guard@hanoixan-claude-plugins
+```
+
+---
+
 ## Editing a plugin's injected text
 
 Every hook reads `${CLAUDE_PLUGIN_DATA}/<file>.txt` first and falls back to the copy
@@ -561,7 +616,7 @@ Find the data directory under `~/.claude/plugins/data/<plugin>-<marketplace>/`.
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json     the seven plugin entries
+.claude-plugin/marketplace.json     the nine plugin entries
 plugins/<name>/
   .claude-plugin/plugin.json        manifest
   hooks/hooks.json                  hook registrations
@@ -571,7 +626,9 @@ plugins/<name>/
   skills/<name>/references/         skel and wrist: grammar and guides
   skills/<name>/scripts/            skel and wrist: the checker, the mover and helpers
   skills/<name>/assets/             skel and wrist: templates and worked examples
-  tests/                            skel and wrist: tests for their scripts
+  tests/                            tests for the plugins with scripts
+  agents/*.md                       agentropy-guard only: its two subagents
+  scripts/guard.py                  agentropy-guard only: the ledger, scoring and detectors
   skills/wrist/profiles/            wrist only: one folder of data per profile
   skills/wrist/publish/             wrist only: pandoc and typst files per publishing style
   skills/statusline-builder/renderers/  statusline-builder only: the bash and PowerShell renderers

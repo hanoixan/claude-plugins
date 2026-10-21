@@ -98,5 +98,29 @@ class Pages(Case):
         self.assertIn("skipped: no headless Chrome or Chromium", result.stdout)
 
 
+class Listing(unittest.TestCase):
+    def setUp(self):
+        self.repo = os.path.join(PLUGIN, "..", "..")
+        self.readme = read(self.repo, "README.md")
+
+    def test_the_marketplace_lists_the_plugin(self):
+        import json
+        data = json.loads(read(self.repo, ".claude-plugin", "marketplace.json"))
+        entry = next(p for p in data["plugins"] if p["name"] == "agentropy-guard")
+        self.assertEqual(entry["source"], "./plugins/agentropy-guard")
+        manifest = json.loads(read(PLUGIN, ".claude-plugin", "plugin.json"))
+        self.assertEqual((manifest["name"], manifest["version"]), ("agentropy-guard", "1.0.0"))
+
+    def test_the_readme_describes_the_plugin(self):
+        self.assertIn("Nine plugins", self.readme)
+        self.assertIn("\n## agentropy-guard\n", self.readme)
+        self.assertIn("/plugin install agentropy-guard@hanoixan-claude-plugins", self.readme)
+        self.assertIn("| [agentropy-guard](#agentropy-guard) |", self.readme)
+        section = self.readme.split("\n## agentropy-guard\n", 1)[1].split("\n## ", 1)[0]
+        for words in ("/agentropy-guard:scan", "/agentropy-guard:queue", "/agentropy-guard:findings",
+                      ".agentropy-guard/", "at most one", "~/.claude/agentropy-guard/"):
+            self.assertIn(words, section)
+
+
 if __name__ == "__main__":
     unittest.main()

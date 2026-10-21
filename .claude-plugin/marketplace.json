@@ -46,6 +46,11 @@
       "name": "statusline-builder",
       "source": "./plugins/statusline-builder",
       "description": "A status line built from a menu, saved as a shareable preset, drawn in bash or PowerShell"
+    },
+    {
+      "name": "agentropy-guard",
+      "source": "./plugins/agentropy-guard",
+      "description": "Keeps a ledger of a repository's important architecture, notices what you probably don't know about it, explains it when it becomes relevant, and warns when agent-made changes erode it"
     }
   ]
 }
