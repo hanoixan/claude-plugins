@@ -1,0 +1,8 @@
+{
+  "name": "agentropy-guard",
+  "description": "Keeps a ledger of a repository's important architecture, notices what you probably don't know about it, explains it when it becomes relevant, and warns when agent-made changes erode it",
+  "version": "1.0.0",
+  "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
+  "license": "MIT",
+  "keywords": ["architecture", "conway", "erosion", "ledger", "hooks"]
+}
