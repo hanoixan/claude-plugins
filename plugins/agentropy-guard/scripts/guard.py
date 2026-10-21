@@ -426,6 +426,169 @@ def cmd_parse(args):
     return 1 if errors else 0
 
 
+# --- ledger items ---
+
+MATERIAL = ("title", "category", "summary", "details", "evidence", "components", "origin")
+
+
+def load_ledger(store):
+    return read_json(store.path(LEDGER), empty_ledger())
+
+
+def save_ledger(store, ledger):
+    ledger["items"].sort(key=lambda x: x["id"])
+    write_json(store.path(LEDGER), ledger)
+
+
+def next_id(prefix, ids):
+    n = max((int(i.split("_")[1]) for i in ids if re.fullmatch(prefix + r"_\d+", str(i))), default=0)
+    return f"{prefix}_{n + 1:04d}"
+
+
+def evidence_paths(item):
+    return [e["path"] for e in item.get("evidence", []) if isinstance(e, dict) and e.get("type") == "file"
+            and e.get("path")]
+
+
+def change_frequency(store, paths):
+    """Commits touching the paths in the last 90 days, over 20, capped at 1."""
+    if not paths:
+        return 0.0
+    out = git(store.root, "log", "--since=90.days", "--format=%H", "--", *paths)
+    return min(1.0, len(set(out.split())) / 20) if out else 0.0
+
+
+def importance(item, cfg):
+    w, f = cfg["weights"], item["importance_factors"]
+    value = sum(w[k] * f.get(k, 0.0) for k in FACTORS)
+    if item["origin"] == "agent-decision":
+        value += w["agent_boost"]
+    return round(min(1.0, value), 4)
+
+
+def read_input(source):
+    if source == "-":
+        text = sys.stdin.read()
+    else:
+        with open(source, encoding="utf-8") as fh:
+            text = fh.read()
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        sys.exit(f"the input is not valid JSON: {e}")
+    return data if isinstance(data, list) else [data]
+
+
+def upsert_item(store, cfg, ledger, data, at):
+    """The stored form of an input item: an update when `id` names an item, else a new one. Raises ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("an item is a JSON object")
+    by_id = {it["id"]: it for it in ledger["items"]}
+    stamp = iso(at)
+    given = {k: v for k, v in data.items() if k not in ("created_at", "updated_at", "importance")}
+    if data.get("id") is not None:
+        if data["id"] not in by_id:
+            raise ValueError(f"no item {data['id']}")
+        old = by_id[data["id"]]
+        new = {**old, **given}
+        if any(new.get(k) != old.get(k) for k in MATERIAL):
+            new["updated_at"] = stamp
+    else:
+        new = {"details": "", "status": "active", "superseded_by": None, "related_findings": [], **given,
+               "id": next_id("ki", by_id), "created_at": stamp, "updated_at": stamp}
+    factors = dict(new.get("importance_factors") or {})
+    factors["change_frequency"] = change_frequency(store, evidence_paths(new))
+    new["importance_factors"] = factors
+    errors = item_errors({**new, "importance": 0.0})
+    if errors:
+        raise ValueError(f"{new.get('id')}: " + "; ".join(errors))
+    new["importance"] = importance(new, cfg)
+    return new
+
+
+def find_item(ledger, item_id):
+    it = next((x for x in ledger["items"] if x["id"] == item_id), None)
+    if it is None:
+        sys.exit(f"no item {item_id}")
+    return it
+
+
+@command("item add", arg("--json", dest="source", default="-",
+                         help="a file holding an item or a list of items, or - for stdin"))
+def cmd_item_add(args):
+    store = store_of(args)
+    cfg, ledger, at = config(store), load_ledger(store), now()
+    saved, errors = [], []
+    for data in read_input(args.source):
+        try:
+            it = upsert_item(store, cfg, ledger, data, at)
+        except ValueError as e:
+            errors.append(str(e))
+            continue
+        ledger["items"] = [x for x in ledger["items"] if x["id"] != it["id"]] + [it]
+        saved.append(it)
+    if errors:
+        sys.exit("\n".join(errors))
+    save_ledger(store, ledger)
+    for it in saved:
+        print(f"{it['id']} {it['importance']:.2f} {it['title']}")
+    return 0
+
+
+@command("item get", arg("id"))
+def cmd_item_get(args):
+    print(json.dumps(find_item(load_ledger(store_of(args)), args.id), indent=2, sort_keys=True))
+    return 0
+
+
+@command("item list", arg("--status", choices=STATUSES), arg("--json", action="store_true"))
+def cmd_item_list(args):
+    items = [it for it in load_ledger(store_of(args))["items"] if not args.status or it["status"] == args.status]
+    if args.json:
+        print(json.dumps(items, indent=2, sort_keys=True))
+    for it in [] if args.json else items:
+        print(f"{it['id']} {it['importance']:.2f} {it['category']} {it['title']}")
+    return 0
+
+
+@command("item supersede", arg("id"), arg("--by", required=True))
+def cmd_item_supersede(args):
+    store = store_of(args)
+    ledger = load_ledger(store)
+    old, new = find_item(ledger, args.id), find_item(ledger, args.by)
+    if old is new:
+        sys.exit("an item cannot supersede itself")
+    old.update(status="superseded", superseded_by=new["id"], updated_at=iso(now()))
+    save_ledger(store, ledger)
+    print(f"{old['id']} superseded by {new['id']}")
+    return 0
+
+
+@command("item refresh")
+def cmd_item_refresh(args):
+    store = store_of(args)
+    cfg, ledger = config(store), load_ledger(store)
+    n = 0
+    for it in (x for x in ledger["items"] if x["status"] == "active"):
+        it["importance_factors"]["change_frequency"] = change_frequency(store, evidence_paths(it))
+        it["importance"] = importance(it, cfg)
+        n += 1
+    save_ledger(store, ledger)
+    print(f"{n} items refreshed")
+    return 0
+
+
+@command("scanned")
+def cmd_scanned(args):
+    store = store_of(args)
+    ledger = load_ledger(store)
+    head = git(store.root, "rev-parse", "HEAD")
+    ledger["last_scan"] = {"at": iso(now()), "commit": head.strip() if head else None}
+    save_ledger(store, ledger)
+    print(f"last scan: {ledger['last_scan']['at']}")
+    return 0
+
+
 # --- main ---
 
 def build_parser():

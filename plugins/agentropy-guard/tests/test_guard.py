@@ -150,5 +150,96 @@ class Store(Case):
                             self.assertLessEqual(len(line.rstrip("\n")), 120, f"{path}:{k}")
 
 
+class Items(Case):
+    def ledger(self):
+        return g.read_json(os.path.join(self.store, g.LEDGER), g.empty_ledger())
+
+    def test_a_new_item_gets_an_id_times_and_importance(self):
+        self.cli("init")
+        self.assertIn("ki_0001 0.69 Orders and Billing", self.add_items(item()).stdout)
+        it = self.ledger()["items"][0]
+        self.assertEqual((it["created_at"], it["updated_at"], it["status"]), (NOW, NOW, "active"))
+        self.assertEqual(it["importance_factors"]["change_frequency"], 0.0)
+        self.cli("parse")
+
+    def test_a_batch_numbers_in_order(self):
+        self.cli("init")
+        self.add_items(item(), item(title="Payments retry in the queue worker", origin="discovered"))
+        self.assertEqual([i["id"] for i in self.ledger()["items"]], ["ki_0001", "ki_0002"])
+        self.assertEqual(self.ledger()["items"][1]["importance"], 0.59)
+
+    def test_an_invalid_item_writes_nothing(self):
+        self.cli("init")
+        result = self.cli("item", "add", "--json", "-", stdin=json.dumps([item(), item(category="vibes")]), ok=False)
+        self.assertIn("`category` is one of", result.stderr)
+        self.assertEqual(self.ledger()["items"], [])
+
+    def test_an_update_changes_updated_at_only_when_material(self):
+        self.cli("init")
+        self.add_items(item())
+        later = "2026-10-21T12:00:00Z"
+        self.add_items({"id": "ki_0001", "importance_factors": item()["importance_factors"]}, now=later)
+        self.assertEqual(self.ledger()["items"][0]["updated_at"], NOW)
+        self.add_items({"id": "ki_0001", "summary": "Now three schemas."}, now=later)
+        it = self.ledger()["items"][0]
+        self.assertEqual((it["updated_at"], it["created_at"], it["summary"]), (later, NOW, "Now three schemas."))
+
+    def test_an_update_of_an_unknown_id_is_refused(self):
+        self.cli("init")
+        result = self.cli("item", "add", "--json", "-", stdin=json.dumps({"id": "ki_0009", "summary": "x"}), ok=False)
+        self.assertIn("no item ki_0009", result.stderr)
+
+    def test_a_command_on_invalid_json_is_one_error_line(self):
+        self.cli("init")
+        self.write(".agentropy-guard/ledger.json", "{")
+        self.assertIn("not valid JSON", self.cli("item", "list", ok=False).stderr)
+
+    def test_change_frequency_comes_from_git(self):
+        self.git_init()
+        for k in range(5):
+            self.write("orders/customer.py", f"x = {k}\n")
+            self.commit(f"c{k}")
+        self.cli("init")
+        self.add_items(item())
+        it = self.ledger()["items"][0]
+        self.assertEqual(it["importance_factors"]["change_frequency"], 0.25)
+        self.assertEqual(it["importance"], 0.74)
+
+    def test_importance_is_capped_at_1(self):
+        cfg = g.merged_config({})
+        full = {**item(), "importance_factors": {k: 1.0 for k in g.FACTORS}}
+        self.assertEqual(g.importance(full, cfg), 1.0)
+
+    def test_get_list_and_supersede(self):
+        self.cli("init")
+        self.add_items(item(), item(title="Customer is one shared contract"))
+        self.assertEqual(json.loads(self.cli("item", "get", "ki_0002").stdout)["id"], "ki_0002")
+        self.cli("item", "supersede", "ki_0001", "--by", "ki_0002")
+        it = self.ledger()["items"][0]
+        self.assertEqual((it["status"], it["superseded_by"]), ("superseded", "ki_0002"))
+        self.assertNotIn("ki_0001", self.cli("item", "list", "--status", "active").stdout)
+        self.assertIn("no item ki_0009", self.cli("item", "supersede", "ki_0001", "--by", "ki_0009", ok=False).stderr)
+        self.cli("parse")
+
+    def test_refresh_recomputes_change_frequency(self):
+        self.git_init()
+        self.cli("init")
+        self.add_items(item())
+        for k in range(10):
+            self.write("orders/customer.py", f"x = {k}\n")
+            self.commit(f"c{k}")
+        self.assertIn("1 items refreshed", self.cli("item", "refresh").stdout)
+        self.assertEqual(self.ledger()["items"][0]["importance_factors"]["change_frequency"], 0.5)
+
+    def test_scanned_records_the_scan(self):
+        self.git_init()
+        self.commit("first")
+        self.cli("init")
+        self.cli("scanned")
+        last = self.ledger()["last_scan"]
+        self.assertEqual(last["at"], NOW)
+        self.assertRegex(last["commit"], r"^[0-9a-f]{40}$")
+
+
 if __name__ == "__main__":
     unittest.main()
