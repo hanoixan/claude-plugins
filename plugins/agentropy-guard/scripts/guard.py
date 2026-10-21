@@ -589,6 +589,130 @@ def cmd_scanned(args):
     return 0
 
 
+# --- awareness ---
+
+MAX_SIGNALS = 50
+
+
+def load_awareness(store):
+    a = read_json(store.aware_path(), empty_awareness())
+    a.setdefault("items", {})
+    a.setdefault("state", {})
+    return a
+
+
+def save_awareness(store, a):
+    write_json(store.aware_path(), a)
+
+
+def record_of(a, item_id):
+    return a["items"].setdefault(item_id, {"exposure_signals": [], "disclosures": [], "user_response": "none",
+                                           "snoozed_until": None, "item_version_at_last_disclosure": None,
+                                           "acknowledged_version": None})
+
+
+def add_signal(a, item_id, signal):
+    rec = record_of(a, item_id)
+    rec["exposure_signals"] = (rec["exposure_signals"] + [signal])[-MAX_SIGNALS:]
+
+
+def unknown_likelihood(item, rec, cfg, at):
+    """How likely the person does not know the item, from its origin and their exposure to it."""
+    prior = cfg["priors"][item["origin"]]
+    rec = rec or {}
+    if rec.get("user_response") == "acknowledged" and rec.get("acknowledged_version") == item["updated_at"]:
+        return 0.05
+    u = prior
+    signals = sorted(rec.get("exposure_signals", []), key=lambda s: s["at"])
+    for s in signals:
+        if s["type"] == "user_edited_file":
+            u *= 0.4
+        elif s["type"] == "user_prompt_mentioned":
+            u *= 0.7
+        elif s["type"] == "agent_summarized":
+            u *= 0.9
+        elif s["type"] == "agent_silent_change":
+            u = min(0.95, u + 0.15)
+    if signals:
+        days = max(0.0, (at - parse_time(signals[-1]["at"])).total_seconds() / 86400)
+        u = prior + (u - prior) * 0.5 ** (days / cfg["rates"]["half_life_days"])
+    return round(max(0.0, min(1.0, u)), 4)
+
+
+def items_touching(ledger, path=None, component=None, item_id=None):
+    """Active items an exposure applies to: by id, by a component they name, or by a file in their evidence."""
+    out = []
+    for it in ledger["items"]:
+        if it["status"] != "active":
+            continue
+        if item_id is not None and it["id"] == item_id:
+            out.append(it)
+        elif component is not None and component in it["components"]:
+            out.append(it)
+        elif path is not None and any(path == p or path.startswith(p.rstrip("/") + "/") for p in evidence_paths(it)):
+            out.append(it)
+    return out
+
+
+@command("seen", arg("--item"), arg("--path"), arg("--component"), arg("--signal", required=True, choices=SIGNALS),
+         arg("--term"))
+def cmd_seen(args):
+    targets = [x for x in (args.item, args.path, args.component) if x]
+    if len(targets) != 1:
+        sys.exit("give exactly one of --item, --path or --component")
+    store = store_of(args)
+    ledger, a, stamp = load_ledger(store), load_awareness(store), iso(now())
+    if args.item:
+        find_item(ledger, args.item)
+    hits = items_touching(ledger, path=args.path, component=args.component, item_id=args.item)
+    for it in hits:
+        signal = {"type": args.signal, "at": stamp}
+        for key in ("path", "component", "term"):
+            if getattr(args, key):
+                signal[key] = getattr(args, key)
+        add_signal(a, it["id"], signal)
+    save_awareness(store, a)
+    print(f"{args.signal}: {len(hits)} item{'s' if len(hits) != 1 else ''}")
+    return 0
+
+
+@command("told", arg("id"), arg("--level", required=True, choices=LEVELS), arg("--report"), arg("--session"))
+def cmd_told(args):
+    store = store_of(args)
+    it = find_item(load_ledger(store), args.id)
+    a = load_awareness(store)
+    rec = record_of(a, it["id"])
+    entry = {"level": args.level, "at": iso(now())}
+    for key in ("report", "session"):
+        if getattr(args, key):
+            entry[key] = getattr(args, key)
+    rec["disclosures"].append(entry)
+    rec["item_version_at_last_disclosure"] = it["updated_at"]
+    save_awareness(store, a)
+    print(f"{it['id']}: {args.level}")
+    return 0
+
+
+@command("respond", arg("id"), arg("--response", required=True, choices=RESPONSES[1:]), arg("--days", type=float))
+def cmd_respond(args):
+    store = store_of(args)
+    cfg, it = config(store), find_item(load_ledger(store), args.id)
+    a, at = load_awareness(store), now()
+    rec, state = record_of(a, it["id"]), a["state"]
+    rec["user_response"] = args.response
+    if args.response == "acknowledged":
+        rec["acknowledged_version"] = it["updated_at"]
+    if args.response == "snoozed":
+        days = args.days if args.days is not None else cfg["rates"]["snooze_days"]
+        rec["snoozed_until"] = iso(at + datetime.timedelta(days=days))
+    state["dismissals"] = state.get("dismissals", 0) + 1 if args.response == "dismissed" else 0
+    if (state.get("pending_nudge") or {}).get("item") == it["id"]:
+        state["pending_nudge"] = None
+    save_awareness(store, a)
+    print(f"{it['id']}: {args.response}")
+    return 0
+
+
 # --- main ---
 
 def build_parser():

@@ -241,5 +241,68 @@ class Items(Case):
         self.assertRegex(last["commit"], r"^[0-9a-f]{40}$")
 
 
+class Awareness(Case):
+    def setUp(self):
+        super().setUp()
+        self.cli("init")
+        self.add_items(item(), item(title="Payments retry in the queue worker", origin="discovered",
+                                    evidence=[{"type": "file", "path": "worker/retry.py"}], components=["worker"]))
+
+    def aware(self):
+        return g.read_json(self.gstore().aware_path(), g.empty_awareness())
+
+    def unknown(self, item_id, at=NOW):
+        ledger = g.load_ledger(self.gstore())
+        it = next(x for x in ledger["items"] if x["id"] == item_id)
+        return g.unknown_likelihood(it, self.aware()["items"].get(item_id), g.merged_config({}), g.parse_time(at))
+
+    def test_the_prior_follows_the_origin(self):
+        self.assertEqual(self.unknown("ki_0001"), 0.7)
+        self.assertEqual(self.unknown("ki_0002"), 0.4)
+
+    def test_an_edit_by_the_user_lowers_it(self):
+        self.cli("seen", "--path", "orders/customer.py", "--signal", "user_edited_file")
+        self.assertEqual(self.unknown("ki_0001"), 0.28)
+        self.assertEqual(self.unknown("ki_0002"), 0.4)
+
+    def test_it_decays_toward_the_prior(self):
+        self.cli("seen", "--item", "ki_0001", "--signal", "user_edited_file")
+        self.assertEqual(self.unknown("ki_0001", "2026-11-19T12:00:00Z"), 0.49)
+
+    def test_silent_changes_raise_it_to_a_cap(self):
+        for _ in range(3):
+            self.cli("seen", "--item", "ki_0001", "--signal", "agent_silent_change")
+        self.assertEqual(self.unknown("ki_0001"), 0.95)
+
+    def test_a_component_mention_lowers_it(self):
+        self.cli("seen", "--component", "worker", "--signal", "user_prompt_mentioned", "--term", "worker")
+        self.assertEqual(self.unknown("ki_0002"), 0.28)
+
+    def test_seen_needs_exactly_one_target(self):
+        self.assertIn("exactly one", self.cli("seen", "--signal", "user_edited_file", ok=False).stderr)
+
+    def test_acknowledged_holds_until_the_item_changes(self):
+        self.cli("respond", "ki_0001", "--response", "acknowledged")
+        self.assertEqual(self.unknown("ki_0001"), 0.05)
+        self.add_items({"id": "ki_0001", "summary": "Changed."}, now="2026-10-21T12:00:00Z")
+        self.assertEqual(self.unknown("ki_0001"), 0.7)
+
+    def test_told_records_the_item_version(self):
+        self.cli("told", "ki_0001", "--level", "mentioned")
+        rec = self.aware()["items"]["ki_0001"]
+        self.assertEqual(rec["disclosures"][0]["level"], "mentioned")
+        self.assertEqual(rec["item_version_at_last_disclosure"], NOW)
+        self.cli("parse")
+
+    def test_snooze_and_dismissals(self):
+        self.cli("respond", "ki_0001", "--response", "snoozed")
+        self.assertEqual(self.aware()["items"]["ki_0001"]["snoozed_until"], "2026-10-27T12:00:00Z")
+        self.cli("respond", "ki_0001", "--response", "dismissed")
+        self.cli("respond", "ki_0002", "--response", "dismissed")
+        self.assertEqual(self.aware()["state"]["dismissals"], 2)
+        self.cli("respond", "ki_0002", "--response", "wants_more")
+        self.assertEqual(self.aware()["state"]["dismissals"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
