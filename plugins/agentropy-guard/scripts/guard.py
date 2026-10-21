@@ -1436,6 +1436,116 @@ HOOKS = {"session-start": hook_session_start, "prompt": hook_prompt, "post-edit"
          "pre-compact": hook_pre_compact, "session-end": hook_session_end}
 
 
+# --- the stop hook ---
+
+def last_assistant_text(path):
+    """The last assistant message with text in a transcript (JSON lines), or None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()[-400:]
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+            if any(t.strip() for t in texts):
+                return "\n".join(texts)
+    return None
+
+
+def nudge_allowed(state, cfg, at):
+    last = state.get("last_nudge_at")
+    if not last:
+        return True
+    gap = cfg["rates"]["nudge_days"] * 2 ** (state.get("dismissals", 0) // 2)
+    return (at - parse_time(last)).total_seconds() >= gap * 86400
+
+
+def mentions(item):
+    words = {c.lower() for c in item["components"]} | title_words(item["title"])
+    for p in evidence_paths(item):
+        words |= {p.lower(), os.path.basename(p).lower()}
+    return words
+
+
+def silent_items(cfg, ledger, turn, text):
+    """Important items this turn changed that the reply names nowhere (no file, component or title word)."""
+    if text is None:
+        return []
+    low = text.lower()
+    return [it for it in ledger["items"] if it["status"] == "active"
+            and it["importance"] >= cfg["thresholds"]["silent_importance"] and set(turn) & set(evidence_paths(it))
+            and not any(w in low for w in mentions(it))]
+
+
+def block(reason):
+    return {"decision": "block", "reason": reason}
+
+
+def hook_stop(data):
+    """At most one interruption per stopping point: erosion candidates to review, else a silent change to mention,
+    else one education nudge (at most one a day, widening after dismissals)."""
+    if data.get("stop_hook_active"):
+        return None
+    store = hook_store(data)
+    if store is None:
+        return None
+    cfg, ledger, findings, a, pend, at = (config(store), load_ledger(store), load_findings(store),
+                                          load_awareness(store), load_pending(store), now())
+    sid, st = data.get("session_id"), a["state"]
+    turn = sorted({e["path"] for e in pend["edits"][pend.get("turn_mark", 0):]}) if pend["session"] == sid else []
+    pend["turn_mark"] = len(pend["edits"])
+    if turn:
+        add_candidates(pend, turn_candidates(store, cfg, turn, ledger), findings, at)
+    review = [c for c in pend["candidates"] if not c.get("reviewed") and not c.get("offered")
+              and c["severity"] in ("medium", "high")]
+    for c in review:
+        c["offered"] = True
+    save_pending(store, pend)
+    if review:
+        warn = (f"If a confirmed one is high severity, warn the user as the agentropy-guard:erosion-check skill says, "
+                f"then run `{GUARD} warned --session {sid}`." if st.get("high_shown_session") != sid else
+                "Do not warn the user now: confirmed findings are listed at the next session's start.")
+        n = len(review)
+        return block(f"agentropy-guard: {n} possible architecture erosion signal{'s' if n != 1 else ''} in this work. "
+                     f"Run `{GUARD} candidates`, dispatch the agentropy-guard:erosion-reviewer subagent on them, "
+                     f"record each confirmed one with `{GUARD} finding add --json -`, then run "
+                     f"`{GUARD} candidates --clear`. {warn}")
+    silent = silent_items(cfg, ledger, turn, last_assistant_text(data.get("transcript_path"))) if turn else []
+    for it in silent:
+        add_signal(a, it["id"], {"type": "agent_silent_change", "at": iso(at),
+                                 "path": sorted(set(turn) & set(evidence_paths(it)))[0]})
+    out = None
+    if turn and nudge_allowed(st, cfg, at):
+        if silent:
+            it = silent[0]
+            files = ", ".join(sorted(set(turn) & set(evidence_paths(it))))
+            st["last_nudge_at"] = iso(at)
+            out = block(f"agentropy-guard: this turn changed {it['title']} ({files}) without saying so. Tell the "
+                        f"user in one line, then run `{GUARD} told {it['id']} --level mentioned`.")
+        else:
+            rows = queue(cfg, ledger, a, at, files=turn)
+            top = rows[0] if rows else None
+            if top and top["relevance"] > 1 and top["priority"] >= cfg["thresholds"]["nudge_priority"]:
+                st["last_nudge_at"] = iso(at)
+                st["pending_nudge"] = {"item": top["id"], "session": sid}
+                out = block(f"agentropy-guard: follow the agentropy-guard:educate skill for {top['id']} "
+                            f"({top['title']}): give the user its one-line architecture note.")
+    save_awareness(store, a)
+    return out
+
+
+HOOKS["stop"] = hook_stop
+
+
 # --- main ---
 
 def build_parser():

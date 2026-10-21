@@ -193,7 +193,119 @@ class Process(Hooks):
                             ("SessionEnd", "session-end")):
             self.assertEqual(hooks[event][0]["hooks"][0]["command"],
                              f'bash "${{CLAUDE_PLUGIN_ROOT}}/hooks/run.sh" {name}')
-            self.assertIn(name, g.HOOKS if name != "stop" else {"stop": None})
+            self.assertIn(name, g.HOOKS)
+
+
+class Stop(Hooks):
+    def setUp(self):
+        super().setUp()
+        self.cli("scanned")
+        self.add_items(item(evidence=[{"type": "file", "path": "orders/service.py"}],
+                            importance_factors={"blast_radius": 0.9, "cross_cutting": 0.9, "irreversibility": 0.9}))
+        self.transcript = os.path.join(self.home, "t.jsonl")
+        self.say("Done.")
+
+    def say(self, text):
+        with open(self.transcript, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                                                                  "content": [{"type": "text", "text": text}]}}) + "\n")
+
+    def edited(self, *paths, session="s1"):
+        pend = g.load_pending(self.gstore())
+        if pend["session"] != session:
+            pend = {**g.empty_pending(), "session": session, "candidates": pend["candidates"]}
+        pend["edits"] += [{"path": p, "at": NOW} for p in paths]
+        g.save_pending(self.gstore(), pend)
+
+    def candidate(self):
+        pend = g.load_pending(self.gstore())
+        found = g.candidate("boundary-drift", "medium", "x", ["orders/x.py"], ["orders", "billing"],
+                            "boundary-drift|orders>billing")
+        pend["candidates"].append({**found, "reviewed": False, "found_at": NOW})
+        g.save_pending(self.gstore(), pend)
+
+    def stop(self, active=False, session="s1"):
+        return g.hook_stop(self.event(session_id=session, transcript_path=self.transcript, stop_hook_active=active))
+
+    def reason(self, out):
+        return out["reason"] if out else ""
+
+    def test_an_active_stop_hook_never_blocks(self):
+        self.edited("orders/service.py")
+        self.candidate()
+        self.assertIsNone(self.stop(active=True))
+
+    def test_without_a_store_it_does_nothing(self):
+        shutil.rmtree(self.store)
+        self.assertIsNone(self.stop())
+
+    def test_a_silent_change_is_raised(self):
+        self.edited("orders/service.py")
+        out = self.stop()
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("without saying so", out["reason"])
+        self.assertIn("told ki_0001 --level mentioned", out["reason"])
+        self.assertEqual([s["type"] for s in self.aware()["items"]["ki_0001"]["exposure_signals"]],
+                         ["agent_silent_change"])
+
+    def test_a_change_the_reply_mentions_gets_a_nudge_instead(self):
+        self.say("I updated orders/service.py.")
+        self.edited("orders/service.py")
+        self.assertIn("educate skill for ki_0001", self.reason(self.stop()))
+        self.assertEqual(self.aware()["state"]["pending_nudge"], {"item": "ki_0001", "session": "s1"})
+
+    def test_an_unreadable_or_garbled_transcript_skips_the_silent_check(self):
+        self.transcript = os.path.join(self.home, "missing.jsonl")
+        self.edited("orders/service.py")
+        self.assertNotIn("without saying so", self.reason(self.stop()))
+        self.transcript = os.path.join(self.home, "garbled.jsonl")
+        with open(self.transcript, "w", encoding="utf-8") as fh:
+            fh.write("{not json\n[1, 2]\n")
+        self.at(LATER)
+        self.edited("orders/service.py")
+        self.assertNotIn("without saying so", self.reason(self.stop()))
+
+    def test_one_nudge_a_day(self):
+        self.say("I updated orders/service.py.")
+        self.edited("orders/service.py")
+        self.assertTrue(self.stop())
+        self.edited("orders/service.py")
+        self.assertIsNone(self.stop())
+        self.at(LATER)
+        self.edited("orders/service.py")
+        self.assertTrue(self.stop())
+
+    def test_two_dismissals_double_the_gap(self):
+        a = self.aware()
+        a["state"].update(dismissals=2, last_nudge_at=NOW)
+        g.save_awareness(self.gstore(), a)
+        self.say("I updated orders/service.py.")
+        self.at(LATER)
+        self.edited("orders/service.py")
+        self.assertIsNone(self.stop())
+        self.at("2026-10-22T12:00:00Z")
+        self.edited("orders/service.py")
+        self.assertTrue(self.stop())
+
+    def test_an_earlier_turns_edits_are_not_counted_again(self):
+        self.say("I updated orders/service.py.")
+        self.edited("orders/service.py")
+        self.stop()
+        self.at(LATER)
+        self.assertIsNone(self.stop())
+
+    def test_candidates_go_to_the_reviewer_once(self):
+        self.candidate()
+        r = self.reason(self.stop())
+        self.assertIn("agentropy-guard:erosion-reviewer", r)
+        self.assertIn("warned --session s1", r)
+        self.assertNotIn("erosion-reviewer", self.reason(self.stop()))
+
+    def test_after_a_warning_the_session_is_not_warned_again(self):
+        self.cli("warned", "--session", "s1")
+        self.candidate()
+        self.assertIn("Do not warn the user now", self.reason(self.stop()))
 
 
 if __name__ == "__main__":
