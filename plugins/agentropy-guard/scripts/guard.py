@@ -927,6 +927,360 @@ def cmd_graph(args):
     return 0
 
 
+# --- erosion detectors ---
+
+RANK = {s: k for k, s in enumerate(SEVERITIES)}
+ADAPTER_RE = re.compile(r"adapter|mapper|translator|converter|bridge|sync", re.I)
+TYPE_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:(?:public|internal|private|protected|abstract|"
+                     r"sealed|final|static|partial|data|pub(?:\([^)]*\))?)[ \t]+)*(?:class|interface|struct|enum|"
+                     r"record|trait)[ \t]+([A-Z][A-Za-z0-9_]*)", re.M)
+TS_TYPE_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?type[ \t]+([A-Z][A-Za-z0-9_]*)[ \t]*=", re.M)
+GO_TYPE_RE = re.compile(r"^[ \t]*type[ \t]+([A-Z][A-Za-z0-9_]*)[ \t]+(?:struct|interface)\b", re.M)
+GENERIC_TYPES = {"Config", "Options", "Props", "State", "Error", "Errors", "Result", "Response", "Request", "Context",
+                 "Base", "Item", "Data", "Type", "Types", "Settings", "Params", "Args", "Handler", "Service", "Client",
+                 "Server", "Main", "Model", "Models", "Utils", "Helper", "Helpers", "Manager", "Event", "Events"}
+PRIVATE_PART = re.compile(r"^(?:internal|private|_private|impl|_[A-Za-z0-9]\w*)$")
+
+
+def candidate(signal, severity, description, paths, components, key):
+    return {"signal": signal, "severity": severity, "description": description,
+            "evidence": [{"type": "file", "path": p} for p in sorted(set(paths))], "components": list(components),
+            "key": key}
+
+
+def enabled(cfg, name):
+    return cfg["detectors"].get(name, True)
+
+
+def under(path, dirs):
+    p = norm(path)
+    return any(p == d.strip("/") or p.startswith(d.strip("/") + "/") for d in dirs)
+
+
+def adapter_pairs(path, text, cfg, names):
+    own = component_of(path, cfg)
+    if own is None or not ADAPTER_RE.search(os.path.basename(path)):
+        return set()
+    return {tuple(sorted((own, t))) for t in targets(path, text, cfg, names)}
+
+
+def detect_adapters(store, cfg, path, text, names, files):
+    out = []
+    for pair in sorted(adapter_pairs(path, text, cfg, names)):
+        peers = [f for f in files if f != path and ext(f) in EXT_LANG and ADAPTER_RE.search(os.path.basename(f))
+                 and pair in adapter_pairs(f, read_source(store, f) or "", cfg, names)]
+        n = 1 + len(peers)
+        out.append(candidate("adapter-proliferation", SEVERITIES[min(n, 3) - 1],
+                             f"{n} adapter file{'s' if n > 1 else ''} map between {pair[0]} and {pair[1]}",
+                             [path, *peers], pair, f"adapter-proliferation|{pair[0]},{pair[1]}"))
+    return out
+
+
+def model_name(name, component):
+    c = re.sub(r"[^a-z0-9]", "", component.lower())
+    low = name.lower()
+    if c and low.startswith(c) and len(name) > len(c):
+        return name[len(c):]
+    if c and low.endswith(c) and len(name) > len(c):
+        return name[:-len(c)]
+    return name
+
+
+def defined_types(path, text):
+    found = TYPE_RE.findall(text) + GO_TYPE_RE.findall(text)
+    if EXT_LANG.get(ext(path)) == "js":
+        found += TS_TYPE_RE.findall(text)
+    return {n for n in found if len(n) >= 4 and n not in GENERIC_TYPES and not n.startswith("Test")}
+
+
+def files_mentioning(store, words):
+    """Files containing any of the words, by git grep; None when git cannot answer (then scan every file)."""
+    try:
+        out = subprocess.run(["git", "-C", store.root, "grep", "-l", "-I", "--untracked", "-E",
+                              "|".join(re.escape(w) for w in words)], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode == 1:
+        return []
+    return [norm(p) for p in out.stdout.splitlines() if p] if out.returncode == 0 else None
+
+
+def detect_duplicates(store, cfg, path, text, files):
+    own = component_of(path, cfg)
+    if own is None:
+        return []
+    mine = {m for m in (model_name(n, own) for n in defined_types(path, text)) if len(m) >= 4
+            and m not in GENERIC_TYPES}
+    if not mine:
+        return []
+    found = {}
+    pool = files_mentioning(store, sorted(mine))
+    for f in files if pool is None else pool:
+        comp = component_of(f, cfg)
+        if f == path or ext(f) not in EXT_LANG or comp is None or comp == own:
+            continue
+        for n in defined_types(f, read_source(store, f) or ""):
+            if model_name(n, comp) in mine:
+                found.setdefault(model_name(n, comp), []).append((f, comp))
+    out = []
+    for m, hits in sorted(found.items()):
+        comps = sorted({own} | {c for _, c in hits})
+        out.append(candidate("duplicate-model", "medium", f"{m} is defined separately in {', '.join(comps)}",
+                             [path] + [f for f, _ in hits], comps, f"duplicate-model|{m}|{','.join(comps)}"))
+    return out
+
+
+def detect_new_edges(store, cfg, path, text, names):
+    own = component_of(path, cfg)
+    if own is None:
+        return []
+    before = git(store.root, "show", f"HEAD:{path}") or ""
+    allowed = {tuple(e) for e in cfg["allowed_edges"]}
+    new = targets(path, text, cfg, names) - targets(path, before, cfg, names)
+    return [candidate("point-to-point", "low", f"{path} now imports {t} directly", [path], [own, t],
+                      f"point-to-point|{own}>{t}") for t in sorted(new) if (own, t) not in allowed]
+
+
+def detect_drift(cfg, path, text, names):
+    own, out = component_of(path, cfg), {}
+    for m in imports_of(path, text):
+        t = import_target(m, path, cfg, names)
+        if own and t and t != own and any(PRIVATE_PART.match(s) for s in re.split(r"[./:\\]+", m) if s):
+            out.setdefault(f"boundary-drift|{own}>{t}", candidate(
+                "boundary-drift", "medium", f"{path} imports {m}, inside {t}'s internals", [path], [own, t],
+                f"boundary-drift|{own}>{t}"))
+    return list(out.values())
+
+
+def detect_file(store, cfg, path, names=None, files=None):
+    """Candidates from one changed file; [] for unknown types and for missing, huge or binary files."""
+    path = norm(path)
+    text = read_source(store, path) if ext(path) in EXT_LANG else None
+    if text is None:
+        return []
+    files = files if files is not None else tracked_files(store)
+    names = names if names is not None else component_names(cfg, files)
+    out = []
+    if enabled(cfg, "adapter-proliferation"):
+        out += detect_adapters(store, cfg, path, text, names, files)
+    if enabled(cfg, "duplicate-model"):
+        out += detect_duplicates(store, cfg, path, text, files)
+    if enabled(cfg, "point-to-point"):
+        out += detect_new_edges(store, cfg, path, text, names)
+    if enabled(cfg, "boundary-drift"):
+        out += detect_drift(cfg, path, text, names)
+    return out
+
+
+def turn_candidates(store, cfg, paths, ledger, names=None):
+    """Candidates from the set of files one turn changed."""
+    paths = sorted({norm(p) for p in paths})
+    if not paths:
+        return []
+    out = []
+    names = names if names is not None else component_names(cfg, tracked_files(store))
+    comps = {c for c in (component_of(p, cfg) for p in paths) if c}
+    if enabled(cfg, "private-contract") and len(comps) >= 2 and not any(under(p, cfg["contract_dirs"]) for p in paths):
+        crossing = [p for p in paths if targets(p, read_source(store, p) or "", cfg, names) & comps]
+        if crossing:
+            cs = sorted(comps)
+            dirs = ", ".join(cfg["contract_dirs"])
+            out.append(candidate("private-contract", "medium",
+                                 f"this change crosses {', '.join(cs)} and updates no file under {dirs}",
+                                 crossing, cs, f"private-contract|{','.join(cs)}"))
+    if enabled(cfg, "missing-decision-record") and not any(under(p, cfg["adr_dirs"]) for p in paths):
+        for it in ledger["items"]:
+            hit = sorted(set(paths) & set(evidence_paths(it)))
+            if it["status"] == "active" and it["importance"] >= cfg["thresholds"]["silent_importance"] and hit:
+                out.append(candidate("missing-decision-record", "low",
+                                     f"{it['title']} changed with no decision record under "
+                                     f"{', '.join(cfg['adr_dirs'])}", hit, it["components"],
+                                     f"missing-decision-record|{it['id']}"))
+    return out
+
+
+def history_candidates(store, cfg):
+    if not enabled(cfg, "contract-churn"):
+        return []
+    dirs = [d for d in cfg["contract_dirs"] if os.path.isdir(os.path.join(store.root, d))]
+    out = git(store.root, "log", "--since=30.days", "--format=%H", "--", *dirs) if dirs else None
+    n = len(set(out.split())) if out else 0
+    if n < 5:
+        return []
+    files = sorted(set((git(store.root, "log", "--since=30.days", "--name-only", "--format=", "--", *dirs)
+                        or "").split()))
+    return [candidate("contract-churn", "high" if n >= 10 else "medium",
+                      f"{n} commits changed contract files in the last 30 days", files[:10] or dirs, [],
+                      "contract-churn")]
+
+
+# --- findings and candidates ---
+
+def load_findings(store):
+    return read_json(store.path(FINDINGS), empty_findings())
+
+
+def save_findings(store, findings):
+    findings["findings"].sort(key=lambda x: x["id"])
+    write_json(store.path(FINDINGS), findings)
+
+
+def load_pending(store):
+    pend = read_json(store.path(PENDING), empty_pending())
+    for key, value in empty_pending().items():
+        pend.setdefault(key, value)
+    return pend
+
+
+def save_pending(store, pend):
+    write_json(store.path(PENDING), pend)
+
+
+def suppressed(c, findings):
+    """A candidate already covered: an open finding with the same key, or one the person accepted or rejected, at
+    the same or a higher severity."""
+    return any(f["key"] == c["key"] and f["user_decision"] in (None, "accepted-risk", "false-positive")
+               and RANK[c["severity"]] <= RANK[f["severity"]] for f in findings["findings"])
+
+
+def upsert_finding(findings, data, at):
+    if not isinstance(data, dict):
+        raise ValueError("a finding is a JSON object")
+    data = dict(data)
+    data.setdefault("key", f"{data.get('signal')}|{','.join(sorted(data.get('components') or []))}")
+    if data.get("severity") not in RANK:
+        raise ValueError(f"`severity` is one of {', '.join(SEVERITIES)}")
+    for f in findings["findings"]:
+        if f["key"] != data["key"]:
+            continue
+        if f["user_decision"] is None:
+            merged = {**f, **{k: v for k, v in data.items() if k not in ("id", "detected_at", "user_decision")}}
+            merged["severity"] = max(f["severity"], data["severity"], key=RANK.get)
+            merged["evidence"] = f["evidence"] + [e for e in data.get("evidence", []) if e not in f["evidence"]]
+            errors = finding_errors(merged)
+            if errors:
+                raise ValueError(f"{f['id']}: " + "; ".join(errors))
+            return merged, "updated"
+        if f["user_decision"] in ("accepted-risk", "false-positive") and RANK[data["severity"]] <= RANK[f["severity"]]:
+            return f, "already decided"
+    new = {"cost": "", **data, "id": next_id("ef", [f["id"] for f in findings["findings"]]),
+           "detected_at": iso(at), "user_decision": None}
+    errors = finding_errors(new)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return new, "new"
+
+
+def add_candidates(pend, cands, findings, at):
+    """Queue candidates for review, skipping known ones; a known key returns only at a higher severity."""
+    added = 0
+    for c in cands:
+        old = next((x for x in pend["candidates"] if x["key"] == c["key"]), None)
+        if suppressed(c, findings) or (old is not None and RANK[c["severity"]] <= RANK[old["severity"]]):
+            continue
+        pend["candidates"] = [x for x in pend["candidates"] if x["key"] != c["key"]]
+        pend["candidates"].append({**c, "reviewed": False, "found_at": iso(at)})
+        added += 1
+    return added
+
+
+@command("signals", arg("--paths", nargs="*", default=[]), arg("--since", help="also every file changed since REV"),
+         arg("--history", action="store_true", help="also signals from git history (contract churn)"))
+def cmd_signals(args):
+    store = store_of(args)
+    cfg, ledger, files = config(store), load_ledger(store), tracked_files(store)
+    names = component_names(cfg, files)
+    paths = [norm(p) for p in args.paths]
+    if args.since:
+        out = git(store.root, "diff", "--name-only", f"{args.since}..HEAD")
+        if out is None:
+            sys.exit(f"git cannot diff {args.since}..HEAD")
+        paths += out.split()
+    found = []
+    for p in sorted(set(paths)):
+        found += detect_file(store, cfg, p, names, files)
+    found += turn_candidates(store, cfg, paths, ledger, names)
+    if args.history:
+        found += history_candidates(store, cfg)
+    print(json.dumps(found, indent=2, sort_keys=True))
+    return 0
+
+
+@command("finding add", arg("--json", dest="source", default="-",
+                            help="a file holding a finding or a list of findings, or - for stdin"))
+def cmd_finding_add(args):
+    store = store_of(args)
+    findings, at = load_findings(store), now()
+    done, errors = [], []
+    for data in read_input(args.source):
+        try:
+            f, status = upsert_finding(findings, data, at)
+        except ValueError as e:
+            errors.append(str(e))
+            continue
+        findings["findings"] = [x for x in findings["findings"] if x["id"] != f["id"]] + [f]
+        done.append((f, status))
+    if errors:
+        sys.exit("\n".join(errors))
+    save_findings(store, findings)
+    for f, status in done:
+        print(f"{f['id']} {status}: {f['description']}")
+    return 0
+
+
+@command("finding list", arg("--status", choices=("open", "decided")), arg("--json", action="store_true"))
+def cmd_finding_list(args):
+    rows = [f for f in load_findings(store_of(args))["findings"]
+            if not args.status or (f["user_decision"] is None) == (args.status == "open")]
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+    for f in rows:
+        print(f"{f['id']} {f['severity']} {f['signal']}: {f['description']}"
+              + (f" [{f['user_decision']}]" if f["user_decision"] else ""))
+    if not rows:
+        print("no findings")
+    return 0
+
+
+@command("finding decide", arg("id"), arg("--decision", required=True, choices=DECISIONS))
+def cmd_finding_decide(args):
+    store = store_of(args)
+    findings = load_findings(store)
+    f = next((x for x in findings["findings"] if x["id"] == args.id), None)
+    if f is None:
+        sys.exit(f"no finding {args.id}")
+    f["user_decision"], f["decided_at"] = args.decision, iso(now())
+    save_findings(store, findings)
+    print(f"{f['id']}: {args.decision}")
+    return 0
+
+
+@command("candidates", arg("--clear", action="store_true", help="mark every candidate reviewed"))
+def cmd_candidates(args):
+    store = store_of(args)
+    pend = load_pending(store)
+    if args.clear:
+        n = sum(not c.get("reviewed") for c in pend["candidates"])
+        for c in pend["candidates"]:
+            c["reviewed"] = True
+        save_pending(store, pend)
+        print(f"{n} candidate{'s' if n != 1 else ''} marked reviewed")
+        return 0
+    print(json.dumps([c for c in pend["candidates"] if not c.get("reviewed")], indent=2, sort_keys=True))
+    return 0
+
+
+@command("warned", arg("--session", required=True))
+def cmd_warned(args):
+    store = store_of(args)
+    a = load_awareness(store)
+    a["state"]["high_shown_session"] = args.session
+    save_awareness(store, a)
+    print(f"high-severity warning used for session {args.session}")
+    return 0
+
+
 # --- main ---
 
 def build_parser():

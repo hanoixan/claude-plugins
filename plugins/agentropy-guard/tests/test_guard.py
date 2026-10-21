@@ -406,5 +406,143 @@ class Graph(Case):
         self.assertIsNone(g.read_source(self.gstore(), "orders/missing.py"))
 
 
+def finding(**over):
+    base = {"signal": "adapter-proliferation", "severity": "medium",
+            "description": "Two adapters between orders and billing.",
+            "evidence": [{"type": "file", "path": "orders/customer_adapter.py"}], "components": ["billing", "orders"],
+            "conway_mechanism": 2, "suggested_countermove": "Define a shared Customer contract.", "cost": "1-2 hours"}
+    base.update(over)
+    return base
+
+
+class Erosion(Case):
+    def setUp(self):
+        super().setUp()
+        self.write("billing/models.py", "class Invoice:\n    pass\n")
+        self.write("billing/api.py", "def charge():\n    pass\n")
+        self.cli("init")
+
+    def detect(self, path):
+        return g.detect_file(self.gstore(), g.config(self.gstore()), path)
+
+    def signals(self, path):
+        return [(c["signal"], c["severity"]) for c in self.detect(path)]
+
+    def test_adapters_between_the_same_pair_escalate(self):
+        self.write("orders/customer_adapter.py", "from billing.models import Invoice\n")
+        self.assertIn(("adapter-proliferation", "low"), self.signals("orders/customer_adapter.py"))
+        self.write("billing/sync_orders.py", "from orders.models import Order\n")
+        self.assertIn(("adapter-proliferation", "medium"), self.signals("orders/customer_adapter.py"))
+        self.write("orders/billing_mapper.py", "import billing.api\n")
+        self.assertIn(("adapter-proliferation", "high"), self.signals("orders/customer_adapter.py"))
+
+    def test_an_ordinary_cross_import_is_not_an_adapter(self):
+        self.write("orders/service.py", "from billing.models import Invoice\n")
+        self.assertNotIn("adapter-proliferation", [s for s, _ in self.signals("orders/service.py")])
+
+    def test_a_model_defined_twice_is_found(self):
+        self.write("orders/models.py", "class Customer:\n    pass\nclass Config:\n    pass\n")
+        self.write("billing/types.ts", "export interface BillingCustomer {\n  id: string\n}\nexport class Config {}\n")
+        dup = [c for c in self.detect("orders/models.py") if c["signal"] == "duplicate-model"]
+        self.assertEqual([(c["description"], c["components"]) for c in dup],
+                         [("Customer is defined separately in billing, orders", ["billing", "orders"])])
+
+    def test_a_new_import_into_another_component(self):
+        self.git_init()
+        self.write("orders/service.py", "import json\n")
+        self.commit()
+        self.write("orders/service.py", "import json\nfrom billing import api\n")
+        self.assertIn(("point-to-point", "low"), self.signals("orders/service.py"))
+        self.commit()
+        self.assertNotIn("point-to-point", [s for s, _ in self.signals("orders/service.py")])
+
+    def test_an_allowed_edge_is_not_flagged(self):
+        self.write(".agentropy-guard/config.json", json.dumps({"allowed_edges": [["orders", "billing"]]}))
+        self.write("orders/service.py", "from billing import api\n")
+        self.assertNotIn("point-to-point", [s for s, _ in self.signals("orders/service.py")])
+
+    def test_reaching_into_internals(self):
+        self.write("orders/x.py", "from billing.internal.db import conn\n")
+        self.assertIn(("boundary-drift", "medium"), self.signals("orders/x.py"))
+
+    def test_a_change_across_components_without_a_contract(self):
+        self.write("orders/service.py", "from billing import api\n")
+        store, cfg = self.gstore(), g.config(self.gstore())
+        ledger = g.load_ledger(store)
+        found = g.turn_candidates(store, cfg, ["orders/service.py", "billing/api.py"], ledger)
+        self.assertEqual([(c["signal"], c["severity"]) for c in found], [("private-contract", "medium")])
+        self.write("contracts/customer.json", "{}")
+        self.assertEqual(g.turn_candidates(store, cfg, ["orders/service.py", "billing/api.py",
+                                                        "contracts/customer.json"], ledger), [])
+
+    def test_an_important_change_without_a_decision_record(self):
+        self.add_items(item(evidence=[{"type": "file", "path": "orders/service.py"}],
+                            importance_factors={"blast_radius": 0.9, "cross_cutting": 0.9, "irreversibility": 0.9}))
+        store, cfg = self.gstore(), g.config(self.gstore())
+        ledger = g.load_ledger(store)
+        found = g.turn_candidates(store, cfg, ["orders/service.py"], ledger)
+        self.assertEqual([(c["signal"], c["key"]) for c in found],
+                         [("missing-decision-record", "missing-decision-record|ki_0001")])
+        self.assertEqual(g.turn_candidates(store, cfg, ["orders/service.py", "docs/adr/0001-customer.md"], ledger), [])
+
+    def test_contract_churn_from_history(self):
+        self.git_init()
+        for k in range(5):
+            self.write("contracts/customer.json", json.dumps({"v": k}))
+            self.commit(f"c{k}")
+        found = g.history_candidates(self.gstore(), g.config(self.gstore()))
+        self.assertEqual([(c["signal"], c["severity"]) for c in found], [("contract-churn", "medium")])
+
+    def test_huge_and_binary_files_are_skipped(self):
+        self.write("orders/big_adapter.py", "from billing import api\n" + "x = 1\n" * 50000)
+        self.assertEqual(self.detect("orders/big_adapter.py"), [])
+
+    def test_a_disabled_detector_does_not_run(self):
+        self.write(".agentropy-guard/config.json", json.dumps({"detectors": {"boundary-drift": False}}))
+        self.write("orders/x.py", "from billing.internal.db import conn\n")
+        self.assertNotIn("boundary-drift", [s for s, _ in self.signals("orders/x.py")])
+
+    def test_findings_merge_and_respect_decisions(self):
+        add = lambda f: self.cli("finding", "add", "--json", "-", stdin=json.dumps(f)).stdout
+        self.assertIn("ef_0001 new", add(finding()))
+        self.assertIn("ef_0001 updated", add(finding(evidence=[{"type": "file", "path": "billing/sync_orders.py"}])))
+        data = g.load_findings(self.gstore())["findings"]
+        self.assertEqual(len(data[0]["evidence"]), 2)
+        self.cli("finding", "decide", "ef_0001", "--decision", "false-positive")
+        self.assertIn("ef_0001 already decided", add(finding()))
+        self.assertIn("ef_0002 new", add(finding(severity="high")))
+        self.assertIn("ef_0002", self.cli("finding", "list", "--status", "open").stdout)
+        self.assertNotIn("ef_0002", self.cli("finding", "list", "--status", "decided").stdout)
+        self.cli("parse")
+
+    def test_an_invalid_finding_writes_nothing(self):
+        result = self.cli("finding", "add", "--json", "-", stdin=json.dumps(finding(conway_mechanism=9)), ok=False)
+        self.assertIn("`conway_mechanism`", result.stderr)
+        self.assertEqual(g.load_findings(self.gstore())["findings"], [])
+
+    def test_candidates_skip_known_findings_and_can_be_cleared(self):
+        self.cli("finding", "add", "--json", "-", stdin=json.dumps(finding()))
+        pend, findings = g.load_pending(self.gstore()), g.load_findings(self.gstore())
+        same = g.candidate("adapter-proliferation", "medium", "x", ["orders/a_adapter.py"], ["billing", "orders"],
+                           "adapter-proliferation|billing,orders")
+        other = g.candidate("boundary-drift", "medium", "y", ["orders/x.py"], ["orders", "billing"],
+                            "boundary-drift|orders>billing")
+        self.assertEqual(g.add_candidates(pend, [same, other], findings, g.now()), 1)
+        g.save_pending(self.gstore(), pend)
+        self.assertEqual([c["key"] for c in json.loads(self.cli("candidates").stdout)],
+                         ["boundary-drift|orders>billing"])
+        self.cli("candidates", "--clear")
+        self.assertEqual(json.loads(self.cli("candidates").stdout), [])
+
+    def test_signals_prints_candidates(self):
+        self.write("orders/x.py", "from billing.internal.db import conn\n")
+        data = json.loads(self.cli("signals", "--paths", "orders/x.py").stdout)
+        self.assertIn("boundary-drift", [c["signal"] for c in data])
+
+    def test_warned_marks_the_session(self):
+        self.cli("warned", "--session", "s1")
+        self.assertEqual(g.load_awareness(self.gstore())["state"]["high_shown_session"], "s1")
+
+
 if __name__ == "__main__":
     unittest.main()
