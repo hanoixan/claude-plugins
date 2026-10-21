@@ -304,5 +304,64 @@ class Awareness(Case):
         self.assertEqual(self.aware()["state"]["dismissals"], 0)
 
 
+class Components(Case):
+    def test_the_default_component_is_the_top_folder(self):
+        cfg = g.merged_config({})
+        for path, want in (("billing/x.py", "billing"), ("src/orders/a.ts", "orders"), ("./src/orders/a.ts", "orders"),
+                           ("src/a.ts", None), ("README.md", None), ("docs/adr/1.md", None), (".github/ci.yml", None),
+                           ("packages/web/src/app.tsx", "web")):
+            self.assertEqual(g.component_of(path, cfg), want, path)
+
+    def test_a_mapping_replaces_the_default(self):
+        cfg = g.merged_config({"components": {"pay": ["services/payments/**"]}})
+        self.assertEqual(g.component_of("services/payments/a.py", cfg), "pay")
+        self.assertIsNone(g.component_of("billing/x.py", cfg))
+
+
+class Queue(Case):
+    def setUp(self):
+        super().setUp()
+        self.cli("init")
+        self.add_items(item(),
+                       item(title="Payments retry in the queue worker", origin="discovered"),
+                       item(title="Billing owns invoices", origin="human-decision"),
+                       item(title="Search index rebuilds nightly", components=["search"],
+                            evidence=[{"type": "file", "path": "search/index.py"}],
+                            importance_factors={"blast_radius": 0.5, "cross_cutting": 0.5, "irreversibility": 0.5}))
+
+    def ids(self, *args, now=NOW):
+        return [r["id"] for r in json.loads(self.cli("queue", "--json", *args, now=now).stdout)]
+
+    def test_only_important_probably_unknown_items_are_queued(self):
+        rows = json.loads(self.cli("queue", "--json").stdout)
+        self.assertEqual([(r["id"], r["priority"]) for r in rows], [("ki_0001", 0.483), ("ki_0004", 0.35)])
+
+    def test_relevance_reorders(self):
+        self.assertEqual(self.ids("--files", "search/index.py"), ["ki_0004", "ki_0001"])
+        self.assertEqual(self.ids("--files", "search/other.py"), ["ki_0004", "ki_0001"])
+        self.assertEqual(self.ids("--components", "billing"), ["ki_0001", "ki_0004"])
+
+    def test_a_disclosed_item_waits_until_it_changes(self):
+        self.cli("told", "ki_0001", "--level", "mentioned")
+        self.assertEqual(self.ids(), ["ki_0004"])
+        later = "2026-10-21T12:00:00Z"
+        self.add_items({"id": "ki_0001", "summary": "Now three schemas."}, now=later)
+        self.assertEqual(self.ids(now=later), ["ki_0001", "ki_0004"])
+
+    def test_a_snoozed_item_returns_after_the_snooze(self):
+        self.cli("respond", "ki_0001", "--response", "snoozed")
+        self.assertEqual(self.ids(), ["ki_0004"])
+        self.assertEqual(self.ids(now="2026-10-28T12:00:00Z"), ["ki_0001", "ki_0004"])
+
+    def test_superseded_items_are_left_out(self):
+        self.cli("item", "supersede", "ki_0001", "--by", "ki_0004")
+        self.assertEqual(self.ids(), ["ki_0004"])
+
+    def test_the_text_view_explains_the_score(self):
+        out = self.cli("queue", "--limit", "1").stdout
+        self.assertIn("ki_0001 priority 0.48 (importance 0.69 x unknown 0.70 x relevance 1)", out)
+        self.assertNotIn("ki_0004", out)
+
+
 if __name__ == "__main__":
     unittest.main()

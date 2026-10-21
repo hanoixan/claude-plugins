@@ -713,6 +713,80 @@ def cmd_respond(args):
     return 0
 
 
+# --- components and the queue ---
+
+CONTAINERS = ("src", "packages", "services", "apps", "lib", "libs", "modules", "crates")
+NOT_COMPONENTS = ("docs", "doc", "test", "tests", "node_modules", "vendor", "dist", "build", "target", "out")
+
+
+def norm(path):
+    p = str(path).replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def component_of(path, cfg):
+    """The component a repository path belongs to: the config's mapping, else its top folder (or the one under a
+    container folder such as src/), else None."""
+    p = norm(path)
+    for name, globs in cfg["components"].items():
+        if any(fnmatch.fnmatchcase(p, glob) for glob in globs):
+            return name
+    if cfg["components"]:
+        return None
+    parts = p.split("/")
+    if len(parts) < 2 or parts[0].startswith(".") or parts[0] in NOT_COMPONENTS:
+        return None
+    if parts[0] in CONTAINERS:
+        return parts[1] if len(parts) > 2 else None
+    return parts[0]
+
+
+def queue(cfg, ledger, a, at, files=(), components=()):
+    """Active items worth raising, most worth raising first: important, probably unknown, not yet told (or changed
+    since), not snoozed; relevance 1.5 when they touch the given files or components."""
+    files = {norm(f) for f in files}
+    comps = set(components) | {c for c in (component_of(f, cfg) for f in files) if c}
+    th, rows = cfg["thresholds"], []
+    for it in ledger["items"]:
+        if it["status"] != "active":
+            continue
+        rec = a["items"].get(it["id"]) or {}
+        if rec.get("snoozed_until") and parse_time(rec["snoozed_until"]) > at:
+            continue
+        told = rec.get("item_version_at_last_disclosure")
+        if rec.get("disclosures") and told and parse_time(it["updated_at"]) <= parse_time(told):
+            continue
+        unknown = unknown_likelihood(it, rec, cfg, at)
+        if it["importance"] < th["importance"] or unknown < th["unknown"]:
+            continue
+        touched = bool(files & set(evidence_paths(it))) or bool(comps & set(it["components"]))
+        relevance = 1.5 if touched else 1.0
+        rows.append({"id": it["id"], "title": it["title"], "importance": it["importance"], "unknown": unknown,
+                     "relevance": relevance, "priority": round(it["importance"] * unknown * relevance, 4),
+                     "components": it["components"]})
+    rows.sort(key=lambda r: (-r["priority"], -r["importance"], r["id"]))
+    return rows
+
+
+@command("queue", arg("--limit", type=int, default=5), arg("--files", nargs="*", default=[]),
+         arg("--components", nargs="*", default=[]), arg("--json", action="store_true"))
+def cmd_queue(args):
+    store = store_of(args)
+    rows = queue(config(store), load_ledger(store), load_awareness(store), now(), args.files,
+                 args.components)[:args.limit]
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+    for r in rows:
+        print(f"{r['id']} priority {r['priority']:.2f} (importance {r['importance']:.2f} x unknown "
+              f"{r['unknown']:.2f} x relevance {r['relevance']:g}) {r['title']}")
+    if not rows:
+        print("nothing to raise")
+    return 0
+
+
 # --- main ---
 
 def build_parser():
