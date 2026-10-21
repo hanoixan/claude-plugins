@@ -1281,6 +1281,161 @@ def cmd_warned(args):
     return 0
 
 
+# --- staleness and the person's own edits ---
+
+CLAUDE_TRAILER = re.compile(r"^co-authored-by:\s*claude", re.I | re.M)
+STOPWORDS = {"about", "after", "before", "between", "could", "every", "their", "there", "these", "those", "which",
+             "where", "while", "would", "should", "other", "using", "without"}
+
+
+def stale(store, cfg, ledger, at):
+    last = ledger.get("last_scan")
+    if not last:
+        return True, "no scan yet"
+    days = (at - parse_time(last["at"])).total_seconds() / 86400
+    if days >= cfg["rates"]["stale_days"]:
+        return True, f"{int(days)} days since the last scan"
+    if last.get("commit"):
+        out = git(store.root, "rev-list", "--count", f"{last['commit']}..HEAD")
+        if out and out.strip().isdigit() and int(out.strip()) >= cfg["rates"]["stale_commits"]:
+            return True, f"{out.strip()} commits since the last scan"
+    return False, ""
+
+
+def user_edits(store, since, agent_paths):
+    """Files the person changed: their own commits since `since` (no Claude co-author trailer), and uncommitted
+    changes the agent did not make."""
+    paths = set()
+    user = (git(store.root, "config", "user.name") or "").strip()
+    if user:
+        for sha in (git(store.root, "log", f"--since={since}", f"--author={user}", "--format=%H") or "").split()[:50]:
+            if not CLAUDE_TRAILER.search(git(store.root, "show", "-s", "--format=%B", sha) or ""):
+                paths |= set((git(store.root, "show", "--name-only", "--format=", sha) or "").split())
+    paths |= set((git(store.root, "diff", "--name-only", "HEAD") or "").split()) - set(agent_paths)
+    return sorted(norm(p) for p in paths)
+
+
+def title_words(title):
+    return {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) >= 5} - STOPWORDS
+
+
+@command("stale")
+def cmd_stale(args):
+    store = store_of(args)
+    is_stale, why = stale(store, config(store), load_ledger(store), now())
+    print(f"stale: {why}" if is_stale else "fresh")
+    return 0
+
+
+# --- hooks ---
+
+def context(event, text):
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+
+
+def hook_store(data):
+    store = store_for(data.get("cwd") or os.getcwd())
+    return store if store.exists else None
+
+
+def hook_session_start(data):
+    store = hook_store(data)
+    if store is None:
+        return None
+    cfg, ledger, findings, a, at = config(store), load_ledger(store), load_findings(store), load_awareness(store), now()
+    st = a["state"]
+    since = st.get("user_edits_checked_at") or iso(at - datetime.timedelta(days=7))
+    for path in user_edits(store, since, [e["path"] for e in load_pending(store)["edits"]]):
+        for it in items_touching(ledger, path=path):
+            add_signal(a, it["id"], {"type": "user_edited_file", "at": iso(at), "path": path})
+    st["user_edits_checked_at"] = iso(at)
+    lines = []
+    top = queue(cfg, ledger, a, at)[:3]
+    if top:
+        lines.append("agentropy-guard: architecture the user probably does not know (context for you; do not raise "
+                     "it unprompted): " + "; ".join(f"{r['id']} {r['title']}" for r in top) + ".")
+    open_low = [f for f in findings["findings"] if f["user_decision"] is None and f["severity"] in ("low", "medium")]
+    if open_low and st.get("findings_summary_on") != today():
+        lines.append("agentropy-guard: in your first reply, list these open architecture findings in a short block, "
+                     "as the agentropy-guard:erosion-check skill says, and record any decision with "
+                     f"`{GUARD} finding decide`: "
+                     + "; ".join(f"{f['id']} ({f['severity']}) {f['description']}" for f in open_low[:5]) + ".")
+        st["findings_summary_on"] = today()
+    is_stale, why = stale(store, cfg, ledger, at)
+    if is_stale and st.get("stale_suggested_on") != today():
+        lines.append(f"agentropy-guard: the architecture ledger is stale ({why}). Suggest once, in a sentence, "
+                     "that the user run /agentropy-guard:scan.")
+        st["stale_suggested_on"] = today()
+    save_awareness(store, a)
+    return context("SessionStart", "\n".join(lines)) if lines else None
+
+
+def hook_prompt(data):
+    store = hook_store(data)
+    if store is None:
+        return None
+    ledger, a, at = load_ledger(store), load_awareness(store), now()
+    words = set(re.findall(r"[a-z0-9_-]+", (data.get("prompt") or "").lower()))
+    for it in (x for x in ledger["items"] if x["status"] == "active"):
+        comps = [c for c in it["components"] if c.lower() in words]
+        hits = title_words(it["title"]) & words
+        if comps or len(hits) >= 2:
+            add_signal(a, it["id"], {"type": "user_prompt_mentioned", "at": iso(at),
+                                     "term": ", ".join(comps or sorted(hits))})
+    out, st = None, a["state"]
+    pending = st.get("pending_nudge")
+    if pending and pending.get("session") == data.get("session_id"):
+        it = next((x for x in ledger["items"] if x["id"] == pending.get("item")), None)
+        if it:
+            out = context("UserPromptSubmit", (
+                f"agentropy-guard: the user may be answering your architecture note on {it['id']} ({it['title']}). "
+                "If so, follow the agentropy-guard:educate skill: yes → the agentropy-guard:arch-report skill; "
+                f"\"I know\" → `{GUARD} respond {it['id']} --response acknowledged`; not now → `--response snoozed`; "
+                "no → `--response dismissed`. If the prompt is about something else, ignore this."))
+        st["pending_nudge"] = None
+    save_awareness(store, a)
+    return out
+
+
+def hook_post_edit(data):
+    store = hook_store(data)
+    tool = data.get("tool_input") or {}
+    raw = tool.get("file_path") or tool.get("notebook_path")
+    if store is None or not raw:
+        return None
+    full = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(data.get("cwd") or store.root, raw))
+    rel = norm(os.path.relpath(full, os.path.realpath(store.root)))
+    if rel.startswith("..") or os.path.isabs(rel) or rel.startswith(STORE + "/") or rel == STORE:
+        return None
+    cfg, findings, pend, at = config(store), load_findings(store), load_pending(store), now()
+    if pend["session"] != data.get("session_id"):
+        pend = {**empty_pending(), "session": data.get("session_id"), "candidates": pend["candidates"]}
+    pend["edits"].append({"path": rel, "at": iso(at)})
+    add_candidates(pend, detect_file(store, cfg, rel), findings, at)
+    save_pending(store, pend)
+    return None
+
+
+def hook_pre_compact(data):
+    store = hook_store(data)
+    if store is not None:
+        save_pending(store, load_pending(store))
+    return None
+
+
+def hook_session_end(data):
+    store = hook_store(data)
+    if store is not None:
+        a = load_awareness(store)
+        a["state"]["session_end_at"] = iso(now())
+        save_awareness(store, a)
+    return None
+
+
+HOOKS = {"session-start": hook_session_start, "prompt": hook_prompt, "post-edit": hook_post_edit,
+         "pre-compact": hook_pre_compact, "session-end": hook_session_end}
+
+
 # --- main ---
 
 def build_parser():
