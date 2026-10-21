@@ -363,5 +363,48 @@ class Queue(Case):
         self.assertNotIn("ki_0004", out)
 
 
+class Graph(Case):
+    def setUp(self):
+        super().setUp()
+        self.write("orders/service.py", "from billing.models import Customer\nimport json\n")
+        self.write("billing/models.py", "class Customer:\n    pass\n")
+        self.write("web/src/app.ts", 'import { x } from "../../orders/api";\nconst y = require(\'billing/client\');\n')
+        self.write("svc/main.go", 'package main\n\nimport (\n\t"fmt"\n\t"example.com/app/billing/pay"\n)\n')
+        self.write("core/lib.rs", "use crate::orders::Order;\n")
+        self.write("docs/readme.md", "billing\n")
+        self.cli("init")
+
+    def test_imports_by_language(self):
+        self.assertEqual(g.imports_of("a.py", "import a.b\nfrom ..c import d\nfrom . import e\n"), ["a.b", "..c", "."])
+        self.assertEqual(g.imports_of("a.ts", 'export { a } from "./x";\nimport "./side";\nawait import("./lazy");\n'),
+                         ["./x", "./side", "./lazy"])
+        self.assertEqual(g.imports_of("A.java", "import static com.acme.billing.Pay.run;\n"),
+                         ["com.acme.billing.Pay.run"])
+        self.assertEqual(g.imports_of("a.cs", "using Acme.Billing;\n"), ["Acme.Billing"])
+        self.assertEqual(g.imports_of("a.c", '#include "billing/pay.h"\n#include <stdio.h>\n'), ["billing/pay.h"])
+        self.assertEqual(g.imports_of("a.md", "import x"), [])
+
+    def test_a_relative_python_import_stays_in_its_component(self):
+        cfg = g.merged_config({})
+        self.assertEqual(g.import_target("..billing.x", "orders/sub/a.py", cfg, {"orders", "billing"}), "orders")
+        self.assertEqual(g.import_target("billing.models", "orders/a.py", cfg, {"orders", "billing"}), "billing")
+
+    def test_the_graph_has_the_cross_component_edges(self):
+        data = json.loads(self.cli("graph", "--json").stdout)
+        self.assertEqual(data["components"], ["billing", "core", "orders", "svc", "web"])
+        self.assertEqual([(e["from"], e["to"], e["count"]) for e in data["edges"]],
+                         [("core", "orders", 1), ("orders", "billing", 1), ("svc", "billing", 1), ("web", "billing", 1),
+                          ("web", "orders", 1)])
+        self.assertIn("orders -> billing (1)", self.cli("graph").stdout)
+
+    def test_large_and_binary_files_are_not_read(self):
+        self.write("orders/big.py", "x = 1\n" * 50000)
+        with open(os.path.join(self.root, "orders", "blob.py"), "wb") as fh:
+            fh.write(b"import billing\0\0")
+        self.assertIsNone(g.read_source(self.gstore(), "orders/big.py"))
+        self.assertIsNone(g.read_source(self.gstore(), "orders/blob.py"))
+        self.assertIsNone(g.read_source(self.gstore(), "orders/missing.py"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -787,6 +787,146 @@ def cmd_queue(args):
     return 0
 
 
+# --- imports and the component graph ---
+
+EXT_LANG = {".py": "py", ".js": "js", ".jsx": "js", ".ts": "js", ".tsx": "js", ".mjs": "js", ".cjs": "js",
+            ".go": "go", ".rs": "rs", ".java": "java", ".kt": "java", ".cs": "cs", ".c": "c", ".h": "c",
+            ".cc": "c", ".cpp": "c", ".hpp": "c", ".cxx": "c"}
+IMPORT_RES = {
+    "py": [re.compile(r"^[ \t]*import[ \t]+([\w.]+)", re.M),
+           re.compile(r"^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import\b", re.M)],
+    "js": [re.compile(r"""^[ \t]*(?:import|export)\s[^'";]*?\bfrom\s+['"]([^'"]+)['"]""", re.M),
+           re.compile(r"""^[ \t]*import\s+['"]([^'"]+)['"]""", re.M),
+           re.compile(r"""\brequire\(\s*['"]([^'"]+)['"]\s*\)"""),
+           re.compile(r"""\bimport\(\s*['"]([^'"]+)['"]\s*\)""")],
+    "rs": [re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([\w:]+)", re.M)],
+    "java": [re.compile(r"^[ \t]*import[ \t]+(?:static[ \t]+)?([\w.]+)", re.M)],
+    "cs": [re.compile(r"^[ \t]*using[ \t]+(?:static[ \t]+)?([\w.]+)[ \t]*;", re.M)],
+    "c": [re.compile(r'^[ \t]*#[ \t]*include[ \t]+"([^"]+)"', re.M)],
+}
+GO_BLOCK = re.compile(r"^[ \t]*import[ \t]*\((.*?)\)", re.M | re.S)
+GO_SINGLE = re.compile(r'^[ \t]*import[ \t]+(?:[\w.]+[ \t]+)?"([^"]+)"', re.M)
+GO_QUOTED = re.compile(r'"([^"]+)"')
+MAX_BYTES = 256 * 1024
+WALK_SKIP = ("node_modules", "vendor", "dist", "build", "target", "out", "__pycache__")
+
+
+def ext(path):
+    return os.path.splitext(path)[1].lower()
+
+
+def imports_of(path, text):
+    """The module strings a source file imports, in file order per pattern; [] for unknown file types."""
+    lang = EXT_LANG.get(ext(path))
+    if lang is None:
+        return []
+    if lang == "go":
+        found = [(m.start(), m.group(1)) for m in GO_SINGLE.finditer(text)]
+        for block in GO_BLOCK.finditer(text):
+            found += [(block.start() + q.start(), q.group(1)) for q in GO_QUOTED.finditer(block.group(1))]
+        return [mod for _, mod in sorted(found)]
+    found = []
+    for rx in IMPORT_RES[lang]:
+        found += [(m.start(), m.group(1)) for m in rx.finditer(text)]
+    return [mod for _, mod in sorted(found)]
+
+
+def import_target(mod, path, cfg, names):
+    """The component an import points into, or None when it is outside every known component."""
+    path = norm(path)
+    lang = EXT_LANG.get(ext(path))
+    if mod.startswith("."):
+        if lang == "py":
+            dots = len(mod) - len(mod.lstrip("."))
+            base = os.path.dirname(path)
+            for _ in range(dots - 1):
+                base = os.path.dirname(base)
+            target = "/".join(x for x in (base, mod[dots:].replace(".", "/")) if x)
+        else:
+            target = norm(os.path.normpath(os.path.join(os.path.dirname(path), mod)))
+        return None if target.startswith("..") else component_of(target + "/_", cfg)
+    if lang == "c":
+        for target in (norm(os.path.normpath(os.path.join(os.path.dirname(path), mod))), norm(mod)):
+            found = component_of(target, cfg)
+            if found:
+                return found
+        return None
+    segments = [s for s in re.split(r"[./:\\@]+", mod) if s]
+    for s in segments if lang in ("go", "java", "cs") else segments[:3]:
+        if s in names:
+            return s
+    return None
+
+
+def tracked_files(store, limit=20000):
+    out = git(store.root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if out is not None:
+        files = [norm(p) for p in out.split("\0") if p]
+    else:
+        files = []
+        for folder, dirs, names in os.walk(store.root):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in WALK_SKIP)
+            files += [norm(os.path.relpath(os.path.join(folder, n), store.root)) for n in sorted(names)]
+            if len(files) >= limit:
+                break
+    return [f for f in files if not f.startswith(STORE + "/")][:limit]
+
+
+def component_names(cfg, files):
+    if cfg["components"]:
+        return set(cfg["components"])
+    return {c for c in (component_of(f, cfg) for f in files) if c}
+
+
+def read_source(store, rel):
+    path = os.path.join(store.root, rel)
+    try:
+        if os.path.getsize(path) > MAX_BYTES:
+            return None
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    if b"\0" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def targets(path, text, cfg, names):
+    own = component_of(path, cfg)
+    return {t for m in imports_of(path, text) for t in [import_target(m, path, cfg, names)] if t and t != own}
+
+
+def graph(store, cfg):
+    files = tracked_files(store)
+    names = component_names(cfg, files)
+    edges = {}
+    for f in files:
+        src = component_of(f, cfg)
+        if ext(f) not in EXT_LANG or not src:
+            continue
+        text = read_source(store, f)
+        for mod in imports_of(f, text) if text is not None else []:
+            dst = import_target(mod, f, cfg, names)
+            if dst and dst != src:
+                edges[(src, dst)] = edges.get((src, dst), 0) + 1
+    return {"components": sorted(names),
+            "edges": [{"from": a, "to": b, "count": n} for (a, b), n in sorted(edges.items())]}
+
+
+@command("graph", arg("--json", action="store_true"))
+def cmd_graph(args):
+    store = store_of(args)
+    data = graph(store, config(store))
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+        return 0
+    print(f"components: {', '.join(data['components']) or 'none'}")
+    for e in data["edges"]:
+        print(f"{e['from']} -> {e['to']} ({e['count']})")
+    return 0
+
+
 # --- main ---
 
 def build_parser():
