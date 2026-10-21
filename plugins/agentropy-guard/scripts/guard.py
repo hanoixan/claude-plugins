@@ -188,7 +188,7 @@ def empty_awareness():
 
 
 def empty_pending():
-    return {"session": None, "edits": [], "turn_mark": 0, "candidates": []}
+    return {"session": None, "edits": [], "turn_mark": 0, "candidates": [], "agent_paths": []}
 
 
 def merged_config(raw):
@@ -743,6 +743,19 @@ def component_of(path, cfg):
     return parts[0]
 
 
+def returns(rec, cfg, at):
+    """A disclosed, unchanged item comes back only when it was just mentioned and the person neither acknowledged
+    nor dismissed it: once their snooze ends, or snooze_days after the mention."""
+    last = rec["disclosures"][-1]
+    if last["level"] != "mentioned" or rec.get("user_response") in ("acknowledged", "dismissed", "wants_more"):
+        return False
+    mentioned = parse_time(last["at"])
+    snooze = rec.get("snoozed_until")
+    resume = parse_time(snooze) if snooze and parse_time(snooze) > mentioned else \
+        mentioned + datetime.timedelta(days=cfg["rates"]["snooze_days"])
+    return at >= resume
+
+
 def queue(cfg, ledger, a, at, files=(), components=()):
     """Active items worth raising, most worth raising first: important, probably unknown, not yet told (or changed
     since), not snoozed; relevance 1.5 when they touch the given files or components."""
@@ -756,7 +769,8 @@ def queue(cfg, ledger, a, at, files=(), components=()):
         if rec.get("snoozed_until") and parse_time(rec["snoozed_until"]) > at:
             continue
         told = rec.get("item_version_at_last_disclosure")
-        if rec.get("disclosures") and told and parse_time(it["updated_at"]) <= parse_time(told):
+        if rec.get("disclosures") and told and parse_time(it["updated_at"]) <= parse_time(told) \
+                and not returns(rec, cfg, at):
             continue
         unknown = unknown_likelihood(it, rec, cfg, at)
         if it["importance"] < th["importance"] or unknown < th["unknown"]:
@@ -808,6 +822,7 @@ GO_BLOCK = re.compile(r"^[ \t]*import[ \t]*\((.*?)\)", re.M | re.S)
 GO_SINGLE = re.compile(r'^[ \t]*import[ \t]+(?:[\w.]+[ \t]+)?"([^"]+)"', re.M)
 GO_QUOTED = re.compile(r'"([^"]+)"')
 MAX_BYTES = 256 * 1024
+FILE_LIMIT = 20000      # files walked outside git, and source files the graph reads
 WALK_SKIP = ("node_modules", "vendor", "dist", "build", "target", "out", "__pycache__")
 
 
@@ -852,13 +867,20 @@ def import_target(mod, path, cfg, names):
                 return found
         return None
     segments = [s for s in re.split(r"[./:\\@]+", mod) if s]
-    for s in segments if lang in ("go", "java", "cs") else segments[:3]:
-        if s in names:
-            return s
+    pairs = getattr(names, "pairs", None)
+    for k, s in enumerate(segments if lang in ("go", "java", "cs") else segments[:3]):
+        if s not in names:
+            continue
+        # A third-party import can share a name with a component (io.netty.util): it counts only when the path
+        # it names under that component exists in the repository. Rust paths name items, not files.
+        if pairs is not None and lang != "rs" and k + 1 < len(segments) and f"{s}/{segments[k + 1]}" not in pairs:
+            continue
+        return s
     return None
 
 
-def tracked_files(store, limit=20000):
+def tracked_files(store):
+    """Every file git lists (tracked, or untracked and not ignored); outside git, a walk of up to FILE_LIMIT files."""
     out = git(store.root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     if out is not None:
         files = [norm(p) for p in out.split("\0") if p]
@@ -867,15 +889,27 @@ def tracked_files(store, limit=20000):
         for folder, dirs, names in os.walk(store.root):
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in WALK_SKIP)
             files += [norm(os.path.relpath(os.path.join(folder, n), store.root)) for n in sorted(names)]
-            if len(files) >= limit:
+            if len(files) >= FILE_LIMIT:
                 break
-    return [f for f in files if not f.startswith(STORE + "/")][:limit]
+    return [f for f in files if not f.startswith(STORE + "/")]
+
+
+class Names(set):
+    """Component names, with every pair of consecutive path parts in the repository (file names without their
+    extension), so an import can be checked against a real path."""
+    pairs = frozenset()
 
 
 def component_names(cfg, files):
-    if cfg["components"]:
-        return set(cfg["components"])
-    return {c for c in (component_of(f, cfg) for f in files) if c}
+    names = Names(cfg["components"]) if cfg["components"] else Names(
+        c for c in (component_of(f, cfg) for f in files) if c)
+    pairs = set()
+    for f in files:
+        parts = norm(f).split("/")
+        parts[-1] = os.path.splitext(parts[-1])[0]
+        pairs.update(f"{a}/{b}" for a, b in zip(parts, parts[1:]))
+    names.pairs = frozenset(pairs)
+    return names
 
 
 def read_source(store, rel):
@@ -901,9 +935,9 @@ def graph(store, cfg):
     files = tracked_files(store)
     names = component_names(cfg, files)
     edges = {}
-    for f in files:
+    for f in [f for f in files if ext(f) in EXT_LANG][:FILE_LIMIT]:
         src = component_of(f, cfg)
-        if ext(f) not in EXT_LANG or not src:
+        if not src:
             continue
         text = read_source(store, f)
         for mod in imports_of(f, text) if text is not None else []:
@@ -964,9 +998,9 @@ def adapter_pairs(path, text, cfg, names):
     return {tuple(sorted((own, t))) for t in targets(path, text, cfg, names)}
 
 
-def detect_adapters(store, cfg, path, text, names, files):
+def detect_adapters(store, cfg, path, text, names, files, before=""):
     out = []
-    for pair in sorted(adapter_pairs(path, text, cfg, names)):
+    for pair in sorted(adapter_pairs(path, text, cfg, names) - adapter_pairs(path, before, cfg, names)):
         peers = [f for f in files if f != path and ext(f) in EXT_LANG and ADAPTER_RE.search(os.path.basename(f))
                  and pair in adapter_pairs(f, read_source(store, f) or "", cfg, names)]
         n = 1 + len(peers)
@@ -1005,12 +1039,13 @@ def files_mentioning(store, words):
     return [norm(p) for p in out.stdout.splitlines() if p] if out.returncode == 0 else None
 
 
-def detect_duplicates(store, cfg, path, text, files):
+def detect_duplicates(store, cfg, path, text, files, before=""):
     own = component_of(path, cfg)
     if own is None:
         return []
+    had = {model_name(n, own) for n in defined_types(path, before)}
     mine = {m for m in (model_name(n, own) for n in defined_types(path, text)) if len(m) >= 4
-            and m not in GENERIC_TYPES}
+            and m not in GENERIC_TYPES and m not in had}
     if not mine:
         return []
     found = {}
@@ -1030,20 +1065,20 @@ def detect_duplicates(store, cfg, path, text, files):
     return out
 
 
-def detect_new_edges(store, cfg, path, text, names):
+def detect_new_edges(store, cfg, path, text, names, before=""):
     own = component_of(path, cfg)
     if own is None:
         return []
-    before = git(store.root, "show", f"HEAD:{path}") or ""
     allowed = {tuple(e) for e in cfg["allowed_edges"]}
     new = targets(path, text, cfg, names) - targets(path, before, cfg, names)
     return [candidate("point-to-point", "low", f"{path} now imports {t} directly", [path], [own, t],
                       f"point-to-point|{own}>{t}") for t in sorted(new) if (own, t) not in allowed]
 
 
-def detect_drift(cfg, path, text, names):
+def detect_drift(cfg, path, text, names, before=""):
     own, out = component_of(path, cfg), {}
-    for m in imports_of(path, text):
+    had = set(imports_of(path, before))
+    for m in (m for m in imports_of(path, text) if m not in had):
         t = import_target(m, path, cfg, names)
         if own and t and t != own and any(PRIVATE_PART.match(s) for s in re.split(r"[./:\\]+", m) if s):
             out.setdefault(f"boundary-drift|{own}>{t}", candidate(
@@ -1053,22 +1088,24 @@ def detect_drift(cfg, path, text, names):
 
 
 def detect_file(store, cfg, path, names=None, files=None):
-    """Candidates from one changed file; [] for unknown types and for missing, huge or binary files."""
+    """Candidates from one changed file, for what it adds over its committed version (all of it when the file is
+    new or there is no git); [] for unknown types and for missing, huge or binary files."""
     path = norm(path)
     text = read_source(store, path) if ext(path) in EXT_LANG else None
     if text is None:
         return []
     files = files if files is not None else tracked_files(store)
     names = names if names is not None else component_names(cfg, files)
+    before = git(store.root, "show", f"HEAD:{path}") or ""
     out = []
     if enabled(cfg, "adapter-proliferation"):
-        out += detect_adapters(store, cfg, path, text, names, files)
+        out += detect_adapters(store, cfg, path, text, names, files, before)
     if enabled(cfg, "duplicate-model"):
-        out += detect_duplicates(store, cfg, path, text, files)
+        out += detect_duplicates(store, cfg, path, text, files, before)
     if enabled(cfg, "point-to-point"):
-        out += detect_new_edges(store, cfg, path, text, names)
+        out += detect_new_edges(store, cfg, path, text, names, before)
     if enabled(cfg, "boundary-drift"):
-        out += detect_drift(cfg, path, text, names)
+        out += detect_drift(cfg, path, text, names, before)
     return out
 
 
@@ -1302,16 +1339,26 @@ def stale(store, cfg, ledger, at):
     return False, ""
 
 
-def user_edits(store, since, agent_paths):
+def user_edits(store, since, agent_paths, seen):
     """Files the person changed: their own commits since `since` (no Claude co-author trailer), and uncommitted
-    changes the agent did not make."""
+    changes the agent did not make, each counted once per change (`seen` maps a path to the mtime counted)."""
     paths = set()
     user = (git(store.root, "config", "user.name") or "").strip()
     if user:
         for sha in (git(store.root, "log", f"--since={since}", f"--author={user}", "--format=%H") or "").split()[:50]:
             if not CLAUDE_TRAILER.search(git(store.root, "show", "-s", "--format=%B", sha) or ""):
                 paths |= set((git(store.root, "show", "--name-only", "--format=", sha) or "").split())
-    paths |= set((git(store.root, "diff", "--name-only", "HEAD") or "").split()) - set(agent_paths)
+    dirty = set((git(store.root, "diff", "--name-only", "HEAD") or "").split()) - set(agent_paths)
+    for p in sorted(dirty):
+        try:
+            mtime = os.path.getmtime(os.path.join(store.root, p))
+        except OSError:
+            mtime = 0.0
+        if seen.get(p) != mtime:
+            seen[p] = mtime
+            paths.add(p)
+    for p in [p for p in seen if p not in dirty]:
+        del seen[p]
     return sorted(norm(p) for p in paths)
 
 
@@ -1342,25 +1389,36 @@ def hook_session_start(data):
     store = hook_store(data)
     if store is None:
         return None
+    errors = store_errors(store)
+    if errors:
+        return context("SessionStart", f"agentropy-guard: its files do not parse ({errors[0]}). Tell the user once, "
+                                       f"and suggest `{GUARD} parse` to see every problem.")
     cfg, ledger, findings, a, at = config(store), load_ledger(store), load_findings(store), load_awareness(store), now()
-    st = a["state"]
+    st, pend = a["state"], load_pending(store)
     since = st.get("user_edits_checked_at") or iso(at - datetime.timedelta(days=7))
-    for path in user_edits(store, since, [e["path"] for e in load_pending(store)["edits"]]):
+    seen = st.setdefault("dirty_seen", {})
+    for path in user_edits(store, since, pend["agent_paths"], seen):
         for it in items_touching(ledger, path=path):
             add_signal(a, it["id"], {"type": "user_edited_file", "at": iso(at), "path": path})
     st["user_edits_checked_at"] = iso(at)
+    dirty = set((git(store.root, "diff", "--name-only", "HEAD") or "").split())
+    pend["agent_paths"] = sorted(p for p in pend["agent_paths"] if p in dirty)
+    save_pending(store, pend)
     lines = []
     top = queue(cfg, ledger, a, at)[:3]
     if top:
         lines.append("agentropy-guard: architecture the user probably does not know (context for you; do not raise "
                      "it unprompted): " + "; ".join(f"{r['id']} {r['title']}" for r in top) + ".")
-    open_low = [f for f in findings["findings"] if f["user_decision"] is None and f["severity"] in ("low", "medium")]
-    if open_low and st.get("findings_summary_on") != today():
+    listed = st.setdefault("findings_listed", {})
+    due = at.date() - datetime.timedelta(days=cfg["rates"]["snooze_days"])
+    open_now = [f for f in findings["findings"] if f["user_decision"] is None
+                and (f["id"] not in listed or datetime.date.fromisoformat(listed[f["id"]]) <= due)][:5]
+    if open_now:
         lines.append("agentropy-guard: in your first reply, list these open architecture findings in a short block, "
                      "as the agentropy-guard:erosion-check skill says, and record any decision with "
                      f"`{GUARD} finding decide`: "
-                     + "; ".join(f"{f['id']} ({f['severity']}) {f['description']}" for f in open_low[:5]) + ".")
-        st["findings_summary_on"] = today()
+                     + "; ".join(f"{f['id']} ({f['severity']}) {f['description']}" for f in open_now) + ".")
+        listed.update({f["id"]: today() for f in open_now})
     is_stale, why = stale(store, cfg, ledger, at)
     if is_stale and st.get("stale_suggested_on") != today():
         lines.append(f"agentropy-guard: the architecture ledger is stale ({why}). Suggest once, in a sentence, "
@@ -1409,8 +1467,10 @@ def hook_post_edit(data):
         return None
     cfg, findings, pend, at = config(store), load_findings(store), load_pending(store), now()
     if pend["session"] != data.get("session_id"):
-        pend = {**empty_pending(), "session": data.get("session_id"), "candidates": pend["candidates"]}
+        pend = {**empty_pending(), "session": data.get("session_id"), "candidates": pend["candidates"],
+                "agent_paths": pend["agent_paths"]}
     pend["edits"].append({"path": rel, "at": iso(at)})
+    pend["agent_paths"] = sorted(set(pend["agent_paths"]) | {rel})
     add_candidates(pend, detect_file(store, cfg, rel), findings, at)
     save_pending(store, pend)
     return None
@@ -1606,6 +1666,9 @@ def main(argv=None):
         return args.fn(args)
     except ValueError as e:
         sys.exit(f"error: {e}")
+    except (KeyError, TypeError, AttributeError) as e:
+        sys.exit(f"error: a file in {STORE}/ or the awareness file has the wrong shape ({type(e).__name__}: {e}); "
+                 f"run `guard.py parse` to see which")
 
 
 if __name__ == "__main__":

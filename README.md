@@ -578,8 +578,9 @@ and unreviewed signals) and `reports/` are git-ignored. What you know is private
 
 **How often it speaks:** at most one architecture note a day, at a stopping point, and only when the item touches
 what you just changed; two dismissals in a row double the gap. At most one high-severity erosion warning per
-session, after a reviewer subagent has confirmed it; medium and low findings are listed at the next session's
-start. A change to an important item that the agent's reply never mentioned is pointed out in one line.
+session, after a reviewer subagent has confirmed it; other open findings are listed at the next session's
+start, and again a week later while still undecided. A note you leave unanswered or snooze comes back after the
+snooze (a week by default). A change to an important item that the agent's reply never mentioned is pointed out in one line.
 
 **Erosion signals.** Adapter files multiplying between two components, the same model defined in two components, new
 direct imports between components, imports into another component's internals, a change across components that

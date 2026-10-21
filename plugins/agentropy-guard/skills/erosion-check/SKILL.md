@@ -41,5 +41,5 @@ installed, ask it as an exempt question (reason "architecture warning"). Record 
 `GUARD finding decide ID --decision will-fix|accepted-risk|false-positive` (`will-fix` for both now and later; `fixed`
 once it is done), then run `GUARD warned --session ID` with the session id the hook gave.
 
-At the start of a session, the hook may ask you to list open medium and low findings: a short block, one line each,
-and one question asking which, if any, to act on.
+At the start of a session, the hook may ask you to list open findings (each at most once a week while undecided): a
+short block, one line each, and one question asking which, if any, to act on.

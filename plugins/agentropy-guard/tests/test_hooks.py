@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
 from test_guard import NOW, PLUGIN, Case, finding, g, item
 
@@ -55,8 +56,6 @@ class SessionStart(Hooks):
         self.cli("finding", "add", "--json", "-", stdin=json.dumps(finding()))
         self.assertIn("ef_0001 (medium)", self.context(g.hook_session_start(self.event())))
         self.assertIsNone(g.hook_session_start(self.event()))
-        self.at(LATER)
-        self.assertIn("ef_0001", self.context(g.hook_session_start(self.event())))
 
     def test_the_persons_own_commits_count_as_exposure(self):
         self.git_init()
@@ -124,6 +123,7 @@ class PostEdit(Hooks):
 
     def test_an_edit_is_recorded_with_its_candidates(self):
         self.write("billing/models.py", "class Invoice:\n    pass\n")
+        self.write("billing/internal/db.py", "conn = 1\n")
         self.write("orders/x.py", "from billing.internal.db import conn\n")
         self.assertIsNone(self.edit(os.path.join(self.root, "orders", "x.py")))
         self.assertEqual(self.edits(), ["orders/x.py"])
@@ -170,11 +170,15 @@ class Process(Hooks):
                       json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash")
-    def test_broken_input_and_a_broken_ledger_are_silent(self):
-        for stdin in ("not json", json.dumps(self.event())):
-            self.write(".agentropy-guard/ledger.json", "{")
-            result = self.run_hook("session-start", stdin)
-            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+    def test_broken_input_is_silent_and_a_broken_ledger_is_reported(self):
+        self.write(".agentropy-guard/ledger.json", "{")
+        result = self.run_hook("session-start", "not json")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        result = self.run_hook("stop", json.dumps(self.event()))
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        result = self.run_hook("session-start", json.dumps(self.event()))
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertIn("do not parse", json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash")
     def test_without_python3_it_does_nothing(self):
@@ -306,6 +310,103 @@ class Stop(Hooks):
         self.cli("warned", "--session", "s1")
         self.candidate()
         self.assertIn("Do not warn the user now", self.reason(self.stop()))
+
+
+class ReviewFixes(Hooks):
+    def drift(self, path):
+        found = g.detect_file(self.gstore(), g.config(self.gstore()), path)
+        return [c for c in found if c["signal"] == "boundary-drift"]
+
+    def test_a_third_party_import_is_not_an_import_into_a_component(self):
+        self.write("util/Strings.java", "class Strings {}\n")
+        self.write("web/W.java", "import io.netty.util.internal.PlatformDependent;\n")
+        self.write("core/x.py", "x = 1\n")
+        self.write("web/v.py", "from django.core._private import y\n")
+        self.assertEqual(self.drift("web/W.java"), [])
+        self.assertEqual(self.drift("web/v.py"), [])
+        self.write("util/internal/Helper.java", "class Helper {}\n")
+        self.write("web/X.java", "import util.internal.Helper;\n")
+        self.assertEqual(len(self.drift("web/X.java")), 1)
+
+    def test_code_that_was_already_there_is_not_flagged(self):
+        self.git_init()
+        self.write("billing/internal/db.py", "conn = 1\n")
+        self.write("billing/types.ts", "export interface BillingCustomer {\n  id: string\n}\n")
+        self.write("orders/x.py", "from billing.internal.db import conn\n")
+        self.write("orders/models.py", "class Customer:\n    pass\n")
+        self.write("orders/customer_adapter.py", "from billing.internal.db import conn\n")
+        self.commit()
+        for path in ("orders/x.py", "orders/models.py", "orders/customer_adapter.py"):
+            with open(os.path.join(self.root, path), "a", encoding="utf-8") as fh:
+                fh.write("# touched\n")
+            found = g.detect_file(self.gstore(), g.config(self.gstore()), path)
+            self.assertEqual([c["signal"] for c in found], [], path)
+
+    def test_an_open_high_finding_is_listed_at_session_start(self):
+        self.cli("scanned")
+        self.cli("finding", "add", "--json", "-", stdin=json.dumps(finding(severity="high")))
+        self.assertIn("ef_0001 (high)", self.context(g.hook_session_start(self.event())) or "")
+
+    def test_the_agents_uncommitted_edits_stay_the_agents(self):
+        self.git_init()
+        self.write("billing/api.py", "x = 1\n")
+        self.write("orders/a.py", "y = 1\n")
+        self.commit(date="2020-01-01T00:00:00")
+        self.cli("scanned")
+        self.add_items(item(evidence=[{"type": "file", "path": "billing/api.py"}]))
+        self.write("billing/api.py", "x = 2\n")
+        g.hook_post_edit(self.event(session_id="A", tool_input={"file_path": "billing/api.py"}))
+        g.hook_session_start(self.event(session_id="B"))
+        g.hook_post_edit(self.event(session_id="B", tool_input={"file_path": "orders/a.py"}))
+        g.hook_session_start(self.event(session_id="C"))
+        self.assertNotIn("ki_0001", self.aware()["items"])
+
+    def test_the_persons_uncommitted_edit_counts_once(self):
+        self.git_init()
+        self.write("orders/customer.py", "x = 1\n")
+        self.commit(date="2020-01-01T00:00:00")
+        self.cli("scanned")
+        self.add_items(item())
+        self.write("orders/customer.py", "x = 2\n")
+        g.hook_session_start(self.event())
+        g.hook_session_start(self.event())
+        self.assertEqual(len(self.aware()["items"]["ki_0001"]["exposure_signals"]), 1)
+
+    def test_components_come_from_every_file(self):
+        self.git_init()
+        for k in range(6):
+            self.write(f"c{k}/m.py", "x = 1\n")
+        with mock.patch.object(g, "FILE_LIMIT", 2):
+            self.assertEqual(g.graph(self.gstore(), g.config(self.gstore()))["components"],
+                             [f"c{k}" for k in range(6)])
+
+    def test_a_note_left_unanswered_or_snoozed_comes_back(self):
+        self.add_items(item())
+        ids = lambda when: [r["id"] for r in json.loads(self.cli("queue", "--json", now=when).stdout)]
+        self.cli("told", "ki_0001", "--level", "mentioned")
+        self.assertEqual(ids("2026-10-26T12:00:00Z"), [])
+        self.assertEqual(ids("2026-10-27T12:00:00Z"), ["ki_0001"])
+        self.cli("respond", "ki_0001", "--response", "snoozed", "--days", "1")
+        self.assertEqual(ids("2026-10-21T13:00:00Z"), ["ki_0001"])
+        self.cli("told", "ki_0001", "--level", "report_generated", now="2026-10-22T12:00:00Z")
+        self.assertEqual(ids("2026-12-30T12:00:00Z"), [])
+
+    def test_a_file_of_the_wrong_shape_is_one_error_line(self):
+        broken = {"items": [{"id": "ki_0001"}], "last_scan": None}
+        self.write(".agentropy-guard/ledger.json", json.dumps(broken))
+        for args in (("queue",), ("item", "list")):
+            self.assertIn("run `guard.py parse`", self.cli(*args, ok=False).stderr)
+        self.assertIn("parse", self.context(g.hook_session_start(self.event())))
+
+    def test_an_undecided_finding_is_listed_again_only_after_a_week(self):
+        self.cli("scanned")
+        self.cli("finding", "add", "--json", "-", stdin=json.dumps(finding()))
+        listed = lambda: "ef_0001" in (self.context(g.hook_session_start(self.event())) or "")
+        self.assertTrue(listed())
+        self.at(LATER)
+        self.assertFalse(listed())
+        self.at("2026-10-27T12:00:00Z")
+        self.assertTrue(listed())
 
 
 if __name__ == "__main__":

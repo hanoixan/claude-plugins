@@ -370,6 +370,9 @@ class Graph(Case):
         self.write("billing/models.py", "class Customer:\n    pass\n")
         self.write("web/src/app.ts", 'import { x } from "../../orders/api";\nconst y = require(\'billing/client\');\n')
         self.write("svc/main.go", 'package main\n\nimport (\n\t"fmt"\n\t"example.com/app/billing/pay"\n)\n')
+        self.write("billing/client.ts", "export const client = 1;\n")
+        self.write("billing/pay/pay.go", "package pay\n")
+        self.write("orders/api.ts", "export const api = 1;\n")
         self.write("core/lib.rs", "use crate::orders::Order;\n")
         self.write("docs/readme.md", "billing\n")
         self.cli("init")
@@ -420,6 +423,8 @@ class Erosion(Case):
         super().setUp()
         self.write("billing/models.py", "class Invoice:\n    pass\n")
         self.write("billing/api.py", "def charge():\n    pass\n")
+        self.write("billing/internal/db.py", "conn = 1\n")
+        self.write("orders/models.py", "class Order:\n    pass\n")
         self.cli("init")
 
     def detect(self, path):
