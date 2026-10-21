@@ -1546,6 +1546,38 @@ def hook_stop(data):
 HOOKS["stop"] = hook_stop
 
 
+# --- the report's page check ---
+
+CHROMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome")
+PAGE_RE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
+
+
+def count_pdf_pages(data):
+    return len(PAGE_RE.findall(data))
+
+
+@command("pages", arg("file"), arg("--max", type=int, default=2))
+def cmd_pages(args):
+    exe = next((shutil.which(c) for c in CHROMES if shutil.which(c)), None)
+    if exe is None:
+        print("skipped: no headless Chrome or Chromium on PATH; keep the report within the content budget")
+        return 0
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "report.pdf")
+        try:
+            subprocess.run([exe, "--headless", "--disable-gpu", "--no-pdf-header-footer", f"--print-to-pdf={out}",
+                            "file://" + os.path.abspath(args.file)], capture_output=True, timeout=90)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if not os.path.exists(out):
+            print("skipped: Chrome did not produce a PDF; keep the report within the content budget")
+            return 0
+        with open(out, "rb") as fh:
+            n = count_pdf_pages(fh.read())
+    print(f"{n} page{'s' if n != 1 else ''}" + (f", over the limit of {args.max}" if n > args.max else ""))
+    return 2 if n > args.max else 0
+
+
 # --- main ---
 
 def build_parser():
