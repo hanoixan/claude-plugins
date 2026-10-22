@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1d2330; --muted: #5b6475; --line: #9aa3b2; --box: #f3f5f9; --accent: #c2410c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171d; --fg: #e6e9ef; --muted: #a0a8b8; --line: #6b7385; --box: #1f242d; --accent: #fb923c; }
+  }
+  @page { size: Letter; margin: 0.6in; }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 7.3in; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 10.5pt/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 17pt; margin: 0 0 4px; }
+  h2 { font-size: 11.5pt; margin: 14px 0 4px; }
+  .why { color: var(--muted); margin: 0 0 10px; }
+  figure { margin: 8px 0; break-inside: avoid; }
+  figcaption { color: var(--muted); font-size: 9pt; }
+  svg { width: 100%; height: auto; }
+  .box { fill: var(--box); stroke: var(--line); stroke-width: 1.5; }
+  .box.accent { stroke: var(--accent); stroke-width: 2.5; }
+  .label { fill: var(--fg); font-size: 13px; font-weight: 600; }
+  .note { fill: var(--muted); font-size: 11px; }
+  .edge, .msg { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .edge.accent, .msg.accent { stroke: var(--accent); stroke-width: 2.5; }
+  .negotiated { stroke-dasharray: 6 4; }
+  .lifeline { stroke: var(--line); stroke-dasharray: 2 4; }
+  .arrowhead { fill: var(--line); }
+  ul { margin: 4px 0; padding-left: 18px; }
+  code { font-size: 9.5pt; }
+  footer { color: var(--muted); font-size: 8.5pt; margin-top: 12px; }
+  @media print { body { padding: 0; max-width: none; } }
+</style>
+</head>
+<body>
+<h1>{{TITLE}}</h1>
+<p class="why">{{WHY}}</p>
+<section><h2>Where it lives</h2>{{BLOCK_DIAGRAM}}</section>
+{{SEQUENCE_SECTION}}
+<section><h2>What this means for you</h2><ul>{{CONSEQUENCES}}</ul></section>
+<section><h2>How it got this way</h2><p>{{ORIGIN}}</p></section>
+<section><h2>Evidence</h2><ul>{{EVIDENCE}}</ul></section>
+{{COUNTERMOVE_SECTION}}
+<footer>agentropy-guard · {{GENERATED}}</footer>
+</body>
+</html>

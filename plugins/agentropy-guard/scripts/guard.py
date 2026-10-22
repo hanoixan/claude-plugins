@@ -1,0 +1,1675 @@
+#!/usr/bin/env python3
+"""agentropy-guard: the architecture ledger, the person's awareness of it, erosion signals and the education queue.
+
+State lives in .agentropy-guard/ at the git root (the working directory outside a repository; --dir overrides it).
+The person's awareness lives in ~/.claude/agentropy-guard/<project-hash>/awareness.json. Run a command with --help
+for its arguments.
+"""
+import argparse
+import copy
+import datetime
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+STORE = ".agentropy-guard"
+CONFIG = "config.json"
+LEDGER = "ledger.json"
+FINDINGS = "findings.json"
+PENDING = "pending.json"
+AWARENESS = "awareness.json"
+REPORTS = "reports"
+GITIGNORE_LINES = (f"{STORE}/{PENDING}", f"{STORE}/{REPORTS}/")
+GUARD = f'python3 "{os.path.abspath(__file__)}"'
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+CATEGORIES = ("boundary", "contract", "data-model", "cross-cutting", "dependency", "decision", "integration",
+              "runtime-topology", "invariant")
+ORIGINS = ("agent-decision", "human-decision", "discovered", "unknown")
+STATUSES = ("active", "superseded", "resolved")
+SEVERITIES = ("low", "medium", "high")
+DECISIONS = ("accepted-risk", "will-fix", "fixed", "false-positive")
+LEVELS = ("mentioned", "explained", "report_generated")
+RESPONSES = ("none", "dismissed", "acknowledged", "wants_more", "snoozed")
+SIGNALS = ("user_edited_file", "user_prompt_mentioned", "agent_summarized", "agent_silent_change")
+FACTORS = ("blast_radius", "cross_cutting", "irreversibility", "change_frequency")
+DETECTORS = ("adapter-proliferation", "duplicate-model", "point-to-point", "boundary-drift", "private-contract",
+             "contract-churn", "missing-decision-record")
+FINDING_SIGNALS = DETECTORS + ("orphaned-cross-cutting", "silent-decision")
+EVIDENCE_TYPES = {"file": "path", "commit": "sha", "pr": "url"}
+ITEM_FIELDS = ("id", "title", "category", "summary", "evidence", "components", "importance", "importance_factors",
+               "origin", "created_at", "updated_at", "status")
+FINDING_FIELDS = ("id", "signal", "severity", "description", "evidence", "components", "conway_mechanism",
+                  "suggested_countermove", "detected_at", "user_decision", "key")
+
+DEFAULTS = {
+    "components": {},
+    "allowed_edges": [],
+    "contract_dirs": ["contracts", "schemas", "proto", "openapi", "api/schema"],
+    "adr_dirs": ["docs/adr", "docs/decisions", "adr", "decisions"],
+    "weights": {"blast_radius": 0.3, "cross_cutting": 0.25, "irreversibility": 0.25, "change_frequency": 0.2,
+                "agent_boost": 0.1},
+    "priors": {"agent-decision": 0.7, "discovered": 0.4, "unknown": 0.5, "human-decision": 0.2},
+    "thresholds": {"importance": 0.5, "unknown": 0.5, "nudge_priority": 0.4, "silent_importance": 0.7},
+    "rates": {"nudge_days": 1, "snooze_days": 7, "half_life_days": 30, "stale_commits": 50, "stale_days": 14},
+    "detectors": {name: True for name in DETECTORS},
+}
+
+REGISTRY = {}
+
+
+def arg(*names, **kw):
+    return names, kw
+
+
+def command(name, *arguments):
+    """Register a subcommand; a two-word name (`item add`) becomes a nested subcommand."""
+    def wrap(fn):
+        REGISTRY[name] = (fn, arguments)
+        return fn
+    return wrap
+
+
+# --- time and git ---
+
+def parse_time(s):
+    return datetime.datetime.strptime(s, TIME_FORMAT).replace(tzinfo=datetime.timezone.utc)
+
+
+def now():
+    fixed = os.environ.get("AGENTROPY_GUARD_NOW")
+    if fixed:
+        return parse_time(fixed)
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
+def iso(dt):
+    return dt.astimezone(datetime.timezone.utc).strftime(TIME_FORMAT)
+
+
+def today():
+    return now().date().isoformat()
+
+
+def time_ok(s):
+    try:
+        parse_time(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def git(root, *args):
+    """git's stdout, or None when git is missing or the command fails."""
+    try:
+        out = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def git_root(cwd):
+    out = git(cwd, "rev-parse", "--show-toplevel")
+    return out.strip() if out and out.strip() else os.path.abspath(cwd)
+
+
+# --- the store ---
+
+class Store:
+    def __init__(self, directory):
+        self.dir = os.path.abspath(directory)
+        self.root = os.path.dirname(self.dir)
+
+    def path(self, name):
+        return os.path.join(self.dir, name)
+
+    @property
+    def exists(self):
+        return os.path.isdir(self.dir)
+
+    def aware_path(self):
+        home = os.environ.get("AGENTROPY_GUARD_HOME") or os.path.join(os.path.expanduser("~"), ".claude",
+                                                                      "agentropy-guard")
+        digest = hashlib.sha256(os.path.realpath(self.root).encode("utf-8")).hexdigest()[:12]
+        return os.path.join(home, digest, AWARENESS)
+
+
+def store_for(cwd):
+    return Store(os.path.join(git_root(cwd), STORE))
+
+
+def store_of(args):
+    return Store(args.dir) if getattr(args, "dir", None) else store_for(os.getcwd())
+
+
+def read_json(path, default):
+    if not os.path.exists(path):
+        return copy.deepcopy(default)
+    with open(path, encoding="utf-8") as fh:
+        try:
+            return json.load(fh)
+        except ValueError as e:
+            raise ValueError(f"{path} is not valid JSON: {e}") from None
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True, ensure_ascii=False)
+            fh.write("\n")
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def empty_ledger():
+    return {"items": [], "last_scan": None}
+
+
+def empty_findings():
+    return {"findings": []}
+
+
+def empty_awareness():
+    return {"items": {}, "state": {}}
+
+
+def empty_pending():
+    return {"session": None, "edits": [], "turn_mark": 0, "candidates": [], "agent_paths": []}
+
+
+def merged_config(raw):
+    cfg = {}
+    for key, value in DEFAULTS.items():
+        given = raw.get(key, value) if isinstance(raw, dict) else value
+        cfg[key] = {**value, **given} if isinstance(value, dict) and isinstance(given, dict) else given
+    return copy.deepcopy(cfg)
+
+
+def config(store):
+    return merged_config(read_json(store.path(CONFIG), {}))
+
+
+# --- validation ---
+
+def number(x, lo=0.0, hi=1.0):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and lo <= x <= hi
+
+
+def strings(x):
+    return isinstance(x, list) and all(isinstance(s, str) and s for s in x)
+
+
+def config_errors(raw):
+    if not isinstance(raw, dict):
+        return ["the file is not a JSON object"]
+    e = [f"unknown key `{key}`" for key in sorted(set(raw) - set(DEFAULTS))]
+    comps = raw.get("components", {})
+    if not isinstance(comps, dict) or not all(strings(v) for v in comps.values()):
+        e.append("`components` maps a component name to a list of path globs")
+    edges = raw.get("allowed_edges", [])
+    if not isinstance(edges, list) or not all(strings(x) and len(x) == 2 for x in edges):
+        e.append("`allowed_edges` is a list of [from, to] component pairs")
+    for key in ("contract_dirs", "adr_dirs"):
+        if not strings(raw.get(key, [])):
+            e.append(f"`{key}` is a list of folders")
+    for key in ("weights", "priors", "thresholds", "rates", "detectors"):
+        value = raw.get(key, {})
+        if not isinstance(value, dict):
+            e.append(f"`{key}` is an object")
+            continue
+        for k, x in value.items():
+            if k not in DEFAULTS[key]:
+                e.append(f"unknown `{key}.{k}`")
+            elif key == "detectors" and not isinstance(x, bool):
+                e.append(f"`detectors.{k}` is true or false")
+            elif key == "rates" and not number(x, 0.001, 1e6):
+                e.append(f"`rates.{k}` is a positive number")
+            elif key not in ("detectors", "rates") and not number(x):
+                e.append(f"`{key}.{k}` is a number from 0 to 1")
+    return e
+
+
+def evidence_errors(ev):
+    if not isinstance(ev, list) or not ev:
+        return ["`evidence` is a non-empty list"]
+    e = []
+    for x in ev:
+        if not isinstance(x, dict) or x.get("type") not in EVIDENCE_TYPES:
+            e.append(f"evidence `type` is one of {', '.join(EVIDENCE_TYPES)}")
+            continue
+        need = EVIDENCE_TYPES[x["type"]]
+        if not isinstance(x.get(need), str) or not x[need]:
+            e.append(f"{x['type']} evidence needs `{need}`")
+    return e
+
+
+def item_errors(it):
+    if not isinstance(it, dict):
+        return ["an item is a JSON object"]
+    missing = [k for k in ITEM_FIELDS if k not in it]
+    if missing:
+        return [f"missing {', '.join(missing)}"]
+    e = []
+    if not isinstance(it["id"], str) or not re.fullmatch(r"ki_\d{4,}", it["id"]):
+        e.append("`id` is ki_NNNN")
+    for k in ("title", "summary"):
+        if not isinstance(it[k], str) or not it[k].strip():
+            e.append(f"`{k}` is a non-empty string")
+    if not isinstance(it.get("details", ""), str):
+        e.append("`details` is a string")
+    for k, allowed in (("category", CATEGORIES), ("origin", ORIGINS), ("status", STATUSES)):
+        if it[k] not in allowed:
+            e.append(f"`{k}` is one of {', '.join(allowed)}")
+    if it["status"] == "superseded" and not it.get("superseded_by"):
+        e.append("a superseded item names `superseded_by`")
+    e += evidence_errors(it["evidence"])
+    if not isinstance(it["components"], list) or not all(isinstance(c, str) and c for c in it["components"]):
+        e.append("`components` is a list of component names")
+    f = it["importance_factors"]
+    if not isinstance(f, dict) or set(f) - set(FACTORS) or not all(number(x) for x in f.values()):
+        e.append(f"`importance_factors` holds {', '.join(FACTORS)}, each from 0 to 1")
+    if not number(it["importance"]):
+        e.append("`importance` is from 0 to 1")
+    for k in ("created_at", "updated_at"):
+        if not time_ok(it[k]):
+            e.append(f"`{k}` is YYYY-MM-DDTHH:MM:SSZ")
+    if not strings(it.get("related_findings", [])) and it.get("related_findings") != []:
+        e.append("`related_findings` is a list of finding ids")
+    return e
+
+
+def finding_errors(f):
+    if not isinstance(f, dict):
+        return ["a finding is a JSON object"]
+    missing = [k for k in FINDING_FIELDS if k not in f]
+    if missing:
+        return [f"missing {', '.join(missing)}"]
+    e = []
+    if not isinstance(f["id"], str) or not re.fullmatch(r"ef_\d{4,}", f["id"]):
+        e.append("`id` is ef_NNNN")
+    if f["signal"] not in FINDING_SIGNALS:
+        e.append(f"`signal` is one of {', '.join(FINDING_SIGNALS)}")
+    if f["severity"] not in SEVERITIES:
+        e.append(f"`severity` is one of {', '.join(SEVERITIES)}")
+    for k in ("description", "suggested_countermove", "key"):
+        if not isinstance(f[k], str) or not f[k].strip():
+            e.append(f"`{k}` is a non-empty string")
+    e += evidence_errors(f["evidence"])
+    if not isinstance(f["components"], list) or not all(isinstance(c, str) and c for c in f["components"]):
+        e.append("`components` is a list of component names")
+    m = f["conway_mechanism"]
+    if not isinstance(m, int) or isinstance(m, bool) or not 1 <= m <= 7:
+        e.append("`conway_mechanism` is a whole number from 1 to 7")
+    if not time_ok(f["detected_at"]):
+        e.append("`detected_at` is YYYY-MM-DDTHH:MM:SSZ")
+    if f["user_decision"] is not None and f["user_decision"] not in DECISIONS:
+        e.append(f"`user_decision` is null or one of {', '.join(DECISIONS)}")
+    if not isinstance(f.get("cost", ""), str):
+        e.append("`cost` is a string")
+    return e
+
+
+def awareness_errors(a):
+    if not isinstance(a, dict) or not isinstance(a.get("items"), dict) or not isinstance(a.get("state"), dict):
+        return ["holds `items` and `state` objects"]
+    e = []
+    for item_id, rec in a["items"].items():
+        if not isinstance(rec, dict):
+            e.append(f"{item_id}: a record is an object")
+            continue
+        for s in rec.get("exposure_signals", []):
+            if not isinstance(s, dict) or s.get("type") not in SIGNALS or not time_ok(s.get("at")):
+                e.append(f"{item_id}: an exposure signal has a known `type` and an `at` time")
+        for d in rec.get("disclosures", []):
+            if not isinstance(d, dict) or d.get("level") not in LEVELS or not time_ok(d.get("at")):
+                e.append(f"{item_id}: a disclosure has a known `level` and an `at` time")
+        if rec.get("user_response", "none") not in RESPONSES:
+            e.append(f"{item_id}: `user_response` is one of {', '.join(RESPONSES)}")
+    return e
+
+
+def store_errors(store):
+    out = []
+
+    def load(name, default, path=None):
+        try:
+            return read_json(path or store.path(name), default)
+        except (OSError, ValueError) as err:
+            out.append(str(err))
+            return copy.deepcopy(default)
+
+    out += [f"{CONFIG}: {e}" for e in config_errors(load(CONFIG, {}))]
+    ledger = load(LEDGER, empty_ledger())
+    if not isinstance(ledger, dict) or not isinstance(ledger.get("items"), list):
+        out.append(f"{LEDGER}: holds an `items` list and `last_scan`")
+        ledger = empty_ledger()
+    findings = load(FINDINGS, empty_findings())
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        out.append(f"{FINDINGS}: holds a `findings` list")
+        findings = empty_findings()
+    ids, fids = set(), set()
+    for f in findings["findings"]:
+        name = f.get("id", "?") if isinstance(f, dict) else "?"
+        out += [f"{FINDINGS}: {name}: {e}" for e in finding_errors(f)]
+        if name in fids:
+            out.append(f"{FINDINGS}: {name} appears twice")
+        fids.add(name)
+    for it in ledger["items"]:
+        name = it.get("id", "?") if isinstance(it, dict) else "?"
+        out += [f"{LEDGER}: {name}: {e}" for e in item_errors(it)]
+        if name in ids:
+            out.append(f"{LEDGER}: {name} appears twice")
+        ids.add(name)
+    for it in (x for x in ledger["items"] if isinstance(x, dict)):
+        if it.get("superseded_by") and it["superseded_by"] not in ids:
+            out.append(f"{LEDGER}: {it.get('id')}: superseded by {it['superseded_by']}, which is not in the ledger")
+        for fid in it.get("related_findings") or []:
+            if fid not in fids:
+                out.append(f"{LEDGER}: {it.get('id')}: related finding {fid} is not in {FINDINGS}")
+    last = ledger.get("last_scan")
+    if last is not None and (not isinstance(last, dict) or not time_ok(last.get("at"))):
+        out.append(f"{LEDGER}: `last_scan` is null or {{at, commit}}")
+    out += [f"awareness: {e}" for e in awareness_errors(load(AWARENESS, empty_awareness(), store.aware_path()))]
+    return out
+
+
+# --- commands ---
+
+@command("init")
+def cmd_init(args):
+    store = store_of(args)
+    os.makedirs(store.dir, exist_ok=True)
+    made = []
+    for name, data in ((CONFIG, copy.deepcopy(DEFAULTS)), (LEDGER, empty_ledger()), (FINDINGS, empty_findings())):
+        if not os.path.exists(store.path(name)):
+            write_json(store.path(name), data)
+            made.append(name)
+    ignore = os.path.join(store.root, ".gitignore")
+    text = ""
+    if os.path.exists(ignore):
+        with open(ignore, encoding="utf-8") as fh:
+            text = fh.read()
+    add = [line for line in GITIGNORE_LINES if line not in text.splitlines()]
+    if add:
+        with open(ignore, "a", encoding="utf-8") as fh:
+            fh.write(("\n" if text and not text.endswith("\n") else "") + "".join(f"{line}\n" for line in add))
+    print(f"created: {', '.join(made)}" if made else "already set up")
+    if add:
+        print(f"ignored: {', '.join(add)}")
+    return 0
+
+
+@command("parse")
+def cmd_parse(args):
+    store = store_of(args)
+    errors = store_errors(store)
+    for e in errors:
+        print(f"error: {e}")
+    if not errors:
+        ledger = read_json(store.path(LEDGER), empty_ledger())
+        findings = read_json(store.path(FINDINGS), empty_findings())
+        print(f"{len(ledger['items'])} items, {len(findings['findings'])} findings")
+    return 1 if errors else 0
+
+
+# --- ledger items ---
+
+MATERIAL = ("title", "category", "summary", "details", "evidence", "components", "origin")
+
+
+def load_ledger(store):
+    return read_json(store.path(LEDGER), empty_ledger())
+
+
+def save_ledger(store, ledger):
+    ledger["items"].sort(key=lambda x: x["id"])
+    write_json(store.path(LEDGER), ledger)
+
+
+def next_id(prefix, ids):
+    n = max((int(i.split("_")[1]) for i in ids if re.fullmatch(prefix + r"_\d+", str(i))), default=0)
+    return f"{prefix}_{n + 1:04d}"
+
+
+def evidence_paths(item):
+    return [e["path"] for e in item.get("evidence", []) if isinstance(e, dict) and e.get("type") == "file"
+            and e.get("path")]
+
+
+def change_frequency(store, paths):
+    """Commits touching the paths in the last 90 days, over 20, capped at 1."""
+    if not paths:
+        return 0.0
+    out = git(store.root, "log", "--since=90.days", "--format=%H", "--", *paths)
+    return min(1.0, len(set(out.split())) / 20) if out else 0.0
+
+
+def importance(item, cfg):
+    w, f = cfg["weights"], item["importance_factors"]
+    value = sum(w[k] * f.get(k, 0.0) for k in FACTORS)
+    if item["origin"] == "agent-decision":
+        value += w["agent_boost"]
+    return round(min(1.0, value), 4)
+
+
+def read_input(source):
+    if source == "-":
+        text = sys.stdin.read()
+    else:
+        with open(source, encoding="utf-8") as fh:
+            text = fh.read()
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        sys.exit(f"the input is not valid JSON: {e}")
+    return data if isinstance(data, list) else [data]
+
+
+def upsert_item(store, cfg, ledger, data, at):
+    """The stored form of an input item: an update when `id` names an item, else a new one. Raises ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("an item is a JSON object")
+    by_id = {it["id"]: it for it in ledger["items"]}
+    stamp = iso(at)
+    given = {k: v for k, v in data.items() if k not in ("created_at", "updated_at", "importance")}
+    if data.get("id") is not None:
+        if data["id"] not in by_id:
+            raise ValueError(f"no item {data['id']}")
+        old = by_id[data["id"]]
+        new = {**old, **given}
+        if any(new.get(k) != old.get(k) for k in MATERIAL):
+            new["updated_at"] = stamp
+    else:
+        new = {"details": "", "status": "active", "superseded_by": None, "related_findings": [], **given,
+               "id": next_id("ki", by_id), "created_at": stamp, "updated_at": stamp}
+    factors = dict(new.get("importance_factors") or {})
+    factors["change_frequency"] = change_frequency(store, evidence_paths(new))
+    new["importance_factors"] = factors
+    errors = item_errors({**new, "importance": 0.0})
+    if errors:
+        raise ValueError(f"{new.get('id')}: " + "; ".join(errors))
+    new["importance"] = importance(new, cfg)
+    return new
+
+
+def find_item(ledger, item_id):
+    it = next((x for x in ledger["items"] if x["id"] == item_id), None)
+    if it is None:
+        sys.exit(f"no item {item_id}")
+    return it
+
+
+@command("item add", arg("--json", dest="source", default="-",
+                         help="a file holding an item or a list of items, or - for stdin"))
+def cmd_item_add(args):
+    store = store_of(args)
+    cfg, ledger, at = config(store), load_ledger(store), now()
+    saved, errors = [], []
+    for data in read_input(args.source):
+        try:
+            it = upsert_item(store, cfg, ledger, data, at)
+        except ValueError as e:
+            errors.append(str(e))
+            continue
+        ledger["items"] = [x for x in ledger["items"] if x["id"] != it["id"]] + [it]
+        saved.append(it)
+    if errors:
+        sys.exit("\n".join(errors))
+    save_ledger(store, ledger)
+    for it in saved:
+        print(f"{it['id']} {it['importance']:.2f} {it['title']}")
+    return 0
+
+
+@command("item get", arg("id"))
+def cmd_item_get(args):
+    print(json.dumps(find_item(load_ledger(store_of(args)), args.id), indent=2, sort_keys=True))
+    return 0
+
+
+@command("item list", arg("--status", choices=STATUSES), arg("--json", action="store_true"))
+def cmd_item_list(args):
+    items = [it for it in load_ledger(store_of(args))["items"] if not args.status or it["status"] == args.status]
+    if args.json:
+        print(json.dumps(items, indent=2, sort_keys=True))
+    for it in [] if args.json else items:
+        print(f"{it['id']} {it['importance']:.2f} {it['category']} {it['title']}")
+    return 0
+
+
+@command("item supersede", arg("id"), arg("--by", required=True))
+def cmd_item_supersede(args):
+    store = store_of(args)
+    ledger = load_ledger(store)
+    old, new = find_item(ledger, args.id), find_item(ledger, args.by)
+    if old is new:
+        sys.exit("an item cannot supersede itself")
+    old.update(status="superseded", superseded_by=new["id"], updated_at=iso(now()))
+    save_ledger(store, ledger)
+    print(f"{old['id']} superseded by {new['id']}")
+    return 0
+
+
+@command("item refresh")
+def cmd_item_refresh(args):
+    store = store_of(args)
+    cfg, ledger = config(store), load_ledger(store)
+    n = 0
+    for it in (x for x in ledger["items"] if x["status"] == "active"):
+        it["importance_factors"]["change_frequency"] = change_frequency(store, evidence_paths(it))
+        it["importance"] = importance(it, cfg)
+        n += 1
+    save_ledger(store, ledger)
+    print(f"{n} items refreshed")
+    return 0
+
+
+@command("scanned")
+def cmd_scanned(args):
+    store = store_of(args)
+    ledger = load_ledger(store)
+    head = git(store.root, "rev-parse", "HEAD")
+    ledger["last_scan"] = {"at": iso(now()), "commit": head.strip() if head else None}
+    save_ledger(store, ledger)
+    print(f"last scan: {ledger['last_scan']['at']}")
+    return 0
+
+
+# --- awareness ---
+
+MAX_SIGNALS = 50
+
+
+def load_awareness(store):
+    a = read_json(store.aware_path(), empty_awareness())
+    a.setdefault("items", {})
+    a.setdefault("state", {})
+    return a
+
+
+def save_awareness(store, a):
+    write_json(store.aware_path(), a)
+
+
+def record_of(a, item_id):
+    return a["items"].setdefault(item_id, {"exposure_signals": [], "disclosures": [], "user_response": "none",
+                                           "snoozed_until": None, "item_version_at_last_disclosure": None,
+                                           "acknowledged_version": None})
+
+
+def add_signal(a, item_id, signal):
+    rec = record_of(a, item_id)
+    rec["exposure_signals"] = (rec["exposure_signals"] + [signal])[-MAX_SIGNALS:]
+
+
+def unknown_likelihood(item, rec, cfg, at):
+    """How likely the person does not know the item, from its origin and their exposure to it."""
+    prior = cfg["priors"][item["origin"]]
+    rec = rec or {}
+    if rec.get("user_response") == "acknowledged" and rec.get("acknowledged_version") == item["updated_at"]:
+        return 0.05
+    u = prior
+    signals = sorted(rec.get("exposure_signals", []), key=lambda s: s["at"])
+    for s in signals:
+        if s["type"] == "user_edited_file":
+            u *= 0.4
+        elif s["type"] == "user_prompt_mentioned":
+            u *= 0.7
+        elif s["type"] == "agent_summarized":
+            u *= 0.9
+        elif s["type"] == "agent_silent_change":
+            u = min(0.95, u + 0.15)
+    if signals:
+        days = max(0.0, (at - parse_time(signals[-1]["at"])).total_seconds() / 86400)
+        u = prior + (u - prior) * 0.5 ** (days / cfg["rates"]["half_life_days"])
+    return round(max(0.0, min(1.0, u)), 4)
+
+
+def items_touching(ledger, path=None, component=None, item_id=None):
+    """Active items an exposure applies to: by id, by a component they name, or by a file in their evidence."""
+    out = []
+    for it in ledger["items"]:
+        if it["status"] != "active":
+            continue
+        if item_id is not None and it["id"] == item_id:
+            out.append(it)
+        elif component is not None and component in it["components"]:
+            out.append(it)
+        elif path is not None and any(path == p or path.startswith(p.rstrip("/") + "/") for p in evidence_paths(it)):
+            out.append(it)
+    return out
+
+
+@command("seen", arg("--item"), arg("--path"), arg("--component"), arg("--signal", required=True, choices=SIGNALS),
+         arg("--term"))
+def cmd_seen(args):
+    targets = [x for x in (args.item, args.path, args.component) if x]
+    if len(targets) != 1:
+        sys.exit("give exactly one of --item, --path or --component")
+    store = store_of(args)
+    ledger, a, stamp = load_ledger(store), load_awareness(store), iso(now())
+    if args.item:
+        find_item(ledger, args.item)
+    hits = items_touching(ledger, path=args.path, component=args.component, item_id=args.item)
+    for it in hits:
+        signal = {"type": args.signal, "at": stamp}
+        for key in ("path", "component", "term"):
+            if getattr(args, key):
+                signal[key] = getattr(args, key)
+        add_signal(a, it["id"], signal)
+    save_awareness(store, a)
+    print(f"{args.signal}: {len(hits)} item{'s' if len(hits) != 1 else ''}")
+    return 0
+
+
+@command("told", arg("id"), arg("--level", required=True, choices=LEVELS), arg("--report"), arg("--session"))
+def cmd_told(args):
+    store = store_of(args)
+    it = find_item(load_ledger(store), args.id)
+    a = load_awareness(store)
+    rec = record_of(a, it["id"])
+    entry = {"level": args.level, "at": iso(now())}
+    for key in ("report", "session"):
+        if getattr(args, key):
+            entry[key] = getattr(args, key)
+    rec["disclosures"].append(entry)
+    rec["item_version_at_last_disclosure"] = it["updated_at"]
+    save_awareness(store, a)
+    print(f"{it['id']}: {args.level}")
+    return 0
+
+
+@command("respond", arg("id"), arg("--response", required=True, choices=RESPONSES[1:]), arg("--days", type=float))
+def cmd_respond(args):
+    store = store_of(args)
+    cfg, it = config(store), find_item(load_ledger(store), args.id)
+    a, at = load_awareness(store), now()
+    rec, state = record_of(a, it["id"]), a["state"]
+    rec["user_response"] = args.response
+    if args.response == "acknowledged":
+        rec["acknowledged_version"] = it["updated_at"]
+    if args.response == "snoozed":
+        days = args.days if args.days is not None else cfg["rates"]["snooze_days"]
+        rec["snoozed_until"] = iso(at + datetime.timedelta(days=days))
+    state["dismissals"] = state.get("dismissals", 0) + 1 if args.response == "dismissed" else 0
+    if (state.get("pending_nudge") or {}).get("item") == it["id"]:
+        state["pending_nudge"] = None
+    save_awareness(store, a)
+    print(f"{it['id']}: {args.response}")
+    return 0
+
+
+# --- components and the queue ---
+
+CONTAINERS = ("src", "packages", "services", "apps", "lib", "libs", "modules", "crates")
+NOT_COMPONENTS = ("docs", "doc", "test", "tests", "node_modules", "vendor", "dist", "build", "target", "out")
+
+
+def norm(path):
+    p = str(path).replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def component_of(path, cfg):
+    """The component a repository path belongs to: the config's mapping, else its top folder (or the one under a
+    container folder such as src/), else None."""
+    p = norm(path)
+    for name, globs in cfg["components"].items():
+        if any(fnmatch.fnmatchcase(p, glob) for glob in globs):
+            return name
+    if cfg["components"]:
+        return None
+    parts = p.split("/")
+    if len(parts) < 2 or parts[0].startswith(".") or parts[0] in NOT_COMPONENTS:
+        return None
+    if parts[0] in CONTAINERS:
+        return parts[1] if len(parts) > 2 else None
+    return parts[0]
+
+
+def returns(rec, cfg, at):
+    """A disclosed, unchanged item comes back only when it was just mentioned and the person neither acknowledged
+    nor dismissed it: once their snooze ends, or snooze_days after the mention."""
+    last = rec["disclosures"][-1]
+    if last["level"] != "mentioned" or rec.get("user_response") in ("acknowledged", "dismissed", "wants_more"):
+        return False
+    mentioned = parse_time(last["at"])
+    snooze = rec.get("snoozed_until")
+    resume = parse_time(snooze) if snooze and parse_time(snooze) > mentioned else \
+        mentioned + datetime.timedelta(days=cfg["rates"]["snooze_days"])
+    return at >= resume
+
+
+def queue(cfg, ledger, a, at, files=(), components=()):
+    """Active items worth raising, most worth raising first: important, probably unknown, not yet told (or changed
+    since), not snoozed; relevance 1.5 when they touch the given files or components."""
+    files = {norm(f) for f in files}
+    comps = set(components) | {c for c in (component_of(f, cfg) for f in files) if c}
+    th, rows = cfg["thresholds"], []
+    for it in ledger["items"]:
+        if it["status"] != "active":
+            continue
+        rec = a["items"].get(it["id"]) or {}
+        if rec.get("snoozed_until") and parse_time(rec["snoozed_until"]) > at:
+            continue
+        told = rec.get("item_version_at_last_disclosure")
+        if rec.get("disclosures") and told and parse_time(it["updated_at"]) <= parse_time(told) \
+                and not returns(rec, cfg, at):
+            continue
+        unknown = unknown_likelihood(it, rec, cfg, at)
+        if it["importance"] < th["importance"] or unknown < th["unknown"]:
+            continue
+        touched = bool(files & set(evidence_paths(it))) or bool(comps & set(it["components"]))
+        relevance = 1.5 if touched else 1.0
+        rows.append({"id": it["id"], "title": it["title"], "importance": it["importance"], "unknown": unknown,
+                     "relevance": relevance, "priority": round(it["importance"] * unknown * relevance, 4),
+                     "components": it["components"]})
+    rows.sort(key=lambda r: (-r["priority"], -r["importance"], r["id"]))
+    return rows
+
+
+@command("queue", arg("--limit", type=int, default=5), arg("--files", nargs="*", default=[]),
+         arg("--components", nargs="*", default=[]), arg("--json", action="store_true"))
+def cmd_queue(args):
+    store = store_of(args)
+    rows = queue(config(store), load_ledger(store), load_awareness(store), now(), args.files,
+                 args.components)[:args.limit]
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+    for r in rows:
+        print(f"{r['id']} priority {r['priority']:.2f} (importance {r['importance']:.2f} x unknown "
+              f"{r['unknown']:.2f} x relevance {r['relevance']:g}) {r['title']}")
+    if not rows:
+        print("nothing to raise")
+    return 0
+
+
+# --- imports and the component graph ---
+
+EXT_LANG = {".py": "py", ".js": "js", ".jsx": "js", ".ts": "js", ".tsx": "js", ".mjs": "js", ".cjs": "js",
+            ".go": "go", ".rs": "rs", ".java": "java", ".kt": "java", ".cs": "cs", ".c": "c", ".h": "c",
+            ".cc": "c", ".cpp": "c", ".hpp": "c", ".cxx": "c"}
+IMPORT_RES = {
+    "py": [re.compile(r"^[ \t]*import[ \t]+([\w.]+)", re.M),
+           re.compile(r"^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import\b", re.M)],
+    "js": [re.compile(r"""^[ \t]*(?:import|export)\s[^'";]*?\bfrom\s+['"]([^'"]+)['"]""", re.M),
+           re.compile(r"""^[ \t]*import\s+['"]([^'"]+)['"]""", re.M),
+           re.compile(r"""\brequire\(\s*['"]([^'"]+)['"]\s*\)"""),
+           re.compile(r"""\bimport\(\s*['"]([^'"]+)['"]\s*\)""")],
+    "rs": [re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([\w:]+)", re.M)],
+    "java": [re.compile(r"^[ \t]*import[ \t]+(?:static[ \t]+)?([\w.]+)", re.M)],
+    "cs": [re.compile(r"^[ \t]*using[ \t]+(?:static[ \t]+)?([\w.]+)[ \t]*;", re.M)],
+    "c": [re.compile(r'^[ \t]*#[ \t]*include[ \t]+"([^"]+)"', re.M)],
+}
+GO_BLOCK = re.compile(r"^[ \t]*import[ \t]*\((.*?)\)", re.M | re.S)
+GO_SINGLE = re.compile(r'^[ \t]*import[ \t]+(?:[\w.]+[ \t]+)?"([^"]+)"', re.M)
+GO_QUOTED = re.compile(r'"([^"]+)"')
+MAX_BYTES = 256 * 1024
+FILE_LIMIT = 20000      # files walked outside git, and source files the graph reads
+WALK_SKIP = ("node_modules", "vendor", "dist", "build", "target", "out", "__pycache__")
+
+
+def ext(path):
+    return os.path.splitext(path)[1].lower()
+
+
+def imports_of(path, text):
+    """The module strings a source file imports, in file order per pattern; [] for unknown file types."""
+    lang = EXT_LANG.get(ext(path))
+    if lang is None:
+        return []
+    if lang == "go":
+        found = [(m.start(), m.group(1)) for m in GO_SINGLE.finditer(text)]
+        for block in GO_BLOCK.finditer(text):
+            found += [(block.start() + q.start(), q.group(1)) for q in GO_QUOTED.finditer(block.group(1))]
+        return [mod for _, mod in sorted(found)]
+    found = []
+    for rx in IMPORT_RES[lang]:
+        found += [(m.start(), m.group(1)) for m in rx.finditer(text)]
+    return [mod for _, mod in sorted(found)]
+
+
+def import_target(mod, path, cfg, names):
+    """The component an import points into, or None when it is outside every known component."""
+    path = norm(path)
+    lang = EXT_LANG.get(ext(path))
+    if mod.startswith("."):
+        if lang == "py":
+            dots = len(mod) - len(mod.lstrip("."))
+            base = os.path.dirname(path)
+            for _ in range(dots - 1):
+                base = os.path.dirname(base)
+            target = "/".join(x for x in (base, mod[dots:].replace(".", "/")) if x)
+        else:
+            target = norm(os.path.normpath(os.path.join(os.path.dirname(path), mod)))
+        return None if target.startswith("..") else component_of(target + "/_", cfg)
+    if lang == "c":
+        for target in (norm(os.path.normpath(os.path.join(os.path.dirname(path), mod))), norm(mod)):
+            found = component_of(target, cfg)
+            if found:
+                return found
+        return None
+    segments = [s for s in re.split(r"[./:\\@]+", mod) if s]
+    pairs = getattr(names, "pairs", None)
+    for k, s in enumerate(segments if lang in ("go", "java", "cs") else segments[:3]):
+        if s not in names:
+            continue
+        # A third-party import can share a name with a component (io.netty.util): it counts only when the path
+        # it names under that component exists in the repository. Rust paths name items, not files.
+        if pairs is not None and lang != "rs" and k + 1 < len(segments) and f"{s}/{segments[k + 1]}" not in pairs:
+            continue
+        return s
+    return None
+
+
+def tracked_files(store):
+    """Every file git lists (tracked, or untracked and not ignored); outside git, a walk of up to FILE_LIMIT files."""
+    out = git(store.root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if out is not None:
+        files = [norm(p) for p in out.split("\0") if p]
+    else:
+        files = []
+        for folder, dirs, names in os.walk(store.root):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in WALK_SKIP)
+            files += [norm(os.path.relpath(os.path.join(folder, n), store.root)) for n in sorted(names)]
+            if len(files) >= FILE_LIMIT:
+                break
+    return [f for f in files if not f.startswith(STORE + "/")]
+
+
+class Names(set):
+    """Component names, with every pair of consecutive path parts in the repository (file names without their
+    extension), so an import can be checked against a real path."""
+    pairs = frozenset()
+
+
+def component_names(cfg, files):
+    names = Names(cfg["components"]) if cfg["components"] else Names(
+        c for c in (component_of(f, cfg) for f in files) if c)
+    pairs = set()
+    for f in files:
+        parts = norm(f).split("/")
+        parts[-1] = os.path.splitext(parts[-1])[0]
+        pairs.update(f"{a}/{b}" for a, b in zip(parts, parts[1:]))
+    names.pairs = frozenset(pairs)
+    return names
+
+
+def read_source(store, rel):
+    path = os.path.join(store.root, rel)
+    try:
+        if os.path.getsize(path) > MAX_BYTES:
+            return None
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    if b"\0" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def targets(path, text, cfg, names):
+    own = component_of(path, cfg)
+    return {t for m in imports_of(path, text) for t in [import_target(m, path, cfg, names)] if t and t != own}
+
+
+def graph(store, cfg):
+    files = tracked_files(store)
+    names = component_names(cfg, files)
+    edges = {}
+    for f in [f for f in files if ext(f) in EXT_LANG][:FILE_LIMIT]:
+        src = component_of(f, cfg)
+        if not src:
+            continue
+        text = read_source(store, f)
+        for mod in imports_of(f, text) if text is not None else []:
+            dst = import_target(mod, f, cfg, names)
+            if dst and dst != src:
+                edges[(src, dst)] = edges.get((src, dst), 0) + 1
+    return {"components": sorted(names),
+            "edges": [{"from": a, "to": b, "count": n} for (a, b), n in sorted(edges.items())]}
+
+
+@command("graph", arg("--json", action="store_true"))
+def cmd_graph(args):
+    store = store_of(args)
+    data = graph(store, config(store))
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+        return 0
+    print(f"components: {', '.join(data['components']) or 'none'}")
+    for e in data["edges"]:
+        print(f"{e['from']} -> {e['to']} ({e['count']})")
+    return 0
+
+
+# --- erosion detectors ---
+
+RANK = {s: k for k, s in enumerate(SEVERITIES)}
+ADAPTER_RE = re.compile(r"adapter|mapper|translator|converter|bridge|sync", re.I)
+TYPE_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:(?:public|internal|private|protected|abstract|"
+                     r"sealed|final|static|partial|data|pub(?:\([^)]*\))?)[ \t]+)*(?:class|interface|struct|enum|"
+                     r"record|trait)[ \t]+([A-Z][A-Za-z0-9_]*)", re.M)
+TS_TYPE_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?type[ \t]+([A-Z][A-Za-z0-9_]*)[ \t]*=", re.M)
+GO_TYPE_RE = re.compile(r"^[ \t]*type[ \t]+([A-Z][A-Za-z0-9_]*)[ \t]+(?:struct|interface)\b", re.M)
+GENERIC_TYPES = {"Config", "Options", "Props", "State", "Error", "Errors", "Result", "Response", "Request", "Context",
+                 "Base", "Item", "Data", "Type", "Types", "Settings", "Params", "Args", "Handler", "Service", "Client",
+                 "Server", "Main", "Model", "Models", "Utils", "Helper", "Helpers", "Manager", "Event", "Events"}
+PRIVATE_PART = re.compile(r"^(?:internal|private|_private|impl|_[A-Za-z0-9]\w*)$")
+
+
+def candidate(signal, severity, description, paths, components, key):
+    return {"signal": signal, "severity": severity, "description": description,
+            "evidence": [{"type": "file", "path": p} for p in sorted(set(paths))], "components": list(components),
+            "key": key}
+
+
+def enabled(cfg, name):
+    return cfg["detectors"].get(name, True)
+
+
+def under(path, dirs):
+    p = norm(path)
+    return any(p == d.strip("/") or p.startswith(d.strip("/") + "/") for d in dirs)
+
+
+def adapter_pairs(path, text, cfg, names):
+    own = component_of(path, cfg)
+    if own is None or not ADAPTER_RE.search(os.path.basename(path)):
+        return set()
+    return {tuple(sorted((own, t))) for t in targets(path, text, cfg, names)}
+
+
+def detect_adapters(store, cfg, path, text, names, files, before=""):
+    out = []
+    for pair in sorted(adapter_pairs(path, text, cfg, names) - adapter_pairs(path, before, cfg, names)):
+        peers = [f for f in files if f != path and ext(f) in EXT_LANG and ADAPTER_RE.search(os.path.basename(f))
+                 and pair in adapter_pairs(f, read_source(store, f) or "", cfg, names)]
+        n = 1 + len(peers)
+        out.append(candidate("adapter-proliferation", SEVERITIES[min(n, 3) - 1],
+                             f"{n} adapter file{'s' if n > 1 else ''} map between {pair[0]} and {pair[1]}",
+                             [path, *peers], pair, f"adapter-proliferation|{pair[0]},{pair[1]}"))
+    return out
+
+
+def model_name(name, component):
+    c = re.sub(r"[^a-z0-9]", "", component.lower())
+    low = name.lower()
+    if c and low.startswith(c) and len(name) > len(c):
+        return name[len(c):]
+    if c and low.endswith(c) and len(name) > len(c):
+        return name[:-len(c)]
+    return name
+
+
+def defined_types(path, text):
+    found = TYPE_RE.findall(text) + GO_TYPE_RE.findall(text)
+    if EXT_LANG.get(ext(path)) == "js":
+        found += TS_TYPE_RE.findall(text)
+    return {n for n in found if len(n) >= 4 and n not in GENERIC_TYPES and not n.startswith("Test")}
+
+
+def files_mentioning(store, words):
+    """Files containing any of the words, by git grep; None when git cannot answer (then scan every file)."""
+    try:
+        out = subprocess.run(["git", "-C", store.root, "grep", "-l", "-I", "--untracked", "-E",
+                              "|".join(re.escape(w) for w in words)], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode == 1:
+        return []
+    return [norm(p) for p in out.stdout.splitlines() if p] if out.returncode == 0 else None
+
+
+def detect_duplicates(store, cfg, path, text, files, before=""):
+    own = component_of(path, cfg)
+    if own is None:
+        return []
+    had = {model_name(n, own) for n in defined_types(path, before)}
+    mine = {m for m in (model_name(n, own) for n in defined_types(path, text)) if len(m) >= 4
+            and m not in GENERIC_TYPES and m not in had}
+    if not mine:
+        return []
+    found = {}
+    pool = files_mentioning(store, sorted(mine))
+    for f in files if pool is None else pool:
+        comp = component_of(f, cfg)
+        if f == path or ext(f) not in EXT_LANG or comp is None or comp == own:
+            continue
+        for n in defined_types(f, read_source(store, f) or ""):
+            if model_name(n, comp) in mine:
+                found.setdefault(model_name(n, comp), []).append((f, comp))
+    out = []
+    for m, hits in sorted(found.items()):
+        comps = sorted({own} | {c for _, c in hits})
+        out.append(candidate("duplicate-model", "medium", f"{m} is defined separately in {', '.join(comps)}",
+                             [path] + [f for f, _ in hits], comps, f"duplicate-model|{m}|{','.join(comps)}"))
+    return out
+
+
+def detect_new_edges(store, cfg, path, text, names, before=""):
+    own = component_of(path, cfg)
+    if own is None:
+        return []
+    allowed = {tuple(e) for e in cfg["allowed_edges"]}
+    new = targets(path, text, cfg, names) - targets(path, before, cfg, names)
+    return [candidate("point-to-point", "low", f"{path} now imports {t} directly", [path], [own, t],
+                      f"point-to-point|{own}>{t}") for t in sorted(new) if (own, t) not in allowed]
+
+
+def detect_drift(cfg, path, text, names, before=""):
+    own, out = component_of(path, cfg), {}
+    had = set(imports_of(path, before))
+    for m in (m for m in imports_of(path, text) if m not in had):
+        t = import_target(m, path, cfg, names)
+        if own and t and t != own and any(PRIVATE_PART.match(s) for s in re.split(r"[./:\\]+", m) if s):
+            out.setdefault(f"boundary-drift|{own}>{t}", candidate(
+                "boundary-drift", "medium", f"{path} imports {m}, inside {t}'s internals", [path], [own, t],
+                f"boundary-drift|{own}>{t}"))
+    return list(out.values())
+
+
+def detect_file(store, cfg, path, names=None, files=None):
+    """Candidates from one changed file, for what it adds over its committed version (all of it when the file is
+    new or there is no git); [] for unknown types and for missing, huge or binary files."""
+    path = norm(path)
+    text = read_source(store, path) if ext(path) in EXT_LANG else None
+    if text is None:
+        return []
+    files = files if files is not None else tracked_files(store)
+    names = names if names is not None else component_names(cfg, files)
+    before = git(store.root, "show", f"HEAD:{path}") or ""
+    out = []
+    if enabled(cfg, "adapter-proliferation"):
+        out += detect_adapters(store, cfg, path, text, names, files, before)
+    if enabled(cfg, "duplicate-model"):
+        out += detect_duplicates(store, cfg, path, text, files, before)
+    if enabled(cfg, "point-to-point"):
+        out += detect_new_edges(store, cfg, path, text, names, before)
+    if enabled(cfg, "boundary-drift"):
+        out += detect_drift(cfg, path, text, names, before)
+    return out
+
+
+def turn_candidates(store, cfg, paths, ledger, names=None):
+    """Candidates from the set of files one turn changed."""
+    paths = sorted({norm(p) for p in paths})
+    if not paths:
+        return []
+    out = []
+    names = names if names is not None else component_names(cfg, tracked_files(store))
+    comps = {c for c in (component_of(p, cfg) for p in paths) if c}
+    if enabled(cfg, "private-contract") and len(comps) >= 2 and not any(under(p, cfg["contract_dirs"]) for p in paths):
+        crossing = [p for p in paths if targets(p, read_source(store, p) or "", cfg, names) & comps]
+        if crossing:
+            cs = sorted(comps)
+            dirs = ", ".join(cfg["contract_dirs"])
+            out.append(candidate("private-contract", "medium",
+                                 f"this change crosses {', '.join(cs)} and updates no file under {dirs}",
+                                 crossing, cs, f"private-contract|{','.join(cs)}"))
+    if enabled(cfg, "missing-decision-record") and not any(under(p, cfg["adr_dirs"]) for p in paths):
+        for it in ledger["items"]:
+            hit = sorted(set(paths) & set(evidence_paths(it)))
+            if it["status"] == "active" and it["importance"] >= cfg["thresholds"]["silent_importance"] and hit:
+                out.append(candidate("missing-decision-record", "low",
+                                     f"{it['title']} changed with no decision record under "
+                                     f"{', '.join(cfg['adr_dirs'])}", hit, it["components"],
+                                     f"missing-decision-record|{it['id']}"))
+    return out
+
+
+def history_candidates(store, cfg):
+    if not enabled(cfg, "contract-churn"):
+        return []
+    dirs = [d for d in cfg["contract_dirs"] if os.path.isdir(os.path.join(store.root, d))]
+    out = git(store.root, "log", "--since=30.days", "--format=%H", "--", *dirs) if dirs else None
+    n = len(set(out.split())) if out else 0
+    if n < 5:
+        return []
+    files = sorted(set((git(store.root, "log", "--since=30.days", "--name-only", "--format=", "--", *dirs)
+                        or "").split()))
+    return [candidate("contract-churn", "high" if n >= 10 else "medium",
+                      f"{n} commits changed contract files in the last 30 days", files[:10] or dirs, [],
+                      "contract-churn")]
+
+
+# --- findings and candidates ---
+
+def load_findings(store):
+    return read_json(store.path(FINDINGS), empty_findings())
+
+
+def save_findings(store, findings):
+    findings["findings"].sort(key=lambda x: x["id"])
+    write_json(store.path(FINDINGS), findings)
+
+
+def load_pending(store):
+    pend = read_json(store.path(PENDING), empty_pending())
+    for key, value in empty_pending().items():
+        pend.setdefault(key, value)
+    return pend
+
+
+def save_pending(store, pend):
+    write_json(store.path(PENDING), pend)
+
+
+def suppressed(c, findings):
+    """A candidate already covered: an open finding with the same key, or one the person accepted or rejected, at
+    the same or a higher severity."""
+    return any(f["key"] == c["key"] and f["user_decision"] in (None, "accepted-risk", "false-positive")
+               and RANK[c["severity"]] <= RANK[f["severity"]] for f in findings["findings"])
+
+
+def upsert_finding(findings, data, at):
+    if not isinstance(data, dict):
+        raise ValueError("a finding is a JSON object")
+    data = dict(data)
+    data.setdefault("key", f"{data.get('signal')}|{','.join(sorted(data.get('components') or []))}")
+    if data.get("severity") not in RANK:
+        raise ValueError(f"`severity` is one of {', '.join(SEVERITIES)}")
+    for f in findings["findings"]:
+        if f["key"] != data["key"]:
+            continue
+        if f["user_decision"] is None:
+            merged = {**f, **{k: v for k, v in data.items() if k not in ("id", "detected_at", "user_decision")}}
+            merged["severity"] = max(f["severity"], data["severity"], key=RANK.get)
+            merged["evidence"] = f["evidence"] + [e for e in data.get("evidence", []) if e not in f["evidence"]]
+            errors = finding_errors(merged)
+            if errors:
+                raise ValueError(f"{f['id']}: " + "; ".join(errors))
+            return merged, "updated"
+        if f["user_decision"] in ("accepted-risk", "false-positive") and RANK[data["severity"]] <= RANK[f["severity"]]:
+            return f, "already decided"
+    new = {"cost": "", **data, "id": next_id("ef", [f["id"] for f in findings["findings"]]),
+           "detected_at": iso(at), "user_decision": None}
+    errors = finding_errors(new)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return new, "new"
+
+
+def add_candidates(pend, cands, findings, at):
+    """Queue candidates for review, skipping known ones; a known key returns only at a higher severity."""
+    added = 0
+    for c in cands:
+        old = next((x for x in pend["candidates"] if x["key"] == c["key"]), None)
+        if suppressed(c, findings) or (old is not None and RANK[c["severity"]] <= RANK[old["severity"]]):
+            continue
+        pend["candidates"] = [x for x in pend["candidates"] if x["key"] != c["key"]]
+        pend["candidates"].append({**c, "reviewed": False, "found_at": iso(at)})
+        added += 1
+    return added
+
+
+@command("signals", arg("--paths", nargs="*", default=[]), arg("--since", help="also every file changed since REV"),
+         arg("--history", action="store_true", help="also signals from git history (contract churn)"))
+def cmd_signals(args):
+    store = store_of(args)
+    cfg, ledger, files = config(store), load_ledger(store), tracked_files(store)
+    names = component_names(cfg, files)
+    paths = [norm(p) for p in args.paths]
+    if args.since:
+        out = git(store.root, "diff", "--name-only", f"{args.since}..HEAD")
+        if out is None:
+            sys.exit(f"git cannot diff {args.since}..HEAD")
+        paths += out.split()
+    found = []
+    for p in sorted(set(paths)):
+        found += detect_file(store, cfg, p, names, files)
+    found += turn_candidates(store, cfg, paths, ledger, names)
+    if args.history:
+        found += history_candidates(store, cfg)
+    print(json.dumps(found, indent=2, sort_keys=True))
+    return 0
+
+
+@command("finding add", arg("--json", dest="source", default="-",
+                            help="a file holding a finding or a list of findings, or - for stdin"))
+def cmd_finding_add(args):
+    store = store_of(args)
+    findings, at = load_findings(store), now()
+    done, errors = [], []
+    for data in read_input(args.source):
+        try:
+            f, status = upsert_finding(findings, data, at)
+        except ValueError as e:
+            errors.append(str(e))
+            continue
+        findings["findings"] = [x for x in findings["findings"] if x["id"] != f["id"]] + [f]
+        done.append((f, status))
+    if errors:
+        sys.exit("\n".join(errors))
+    save_findings(store, findings)
+    for f, status in done:
+        print(f"{f['id']} {status}: {f['description']}")
+    return 0
+
+
+@command("finding list", arg("--status", choices=("open", "decided")), arg("--json", action="store_true"))
+def cmd_finding_list(args):
+    rows = [f for f in load_findings(store_of(args))["findings"]
+            if not args.status or (f["user_decision"] is None) == (args.status == "open")]
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+    for f in rows:
+        print(f"{f['id']} {f['severity']} {f['signal']}: {f['description']}"
+              + (f" [{f['user_decision']}]" if f["user_decision"] else ""))
+    if not rows:
+        print("no findings")
+    return 0
+
+
+@command("finding decide", arg("id"), arg("--decision", required=True, choices=DECISIONS))
+def cmd_finding_decide(args):
+    store = store_of(args)
+    findings = load_findings(store)
+    f = next((x for x in findings["findings"] if x["id"] == args.id), None)
+    if f is None:
+        sys.exit(f"no finding {args.id}")
+    f["user_decision"], f["decided_at"] = args.decision, iso(now())
+    save_findings(store, findings)
+    print(f"{f['id']}: {args.decision}")
+    return 0
+
+
+@command("candidates", arg("--clear", action="store_true", help="mark every candidate reviewed"))
+def cmd_candidates(args):
+    store = store_of(args)
+    pend = load_pending(store)
+    if args.clear:
+        n = sum(not c.get("reviewed") for c in pend["candidates"])
+        for c in pend["candidates"]:
+            c["reviewed"] = True
+        save_pending(store, pend)
+        print(f"{n} candidate{'s' if n != 1 else ''} marked reviewed")
+        return 0
+    print(json.dumps([c for c in pend["candidates"] if not c.get("reviewed")], indent=2, sort_keys=True))
+    return 0
+
+
+@command("warned", arg("--session", required=True))
+def cmd_warned(args):
+    store = store_of(args)
+    a = load_awareness(store)
+    a["state"]["high_shown_session"] = args.session
+    save_awareness(store, a)
+    print(f"high-severity warning used for session {args.session}")
+    return 0
+
+
+# --- staleness and the person's own edits ---
+
+CLAUDE_TRAILER = re.compile(r"^co-authored-by:\s*claude", re.I | re.M)
+STOPWORDS = {"about", "after", "before", "between", "could", "every", "their", "there", "these", "those", "which",
+             "where", "while", "would", "should", "other", "using", "without"}
+
+
+def stale(store, cfg, ledger, at):
+    last = ledger.get("last_scan")
+    if not last:
+        return True, "no scan yet"
+    days = (at - parse_time(last["at"])).total_seconds() / 86400
+    if days >= cfg["rates"]["stale_days"]:
+        return True, f"{int(days)} days since the last scan"
+    if last.get("commit"):
+        out = git(store.root, "rev-list", "--count", f"{last['commit']}..HEAD")
+        if out and out.strip().isdigit() and int(out.strip()) >= cfg["rates"]["stale_commits"]:
+            return True, f"{out.strip()} commits since the last scan"
+    return False, ""
+
+
+def user_edits(store, since, agent_paths, seen):
+    """Files the person changed: their own commits since `since` (no Claude co-author trailer), and uncommitted
+    changes the agent did not make, each counted once per change (`seen` maps a path to the mtime counted)."""
+    paths = set()
+    user = (git(store.root, "config", "user.name") or "").strip()
+    if user:
+        for sha in (git(store.root, "log", f"--since={since}", f"--author={user}", "--format=%H") or "").split()[:50]:
+            if not CLAUDE_TRAILER.search(git(store.root, "show", "-s", "--format=%B", sha) or ""):
+                paths |= set((git(store.root, "show", "--name-only", "--format=", sha) or "").split())
+    dirty = set((git(store.root, "diff", "--name-only", "HEAD") or "").split()) - set(agent_paths)
+    for p in sorted(dirty):
+        try:
+            mtime = os.path.getmtime(os.path.join(store.root, p))
+        except OSError:
+            mtime = 0.0
+        if seen.get(p) != mtime:
+            seen[p] = mtime
+            paths.add(p)
+    for p in [p for p in seen if p not in dirty]:
+        del seen[p]
+    return sorted(norm(p) for p in paths)
+
+
+def title_words(title):
+    return {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) >= 5} - STOPWORDS
+
+
+@command("stale")
+def cmd_stale(args):
+    store = store_of(args)
+    is_stale, why = stale(store, config(store), load_ledger(store), now())
+    print(f"stale: {why}" if is_stale else "fresh")
+    return 0
+
+
+# --- hooks ---
+
+def context(event, text):
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+
+
+def hook_store(data):
+    store = store_for(data.get("cwd") or os.getcwd())
+    return store if store.exists else None
+
+
+def hook_session_start(data):
+    store = hook_store(data)
+    if store is None:
+        return None
+    errors = store_errors(store)
+    if errors:
+        return context("SessionStart", f"agentropy-guard: its files do not parse ({errors[0]}). Tell the user once, "
+                                       f"and suggest `{GUARD} parse` to see every problem.")
+    cfg, ledger, findings, a, at = config(store), load_ledger(store), load_findings(store), load_awareness(store), now()
+    st, pend = a["state"], load_pending(store)
+    since = st.get("user_edits_checked_at") or iso(at - datetime.timedelta(days=7))
+    seen = st.setdefault("dirty_seen", {})
+    for path in user_edits(store, since, pend["agent_paths"], seen):
+        for it in items_touching(ledger, path=path):
+            add_signal(a, it["id"], {"type": "user_edited_file", "at": iso(at), "path": path})
+    st["user_edits_checked_at"] = iso(at)
+    dirty = set((git(store.root, "diff", "--name-only", "HEAD") or "").split())
+    pend["agent_paths"] = sorted(p for p in pend["agent_paths"] if p in dirty)
+    save_pending(store, pend)
+    lines = []
+    top = queue(cfg, ledger, a, at)[:3]
+    if top:
+        lines.append("agentropy-guard: architecture the user probably does not know (context for you; do not raise "
+                     "it unprompted): " + "; ".join(f"{r['id']} {r['title']}" for r in top) + ".")
+    listed = st.setdefault("findings_listed", {})
+    due = at.date() - datetime.timedelta(days=cfg["rates"]["snooze_days"])
+    open_now = [f for f in findings["findings"] if f["user_decision"] is None
+                and (f["id"] not in listed or datetime.date.fromisoformat(listed[f["id"]]) <= due)][:5]
+    if open_now:
+        lines.append("agentropy-guard: in your first reply, list these open architecture findings in a short block, "
+                     "as the agentropy-guard:erosion-check skill says, and record any decision with "
+                     f"`{GUARD} finding decide`: "
+                     + "; ".join(f"{f['id']} ({f['severity']}) {f['description']}" for f in open_now) + ".")
+        listed.update({f["id"]: today() for f in open_now})
+    is_stale, why = stale(store, cfg, ledger, at)
+    if is_stale and st.get("stale_suggested_on") != today():
+        lines.append(f"agentropy-guard: the architecture ledger is stale ({why}). Suggest once, in a sentence, "
+                     "that the user run /agentropy-guard:scan.")
+        st["stale_suggested_on"] = today()
+    save_awareness(store, a)
+    return context("SessionStart", "\n".join(lines)) if lines else None
+
+
+def hook_prompt(data):
+    store = hook_store(data)
+    if store is None:
+        return None
+    ledger, a, at = load_ledger(store), load_awareness(store), now()
+    words = set(re.findall(r"[a-z0-9_-]+", (data.get("prompt") or "").lower()))
+    for it in (x for x in ledger["items"] if x["status"] == "active"):
+        comps = [c for c in it["components"] if c.lower() in words]
+        hits = title_words(it["title"]) & words
+        if comps or len(hits) >= 2:
+            add_signal(a, it["id"], {"type": "user_prompt_mentioned", "at": iso(at),
+                                     "term": ", ".join(comps or sorted(hits))})
+    out, st = None, a["state"]
+    pending = st.get("pending_nudge")
+    if pending and pending.get("session") == data.get("session_id"):
+        it = next((x for x in ledger["items"] if x["id"] == pending.get("item")), None)
+        if it:
+            out = context("UserPromptSubmit", (
+                f"agentropy-guard: the user may be answering your architecture note on {it['id']} ({it['title']}). "
+                "If so, follow the agentropy-guard:educate skill: yes → the agentropy-guard:arch-report skill; "
+                f"\"I know\" → `{GUARD} respond {it['id']} --response acknowledged`; not now → `--response snoozed`; "
+                "no → `--response dismissed`. If the prompt is about something else, ignore this."))
+        st["pending_nudge"] = None
+    save_awareness(store, a)
+    return out
+
+
+def hook_post_edit(data):
+    store = hook_store(data)
+    tool = data.get("tool_input") or {}
+    raw = tool.get("file_path") or tool.get("notebook_path")
+    if store is None or not raw:
+        return None
+    full = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(data.get("cwd") or store.root, raw))
+    rel = norm(os.path.relpath(full, os.path.realpath(store.root)))
+    if rel.startswith("..") or os.path.isabs(rel) or rel.startswith(STORE + "/") or rel == STORE:
+        return None
+    cfg, findings, pend, at = config(store), load_findings(store), load_pending(store), now()
+    if pend["session"] != data.get("session_id"):
+        pend = {**empty_pending(), "session": data.get("session_id"), "candidates": pend["candidates"],
+                "agent_paths": pend["agent_paths"]}
+    pend["edits"].append({"path": rel, "at": iso(at)})
+    pend["agent_paths"] = sorted(set(pend["agent_paths"]) | {rel})
+    add_candidates(pend, detect_file(store, cfg, rel), findings, at)
+    save_pending(store, pend)
+    return None
+
+
+def hook_pre_compact(data):
+    store = hook_store(data)
+    if store is not None:
+        save_pending(store, load_pending(store))
+    return None
+
+
+def hook_session_end(data):
+    store = hook_store(data)
+    if store is not None:
+        a = load_awareness(store)
+        a["state"]["session_end_at"] = iso(now())
+        save_awareness(store, a)
+    return None
+
+
+HOOKS = {"session-start": hook_session_start, "prompt": hook_prompt, "post-edit": hook_post_edit,
+         "pre-compact": hook_pre_compact, "session-end": hook_session_end}
+
+
+# --- the stop hook ---
+
+def last_assistant_text(path):
+    """The last assistant message with text in a transcript (JSON lines), or None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()[-400:]
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+            if any(t.strip() for t in texts):
+                return "\n".join(texts)
+    return None
+
+
+def nudge_allowed(state, cfg, at):
+    last = state.get("last_nudge_at")
+    if not last:
+        return True
+    gap = cfg["rates"]["nudge_days"] * 2 ** (state.get("dismissals", 0) // 2)
+    return (at - parse_time(last)).total_seconds() >= gap * 86400
+
+
+def mentions(item):
+    words = {c.lower() for c in item["components"]} | title_words(item["title"])
+    for p in evidence_paths(item):
+        words |= {p.lower(), os.path.basename(p).lower()}
+    return words
+
+
+def silent_items(cfg, ledger, turn, text):
+    """Important items this turn changed that the reply names nowhere (no file, component or title word)."""
+    if text is None:
+        return []
+    low = text.lower()
+    return [it for it in ledger["items"] if it["status"] == "active"
+            and it["importance"] >= cfg["thresholds"]["silent_importance"] and set(turn) & set(evidence_paths(it))
+            and not any(w in low for w in mentions(it))]
+
+
+def block(reason):
+    return {"decision": "block", "reason": reason}
+
+
+def hook_stop(data):
+    """At most one interruption per stopping point: erosion candidates to review, else a silent change to mention,
+    else one education nudge (at most one a day, widening after dismissals)."""
+    if data.get("stop_hook_active"):
+        return None
+    store = hook_store(data)
+    if store is None:
+        return None
+    cfg, ledger, findings, a, pend, at = (config(store), load_ledger(store), load_findings(store),
+                                          load_awareness(store), load_pending(store), now())
+    sid, st = data.get("session_id"), a["state"]
+    turn = sorted({e["path"] for e in pend["edits"][pend.get("turn_mark", 0):]}) if pend["session"] == sid else []
+    pend["turn_mark"] = len(pend["edits"])
+    if turn:
+        add_candidates(pend, turn_candidates(store, cfg, turn, ledger), findings, at)
+    review = [c for c in pend["candidates"] if not c.get("reviewed") and not c.get("offered")
+              and c["severity"] in ("medium", "high")]
+    for c in review:
+        c["offered"] = True
+    save_pending(store, pend)
+    if review:
+        warn = (f"If a confirmed one is high severity, warn the user as the agentropy-guard:erosion-check skill says, "
+                f"then run `{GUARD} warned --session {sid}`." if st.get("high_shown_session") != sid else
+                "Do not warn the user now: confirmed findings are listed at the next session's start.")
+        n = len(review)
+        return block(f"agentropy-guard: {n} possible architecture erosion signal{'s' if n != 1 else ''} in this work. "
+                     f"Run `{GUARD} candidates`, dispatch the agentropy-guard:erosion-reviewer subagent on them, "
+                     f"record each confirmed one with `{GUARD} finding add --json -`, then run "
+                     f"`{GUARD} candidates --clear`. {warn}")
+    silent = silent_items(cfg, ledger, turn, last_assistant_text(data.get("transcript_path"))) if turn else []
+    for it in silent:
+        add_signal(a, it["id"], {"type": "agent_silent_change", "at": iso(at),
+                                 "path": sorted(set(turn) & set(evidence_paths(it)))[0]})
+    out = None
+    if turn and nudge_allowed(st, cfg, at):
+        if silent:
+            it = silent[0]
+            files = ", ".join(sorted(set(turn) & set(evidence_paths(it))))
+            st["last_nudge_at"] = iso(at)
+            out = block(f"agentropy-guard: this turn changed {it['title']} ({files}) without saying so. Tell the "
+                        f"user in one line, then run `{GUARD} told {it['id']} --level mentioned`.")
+        else:
+            rows = queue(cfg, ledger, a, at, files=turn)
+            top = rows[0] if rows else None
+            if top and top["relevance"] > 1 and top["priority"] >= cfg["thresholds"]["nudge_priority"]:
+                st["last_nudge_at"] = iso(at)
+                st["pending_nudge"] = {"item": top["id"], "session": sid}
+                out = block(f"agentropy-guard: follow the agentropy-guard:educate skill for {top['id']} "
+                            f"({top['title']}): give the user its one-line architecture note.")
+    save_awareness(store, a)
+    return out
+
+
+HOOKS["stop"] = hook_stop
+
+
+# --- the report's page check ---
+
+CHROMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome")
+PAGE_RE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
+
+
+def count_pdf_pages(data):
+    return len(PAGE_RE.findall(data))
+
+
+@command("pages", arg("file"), arg("--max", type=int, default=2))
+def cmd_pages(args):
+    exe = next((shutil.which(c) for c in CHROMES if shutil.which(c)), None)
+    if exe is None:
+        print("skipped: no headless Chrome or Chromium on PATH; keep the report within the content budget")
+        return 0
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "report.pdf")
+        try:
+            subprocess.run([exe, "--headless", "--disable-gpu", "--no-pdf-header-footer", f"--print-to-pdf={out}",
+                            "file://" + os.path.abspath(args.file)], capture_output=True, timeout=90)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if not os.path.exists(out):
+            print("skipped: Chrome did not produce a PDF; keep the report within the content budget")
+            return 0
+        with open(out, "rb") as fh:
+            n = count_pdf_pages(fh.read())
+    print(f"{n} page{'s' if n != 1 else ''}" + (f", over the limit of {args.max}" if n > args.max else ""))
+    return 2 if n > args.max else 0
+
+
+# --- main ---
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="guard.py", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    top = ap.add_subparsers(dest="cmd", required=True)
+    groups = {}
+    for name, (fn, arguments) in REGISTRY.items():
+        parts = name.split()
+        if len(parts) == 1:
+            p = top.add_parser(parts[0])
+        else:
+            if parts[0] not in groups:
+                groups[parts[0]] = top.add_parser(parts[0]).add_subparsers(dest="sub", required=True)
+            p = groups[parts[0]].add_parser(parts[1])
+        p.add_argument("--dir", help="the store (default: .agentropy-guard/ at the git root)")
+        for names, kw in arguments:
+            p.add_argument(*names, **kw)
+        p.set_defaults(fn=fn)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        return args.fn(args)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    except (KeyError, TypeError, AttributeError) as e:
+        sys.exit(f"error: a file in {STORE}/ or the awareness file has the wrong shape ({type(e).__name__}: {e}); "
+                 f"run `guard.py parse` to see which")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
