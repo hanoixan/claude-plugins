@@ -1,7 +1,7 @@
 {
   "name": "question-refiner",
   "description": "Every question to the user becomes a recorded round: choices annotated with the concerns they trade, the answer predicted from the person's ratings, and the ratings fitted to their answers",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": { "name": "Sean Dunn", "email": "sean.edward.dunn@gmail.com" },
   "license": "MIT",
   "keywords": ["questions", "interview", "preferences", "prediction", "hooks"]

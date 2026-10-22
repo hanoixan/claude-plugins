@@ -120,9 +120,10 @@ numbers already given never change. `domains` with no arguments lists the domain
 
 4. **Confirm the auto answers first.** If any question has `auto:`, exempt and ask one single-select question,
    "Use the predicted answers for these N questions?" (N being their count), with the reason
-   "confirming auto answers" and the choices **Use these (Recommended)** and **Change some**. List each auto question, its predicted
-   answer, and the recommended answer when different, in the **Use these** option's description, or in a chat
-   message just before when the list is long. On **Change some**:
+   "confirming auto answers" and the choices **Use these (Recommended)** and **Change some**. List each auto
+   question, its predicted answer, and the recommended answer when different,
+   in the **Use these** option's description, in the option's preview, or in a message that ends the turn before
+   the question is asked. On **Change some**:
    - With one auto question, **Change some** means asking it: ask it normally with the rest of the round.
    - With two to four, ask which as one exempt multi-select question, one option per auto question.
    - With more than four, split them across multi-select questions in one call, four options at most each, all

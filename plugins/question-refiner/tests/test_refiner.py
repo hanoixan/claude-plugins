@@ -903,9 +903,9 @@ class Docs(unittest.TestCase):
                       "answer: confirmed", "the tally line"):
             self.assertIn(words, text)
 
-    def test_the_version_is_1_1_0(self):
+    def test_the_version_is_1_1_1(self):
         with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["version"], "1.1.0")
+            self.assertEqual(json.load(fh)["version"], "1.1.1")
 
     def test_the_readme_lists_the_auto_command(self):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
@@ -920,6 +920,11 @@ class Docs(unittest.TestCase):
         text = self.read()
         self.assertIn('"Use the predicted answers for these N questions?"', text)
         self.assertIn("in the **Use these** option's description", text)
+
+    def test_the_auto_answers_are_visible_before_the_question(self):
+        text = " ".join(self.read().split())
+        self.assertIn("in the option's preview, or in a message that ends the turn before the question is asked.", text)
+        self.assertNotIn("chat message just before", text)
 
     def test_only_the_user_sets_the_threshold(self):
         text = self.read()
