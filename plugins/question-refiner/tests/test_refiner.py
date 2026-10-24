@@ -1463,6 +1463,42 @@ class Fields(Case):
         self.assertIn("`handoff:`", self.cli("parse", ok=False).stdout)
 
 
+class Backfill(Case):
+    def test_a_record_gets_the_scores_it_had_when_asked(self):
+        self.write(iv.LOG, LOG_RECORD)
+        self.assertIn("backfilled scores on 1 record", self.cli("backfill", "--by", "Ann").stdout)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD.replace("concern-only:", "scores: -18 | 18 · backfilled\n"
+                                                                                "concern-only:"))
+
+    def test_the_rating_as_of_the_question_date_is_used(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("rating: 10 · by: Ann · 2026-10-01",
+                                               "rating: 10 · by: Ann · 2026-10-01\nrating: 0 · by: Ann · 2026-10-05"))
+        self.write(iv.LOG, LOG_RECORD)
+        self.cli("backfill", "--by", "Ann")
+        self.assertIn("scores: -18 | 18 · backfilled", self.read(iv.LOG))
+
+    def test_a_later_record_does_not_change_an_earlier_ones_scores(self):
+        self.write(iv.LOG, logged([(False, 61)] * 6, scores=None).replace("Which way?", "<tracer> Which way?"))
+        self.cli("backfill", "--by", "Ann")
+        first = [r.fields["scores"] for r in self.state().log]
+        self.write(iv.LOG, logged([(False, 61)] * 9, scores=None).replace("Which way?", "<tracer> Which way?"))
+        self.cli("backfill", "--by", "Ann")
+        later = [r.fields["scores"] for r in self.state().log]
+        self.assertEqual(later[:6], first)
+        self.assertNotEqual(later[6], later[0])
+
+    def test_another_persons_records_are_left(self):
+        self.write(iv.LOG, logged([(True, 97)], by="Bob", scores=None))
+        self.assertIn("on 0 records", self.cli("backfill", "--by", "Ann").stdout)
+        self.assertNotIn("scores:", self.read(iv.LOG))
+
+    def test_predict_backfills_first(self):
+        self.write(iv.LOG, LOG_RECORD)
+        self.write(iv.DRAFT, draft(question(1)))
+        self.assertIn("backfilled scores on 1 earlier record", self.cli("predict", "--by", "Ann").stdout)
+        self.assertNotIn("backfilled", self.cli("predict", "--by", "Ann").stdout)
+
+
 class Calibration(unittest.TestCase):
     def test_no_data_gives_the_prior_means(self):
         self.assertEqual(iv.calibrate([]), (iv.BETA_MEAN, iv.EPS_MEAN))

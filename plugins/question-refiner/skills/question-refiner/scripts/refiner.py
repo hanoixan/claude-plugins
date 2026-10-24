@@ -17,6 +17,7 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   hits [--json]                               hit rates of logged predictions
   tally [--json]                              the one-line tally: hit rates, the lapse and the handoff point
   calibration [--json]                        calibrated p against the hit rate, by range
+  backfill                                    give old records the scores they had when asked
   auto [N]                                    set or show the handoff point, 0 to 100
   domains [add DOMAIN ... [--fresh]]          list the domains, or create or extend weights.md from the catalog
   import SKEL_FOLDER                          copy skel 3.1.0 interview files into the store
@@ -910,6 +911,44 @@ def human(rec):
     return not rec.declined and bool(rec.selected()) and not handed_off(rec)
 
 
+def stated_at(concerns, by, date):
+    """The person's ratings as of a date: each concern's latest rating on or before it, else its earliest."""
+    w = {}
+    for c in concerns:
+        mine = [(v, d) for v, who, d in c.ratings if who == by]
+        if mine:
+            dated = [v for v, d in mine if d <= date]
+            w[c.cid] = dated[-1] if dated else mine[0][0]
+    return w
+
+
+def fillable(rec, tags):
+    offered = offered_of(rec)
+    return ("scores" not in rec.fields and "prediction" in rec.fields and all(c.annotated for c in offered)
+            and all(t in tags for c in offered for t in c.tags()))
+
+
+def backfill(state, by):
+    """Give each of the person's records without `scores:` the scores it would have had when asked: from earlier
+    records only, and the ratings as of its date. Returns how many were filled."""
+    tags = tag_map(state.concerns)
+    earlier, tracer_count, filled = [], 0, 0
+    for rec in state.log:
+        if rec.by != by:
+            continue
+        if fillable(rec, tags):
+            w0 = stated_at(state.concerns, by, rec.meta.get("asked", "")[:10])
+            w, w_rec = fit(earlier, w0) if tracer_count >= MIN_TRACERS else (w0, 0.0)
+            rec.fields["scores"] = " | ".join(fmt(score(vector(c, tags), w) + (w_rec if c.recommended else 0.0))
+                                              for c in offered_of(rec)) + " · backfilled"
+            filled += 1
+        earlier += fit_data([rec], tags, by)
+        tracer_count += "tracer" in rec.marks
+    if filled:
+        write(state.path(LOG), checked(state.path(LOG), rebuild(state.log_lines, state.log)))
+    return filled
+
+
 def graded(log, by):
     """The person's human answers that carry a prediction logged before the answer, in log order."""
     return [rec for rec in log if rec.by == by and human(rec) and "prediction" in rec.fields]
@@ -1368,6 +1407,10 @@ def cmd_predict(args):
     errors += readiness(state, by)
     if errors:
         sys.exit("\n".join(errors))
+    filled = backfill(state, by)
+    if filled:
+        print(f"backfilled scores on {filled} earlier record{'s' if filled != 1 else ''}")
+        state = load(state.store)
     w, w_rec, model, n = weights_for(state, by)
     rated = stated(state.concerns, by)
     tags = tag_map(state.concerns)
@@ -1681,6 +1724,15 @@ def cmd_tally(args):
 RANGES = ((0, 50), (50, 70), (70, 80), (80, 90), (90, 95), (95, 101))
 
 
+def cmd_backfill(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    n = backfill(state, person(args))
+    print(f"backfilled scores on {n} record{'s' if n != 1 else ''}")
+    return 0
+
+
 def cmd_calibration(args):
     state = load(store_of(args))
     fail_on_errors(state)
@@ -1721,7 +1773,8 @@ def cmd_parse(args):
 
 COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
             "tally": cmd_tally, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict,
-            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits, "calibration": cmd_calibration}
+            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits, "calibration": cmd_calibration,
+            "backfill": cmd_backfill}
 
 
 def main(argv=None):
@@ -1766,6 +1819,7 @@ def main(argv=None):
     command("hits", json_flag=True)
     command("tally", json_flag=True)
     command("calibration", json_flag=True)
+    command("backfill")
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 
