@@ -86,12 +86,20 @@ CHOICE_RE = re.compile(r"^- (<sel> )?(\* )?\*\*(.+?)\*\*:(?: (.*))?$")
 ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
-THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
+THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+?) · (\d{4}-\d{2}-\d{2})( · calibrated)?$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
-FIELD_RE = re.compile(r"^(answer|prediction|auto|concern-only|axis|probes|round-id): (.*)$")
-FIELD_ORDER = ("answer", "prediction", "auto", "concern-only", "axis", "probes", "round-id")
+FIELD_RE = re.compile(r"^(answer|stakes|after|prediction|scores|handoff|auto|audit|concern-only|axis|probes|"
+                      r"round-id): (.*)$")
+FIELD_ORDER = ("answer", "stakes", "after", "prediction", "scores", "handoff", "auto", "audit", "concern-only", "axis",
+               "probes", "round-id")
+NUMBER = r"-?\d+(?:\.\d+)?(?:e-?\d+)?"
+SCORES_RE = re.compile(rf"^({NUMBER}(?: \| {NUMBER})*)( · backfilled)?$")
+STAKES_RE = re.compile(r"^high · \S.*$")
+AFTER_RE = re.compile(r"^Q(\d+)$")
+HANDOFF_RE = re.compile(r"^p \d+% ≥ \d+$")
+KEPT, CHANGED = "kept", "changed"
 CONFIRMED = "confirmed"
 MARK_ORDER = ("probe", "tracer")
 
@@ -311,6 +319,15 @@ def first_line(texts):
     return next((k for k, t in enumerate(texts) if t.strip()), None)
 
 
+def offered_of(rec):
+    return [c for c in rec.choices if c.label != "Other"]
+
+
+def parse_scores(rec):
+    m = SCORES_RE.match(rec.fields.get("scores", ""))
+    return [float(x) for x in m.group(1).split(" | ")] if m else None
+
+
 def split_marks(text, path, k, problems):
     marks = []
     for mark in MARK_ORDER:
@@ -449,6 +466,26 @@ def validate_records(path, records, problems, log):
                 problems.error(path, c.line + 1, "every choice raises at least one concern")
             elif not names:
                 problems.warn(path, c.line + 1, f"Q{rec.number}: choice `{c.label}` is not annotated")
+        if "scores" in rec.fields:
+            scores = parse_scores(rec)
+            if scores is None:
+                problems.error(path, at, f"Q{rec.number}: `scores:` is numbers joined by ` | `, optionally "
+                                         f"followed by ` · backfilled`")
+            elif len(scores) != len(offered):
+                problems.error(path, at, f"Q{rec.number}: `scores:` has {len(scores)} scores for "
+                                         f"{len(offered)} choices")
+        if "stakes" in rec.fields and not STAKES_RE.match(rec.fields["stakes"]):
+            problems.error(path, at, f"Q{rec.number}: `stakes:` is `high · <reason>`")
+        if "audit" in rec.fields and rec.fields["audit"] != "yes":
+            problems.error(path, at, f"Q{rec.number}: `audit:` is `yes`")
+        if "handoff" in rec.fields:
+            value = rec.fields["handoff"]
+            if log and value not in (KEPT, CHANGED):
+                problems.error(path, at, f"Q{rec.number}: `handoff:` in the log is `{KEPT}` or `{CHANGED}`")
+            elif not log and not HANDOFF_RE.match(value):
+                problems.error(path, at, f"Q{rec.number}: `handoff:` in a round is `p <n>% ≥ <threshold>`")
+            if rec.multi or "prediction" not in rec.fields:
+                problems.error(path, at, f"Q{rec.number}: `handoff:` goes only on a predicted single-select question")
         chosen = rec.selected()
         if not log:
             if chosen:
@@ -470,6 +507,30 @@ def validate_records(path, records, problems, log):
             problems.error(path, at, f"Q{rec.number}: `answer:` is `{DECLINED}` or `{CONFIRMED}`")
         if log and rec.fields.get("answer") == CONFIRMED and "auto" not in rec.fields:
             problems.error(path, at, f"Q{rec.number}: a confirmed answer needs the `auto:` line predict wrote")
+    numbers = {r.number for r in records}
+    links = {}
+    for rec in records:
+        if "after" not in rec.fields:
+            continue
+        m = AFTER_RE.match(rec.fields["after"])
+        target = int(m.group(1)) if m else None
+        if target is None:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` is `Q<n>`")
+        elif target == rec.number:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` names the question itself")
+        elif target not in numbers:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` names Q{target}, which is not in the "
+                                               f"{'log' if log else 'round'}")
+        else:
+            links[rec.number] = target
+    for start in links:
+        seen, n = {start}, links[start]
+        while n in links:
+            if n in seen:
+                problems.error(path, 1, f"Q{start}: the `after:` lines make a loop")
+                break
+            seen.add(n)
+            n = links[n]
 
 
 def parse_weights(path, lines, problems):
@@ -493,7 +554,7 @@ def parse_weights(path, lines, problems):
         if c is None and t.startswith("threshold:"):
             m = THRESHOLD_RE.match(t[len("threshold:"):].strip())
             if not m or int(m.group(1)) > 100:
-                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD>`")
+                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD> · calibrated`")
             continue
         if c is None:
             problems.error(path, k + 1, "text before the first `## C<n>` concern")
@@ -599,19 +660,20 @@ def weights_domains(lines):
 
 
 def thresholds(lines):
-    """Each person's latest threshold, from the lines before the first concern."""
+    """Each person's latest threshold, from the lines before the first concern; a line from before calibration
+    reads as the default."""
     out = {}
     for t in (line.rstrip("\r\n") for line in lines or []):
         if CONCERN_RE.match(t):
             break
         m = THRESHOLD_RE.match(t[len("threshold:"):].strip()) if t.startswith("threshold:") else None
         if m:
-            out[m.group(2)] = int(m.group(1))
+            out[m.group(2)] = int(m.group(1)) if m.group(4) else DEFAULT_THRESHOLD
     return out
 
 
 def threshold_of(lines, by):
-    return thresholds(lines).get(by, 100)
+    return thresholds(lines).get(by, DEFAULT_THRESHOLD)
 
 
 def threshold_text(n):
@@ -1417,7 +1479,8 @@ def cmd_auto(args):
     at = head[-1] + 1 if head else first_line(texts) + 1
     if not lines[at - 1].endswith(("\n", "\r")):
         lines[at - 1] += nl
-    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()}{nl}")
+    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()} · "
+                     f"calibrated{nl}")
     write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
     print(f"threshold for {by}: {threshold_text(int(args.threshold))}")
     return 0

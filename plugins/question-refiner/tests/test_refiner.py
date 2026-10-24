@@ -1179,21 +1179,32 @@ class Probability(Case):
 
 
 class Threshold(Case):
-    def test_the_default_is_off(self):
-        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
-        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+    def test_the_default_is_85(self):
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
+        self.assertIn("threshold for Ann: 85", self.cli("auto", "--by", "Ann").stdout)
 
-    def test_setting_writes_a_line_and_the_latest_counts(self):
+    def test_setting_writes_a_calibrated_line_and_the_latest_counts(self):
         self.cli("auto", "80", "--by", "Ann")
         self.cli("auto", "70", "--by", "Ann")
-        self.assertIn("threshold: 70 · by: Ann · ", self.read(iv.WEIGHTS))
+        self.assertRegex(self.read(iv.WEIGHTS), r"threshold: 70 · by: Ann · \d{4}-\d{2}-\d{2} · calibrated\n")
         self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 70)
         self.cli("parse")
         self.assertIn("threshold for Ann: 70", self.cli("auto", "--by", "Ann").stdout)
 
+    def test_a_line_from_before_calibration_reads_as_85(self):
+        for old in ("90", "100", "0"):
+            self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", f"\nthreshold: {old} · by: Ann · 2026-10-20\n\n## C1",
+                                                   1))
+            self.cli("parse")
+            self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
+
+    def test_100_is_off(self):
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+
     def test_another_persons_threshold_does_not_apply(self):
         self.cli("auto", "0", "--by", "Bob")
-        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
 
     def test_the_threshold_is_0_to_100(self):
         before = self.read(iv.WEIGHTS)
@@ -1370,6 +1381,41 @@ class Auto(Case):
         self.write(iv.LOG, LOG_RECORD)
         self.write(iv.DRAFT, draft(question(1, select="multi")) + "auto: p 90% ≥ 80\n")
         self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
+
+
+class Fields(Case):
+    def parse(self, text, ok=True):
+        self.write(iv.DRAFT, text)
+        return self.cli("parse", ok=ok).stdout
+
+    def test_scores_parse_and_count_the_offered_choices(self):
+        self.parse(draft(question(1)) + "scores: -18 | 18\n")
+        self.assertEqual(iv.parse_scores(self.state().draft[0]), [-18.0, 18.0])
+        self.assertIn("2 choices", self.parse(draft(question(1)) + "scores: 1 | 2 | 3\n", ok=False))
+        self.assertIn("`scores:` is", self.parse(draft(question(1)) + "scores: high\n", ok=False))
+
+    def test_backfilled_scores_parse(self):
+        self.write(iv.LOG, LOG_RECORD + "scores: -18 | 18 · backfilled\n")
+        self.cli("parse")
+        self.assertEqual(iv.parse_scores(self.state().log[0]), [-18.0, 18.0])
+
+    def test_stakes_needs_a_reason(self):
+        self.parse(draft(question(1)) + "stakes: high · it publishes the page\n")
+        self.assertIn("`stakes:` is", self.parse(draft(question(1)) + "stakes: high\n", ok=False))
+
+    def test_after_names_another_question_in_the_round(self):
+        self.parse(draft(question(1), question(2) + "after: Q1\n"))
+        self.assertIn("not in the round", self.parse(draft(question(1) + "after: Q9\n"), ok=False))
+        self.assertIn("itself", self.parse(draft(question(1) + "after: Q1\n"), ok=False))
+        self.assertIn("loop", self.parse(draft(question(1) + "after: Q2\n", question(2) + "after: Q1\n"), ok=False))
+
+    def test_handoff_and_audit_values(self):
+        self.parse(draft(question(1)) + "prediction: Sturdy · score 18 · gap 36 · model: stated\n"
+                   "handoff: p 90% ≥ 85\n")
+        self.assertIn("`handoff:`", self.parse(draft(question(1)) + "handoff: kept\n", ok=False))
+        self.assertIn("`audit:` is `yes`", self.parse(draft(question(1)) + "audit: no\n", ok=False))
+        self.write(iv.LOG, LOG_RECORD + "handoff: maybe\n")
+        self.assertIn("`handoff:`", self.cli("parse", ok=False).stdout)
 
 
 class Calibration(unittest.TestCase):
