@@ -1436,6 +1436,71 @@ class Sorting(Case):
         self.assertEqual([r.fields.get("after") for r in self.state().draft], [None, "Q1", "Q1", None])
 
 
+class Recording(Case):
+    def predict(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        self.cli("predict", "--by", "Ann")
+
+    def record(self, answers, *extra, ok=True):
+        return self.cli("record", "--by", "Ann", "--answers", answers, "--asked", ASKED, *extra, ok=ok)
+
+    def test_a_kept_answer_is_the_prediction_and_not_graded(self):
+        self.predict(question(1))
+        out = self.record("Q1=kept").stdout
+        rec = self.state().log[-1]
+        self.assertEqual(rec.fields["handoff"], "kept")
+        self.assertEqual([c.label for c in rec.selected()], ["Sturdy"])
+        self.assertIn("Q1: Sturdy (predicted, kept)", out)
+        self.assertIn("round 1: 0 of 0 predictions hit, 1 handed off", out)
+        self.assertEqual(iv.graded(self.state().log, "Ann"), [])
+        self.cli("parse")
+
+    def test_auto_is_kept(self):
+        self.predict(question(1))
+        self.record("Q1=auto")
+        self.assertEqual(self.state().log[-1].fields["handoff"], "kept")
+
+    def test_a_changed_answer_names_the_handoff(self):
+        self.predict(question(1))
+        self.record("Q1=1", "--handoff", "Q1")
+        rec = self.state().log[-1]
+        self.assertEqual(rec.fields["handoff"], "changed")
+        self.assertIn("tracer", rec.marks)
+
+    def test_an_asked_question_drops_its_handoff_mark(self):
+        self.predict(question(1))
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only:", "handoff: p 90% ≥ 85\nconcern-only:"))
+        self.record("Q1=2")
+        self.assertNotIn("handoff", self.state().log[-1].fields)
+
+    def test_only_an_eligible_question_is_handed_off(self):
+        self.predict(question(1) + "stakes: high · it publishes\n")
+        self.assertIn("cannot be handed off", self.record("Q1=kept", ok=False).stderr)
+        self.assertIn("cannot be handed off", self.record("Q1=1", "--handoff", "Q1", ok=False).stderr)
+
+    def test_a_handed_off_question_is_not_declined(self):
+        self.predict(question(1))
+        self.assertIn("kept or changed", self.record("Q1=none", "--handoff", "Q1", ok=False).stderr)
+
+    def test_handoff_names_questions_in_the_round(self):
+        self.predict(question(1))
+        self.assertIn("Q5 in --handoff is not in the round", self.record("Q1=1", "--handoff", "Q5", ok=False).stderr)
+        self.assertIn("--handoff takes", self.record("Q1=1", "--handoff", "one", ok=False).stderr)
+
+    def test_after_is_renumbered_into_the_log(self):
+        self.write(iv.LOG, logged([(True, 97)] * 3))
+        self.predict(question(1, "First?"), question(2, "Then?") + "after: Q1\n")
+        self.record("Q1=2, Q2=2")
+        log = self.state().log
+        self.assertEqual(log[-1].fields["after"], "Q4")
+        self.cli("parse")
+
+    def test_the_tally_counts_the_handed_off_answers(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8))
+        self.predict(question(1))
+        self.assertIn("· handed off 1 ·", self.record("Q1=kept").stdout.strip().splitlines()[-1])
+
+
 class Fields(Case):
     def parse(self, text, ok=True):
         self.write(iv.DRAFT, text)

@@ -13,7 +13,7 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   rate C<n>=V ... [--date YYYY-MM-DD]
   fit [--json]                                stated against fitted weights
   predict                                     mark the round's predicted choices
-  record --answers "Q1=2, Q2=Other, Q3=none" [--asked STAMP]
+  record --answers "Q1=2, Q2=Other, Q3=none, Q4=kept" [--handoff "Q5"] [--asked STAMP]
   hits [--json]                               hit rates of logged predictions
   tally [--json]                              the one-line tally: hit rates, the lapse and the handoff point
   calibration [--json]                        calibrated p against the hit rate, by range
@@ -1524,7 +1524,18 @@ def parse_answers(text):
     return answers
 
 
-def answer_errors(rec, tokens, tags, by):
+def parse_handoff(text):
+    out = set()
+    for part in (p.strip() for p in (text or "").split(",")):
+        if part:
+            m = AFTER_RE.match(part)
+            if not m:
+                raise ValueError(f"--handoff takes question numbers like `Q4, Q5`: {part}")
+            out.add(int(m.group(1)))
+    return out
+
+
+def answer_errors(rec, tokens, tags, by, handed=frozenset()):
     errors = []
     offered = [c for c in rec.choices if c.label != "Other"]
     other = rec.choice("Other")
@@ -1536,13 +1547,17 @@ def answer_errors(rec, tokens, tags, by):
                       f"run `refiner.py predict` again, then ask it")
     elif rec.by != by:
         errors.append(f"Q{rec.number} was predicted for {rec.by}, not {by}; run `refiner.py predict --by {by}`")
-    if tokens == ["none"]:
+    keep = tokens in (["kept"], ["auto"])
+    if keep or rec.number in handed:
+        if not eligible(rec):
+            errors.append(f"Q{rec.number} cannot be handed off: it is multi-select, high-stakes, a probe or an "
+                          f"audit")
+        if tokens == ["none"]:
+            errors.append(f"Q{rec.number} was handed off, so it is kept or changed, not declined")
+    if keep or tokens == ["none"]:
         return errors
-    if "auto" in tokens:
-        if tokens != ["auto"]:
-            errors.append(f"Q{rec.number}: `auto` cannot be combined with choices")
-        elif "auto" not in rec.fields:
-            errors.append(f"Q{rec.number} was not marked auto by predict: ask it, then record its answer")
+    if "kept" in tokens or "auto" in tokens:
+        errors.append(f"Q{rec.number}: `kept` cannot be combined with choices")
         return errors
     if "none" in tokens:
         errors.append(f"Q{rec.number}: `none` cannot be combined with choices")
@@ -1634,6 +1649,7 @@ def cmd_record(args):
         sys.exit(f"no round to record: {DRAFT} does not exist")
     try:
         answers = parse_answers(args.answers)
+        handed = parse_handoff(args.handoff)
     except ValueError as e:
         sys.exit(str(e))
     asked = args.asked or now_stamp()
@@ -1644,10 +1660,11 @@ def cmd_record(args):
     tags = tag_map(state.concerns)
     numbers = {r.number for r in state.draft}
     errors = [f"Q{n} is not in the round" for n in sorted(set(answers) - numbers)]
+    errors += [f"Q{n} in --handoff is not in the round" for n in sorted(handed - numbers)]
     errors += [f"Q{n} has no answer; use Q{n}=none to record it as declined" for n in sorted(numbers - set(answers))]
     for rec in state.draft:
         if rec.number in answers:
-            errors += answer_errors(rec, answers[rec.number], tags, by)
+            errors += answer_errors(rec, answers[rec.number], tags, by, handed)
     logged = {r.fields.get("round-id") for r in state.log} - {None}
     if not errors and any(r.fields["round-id"] in logged for r in state.draft):
         errors.append(f"this round is already in {LOG}, so {DRAFT} was left behind: delete it")
@@ -1656,19 +1673,28 @@ def cmd_record(args):
     by_id = {c.cid: c for c in state.concerns}
     base = len(state.log)
     rnd = max((int(r.meta["round"]) for r in state.log), default=0) + 1
-    for k, rec in enumerate(state.draft):
+    renumber = {rec.number: base + k + 1 for k, rec in enumerate(state.draft)}
+    for rec in state.draft:
         tokens = answers[rec.number]
-        offered = [c for c in rec.choices if c.label != "Other"]
+        offered = offered_of(rec)
+        kept = tokens in (["kept"], ["auto"])
         if tokens == ["none"]:
             rec.fields["answer"] = DECLINED
-        elif tokens == ["auto"]:
+        elif kept:
             for c in rec.predicted():
                 c.sel = True
-            rec.fields["answer"] = CONFIRMED
         else:
             for t in tokens:
                 (rec.choice("Other") if t == "other" else offered[int(t) - 1]).sel = True
-        rec.number = base + k + 1
+        if kept:
+            rec.fields["handoff"] = KEPT
+        elif rec.number in handed:
+            rec.fields["handoff"] = CHANGED
+        else:
+            rec.fields.pop("handoff", None)
+        if "after" in rec.fields:
+            rec.fields["after"] = f"Q{renumber[int(rec.fields['after'][1:])]}"
+        rec.number = renumber[rec.number]
         rec.meta.update({"round": str(rnd), "asked": asked, "by": by})
         rec.meta_raw = SEP.join(f"{key}: {rec.meta[key]}" for key in META_KEYS if key in rec.meta)
         if not rec.multi and not rec.declined:
@@ -1686,24 +1712,27 @@ def cmd_record(args):
         text += nl + "".join(render_record(rec, nl))
     write(state.path(LOG), checked(state.path(LOG), text))
     os.remove(state.path(DRAFT))
-    hits = answered = 0
+    hits = answered = handed_count = 0
     for rec in state.draft:
         sel = {c.label for c in rec.selected()}
         shown = {c.label for c in rec.predicted()}
-        answered += bool(sel)
-        hits += bool(sel) and sel == shown
+        off = handed_off(rec)
+        handed_count += off
+        answered += bool(sel) and not off
+        hits += bool(sel) and sel == shown and not off
         note = f", tracer: {rec.fields['axis']}" if "tracer" in rec.marks else ""
         if not sel:
             answer = "declined"
         elif sel == shown:
-            answer = " + ".join(sorted(sel)) + (" (predicted, confirmed)" if rec.fields.get("answer") == CONFIRMED
+            answer = " + ".join(sorted(sel)) + (" (predicted, kept)" if rec.fields.get("handoff") == KEPT
                                                 else " (predicted)")
         else:
             answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
-    print(f"round {rnd}: {hits} of {answered} predictions hit")
+    print(f"round {rnd}: {hits} of {answered} predictions hit"
+          + (f", {handed_count} handed off" if handed_count else ""))
     after = load(state.store)
-    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), handed=0)))
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), handed=handed_count)))
     return 0
 
 
@@ -1862,6 +1891,7 @@ def main(argv=None):
     p = command("record")
     p.add_argument("--answers", required=True)
     p.add_argument("--asked")
+    p.add_argument("--handoff", default="", help="the handed-off questions answered with a choice, like `Q4, Q5`")
     p = command("exempt")
     p.add_argument("--question", required=True)
     p.add_argument("--reason", required=True)
