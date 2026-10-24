@@ -859,7 +859,7 @@ class Docs(unittest.TestCase):
     def test_the_skill_names_every_command(self):
         text = self.read()
         for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
-                        "import", "tally", "auto"):
+                        "import", "tally", "auto", "backfill", "calibration"):
             self.assertIn(f"refiner.py\" {command}", text)
 
     def test_the_skill_confirms_inferred_domains(self):
@@ -898,27 +898,37 @@ class Docs(unittest.TestCase):
         self.assertIn('\nargument-hint: "[0-100]"\n', text)
         self.assertIn('refiner.py" auto $ARGUMENTS', text)
 
-    def test_the_skill_confirms_auto_answers(self):
+    def test_the_skill_hands_off_and_reviews(self):
         text = self.read()
-        for words in ("confirming auto answers", "Use these (Recommended)", "Change some", "Q3=auto",
-                      "answer: confirmed", "the tally line"):
+        for words in ("Answer the rest", "Keep asking", "expected wrong", "reviewing handed-off answers",
+                      "Use these (Recommended)", "Change some", "Q3=kept", "--handoff", "the tally line"):
             self.assertIn(words, text)
 
-    def test_the_version_is_1_1_1(self):
+    def test_the_skill_marks_high_stakes(self):
+        text = self.read()
+        for words in ("stakes: high · ", "`<!> `", "asked first", "never handed off", "after: Q"):
+            self.assertIn(words, text)
+
+    def test_the_skill_does_not_reveal_the_audit(self):
+        self.assertIn("Don't say which question is the audit", self.read())
+
+    def test_the_version_is_1_2_0(self):
         with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["version"], "1.1.1")
+            self.assertEqual(json.load(fh)["version"], "1.2.0")
+
+    def test_the_readme_gives_the_skills_word_count(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        self.assertIn(f"{len(self.read().split())} words", readme)
 
     def test_the_readme_lists_the_auto_command(self):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             self.assertIn("/question-refiner-auto", fh.read())
 
-    def test_the_confirmation_fits_the_question_tool(self):
-        text = self.read()
-        self.assertIn("With one auto question, **Change some** means asking it", text)
+    def test_the_review_fits_the_question_tool(self):
+        text = " ".join(self.read().split())
+        self.assertIn("With one handed-off question, **Change some** means asking it", text)
         self.assertIn("more than four, split them", text)
-
-    def test_the_confirmation_has_a_fixed_one_line_question(self):
-        text = self.read()
         self.assertIn('"Use the predicted answers for these N questions?"', text)
         self.assertIn("in the **Use these** option's description", text)
 
@@ -1138,7 +1148,7 @@ class BranchMinors(Case):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
         for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
-                        "hits", "import", "tally", "auto"):
+                        "hits", "import", "tally", "auto", "calibration", "backfill"):
             self.assertIn(f"\nrefiner.py {command} ", section)
         self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
 

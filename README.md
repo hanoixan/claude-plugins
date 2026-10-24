@@ -284,19 +284,19 @@ Turns every question the agent asks into a recorded round, whichever plugin asks
 writes the question's choices into a round file and annotates each with the concerns it raises and addresses.
 `refiner.py predict` marks the choice the person is predicted to take, from the 0 to 10 ratings they give those
 concerns. The answer is logged; an answer that goes against the prediction is a tracer, and from five tracers the
-ratings are fitted to the person's answers. After every round a tally line gives the hit rates and how confident
-the wrong predictions were, and `/question-refiner-auto` lets confident predictions answer for you, after you
-confirm them.
+ratings are fitted to the person's answers. Each prediction's probability is calibrated against how often such
+predictions were right, the round is asked least certain first with high-stakes questions ahead of the rest, and
+once the rest are likely enough you can hand them to the agent and review its answers in one batch.
 
 **What ships**
 
 | Piece | Role |
 | --- | --- |
-| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data; confirming auto answers. 2424 words. |
+| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data; the handoff and its review. 2921 words. |
 | `PreToolUse` hook on `AskUserQuestion` | Refuses a question that was neither predicted nor exempted, and names the missing step. When it cannot check, it lets the question through. |
 | `UserPromptSubmit` hook | One line each turn, for questions asked in plain chat, which no hook sees. |
 | `SessionStart` hook | Finds skel 3.1.0 interview data that has not been moved, and has the agent ask about moving it. |
-| `/question-refiner-auto [0-100]` | Sets or shows your auto threshold: the predicted probability at or above which a question is answered by its prediction, shown to you to confirm. 100, the default, is off. Only you can run it. |
+| `/question-refiner-auto [0-100]` | Sets or shows your handoff point: the calibrated probability at or above which handing the rest of a round to the agent is recommended. 85 is the default; 100 is off. Only you can run it. |
 | `scripts/refiner.py` | The commands below. |
 | `references/concerns.md` | 30 seed concerns, each tagged with the domains it applies to. |
 
@@ -322,15 +322,21 @@ refiner.py exempt --question ...     log a question with no trade-off, so the ga
 refiner.py fit                       stated against fitted weights
 refiner.py hits                      hit rates of the logged predictions
 refiner.py tally                     the one-line tally shown after every round
-refiner.py auto [N]                  set or show your auto threshold, 0 to 100
+refiner.py calibration               calibrated probability against the hit rate, by range
+refiner.py backfill                  give older records the scores they had when asked
+refiner.py auto [N]                  set or show your handoff point, 0 to 100
 refiner.py import SKEL_FOLDER        copy skel 3.1.0 interview data into .question-refiner/
 ```
 
-**Auto-answering.** Each single-select prediction carries `p`, its probability. The tally line reads like
-`Predictions: 34 of 42 recent (81%), 61 of 80 all (76%) · misses at p 68% ± 9 (8) · threshold off (suggested: 86)`:
-the last 50 answers, all of them, and the mean and spread of `p` on the wrong ones. With a threshold set, a question
-at or above it (not a probe, after your first 8 answers) is shown with its predicted answer for you to confirm or
-change; a confirmed answer counts as yours.
+**Handoff.** Each single-select prediction carries `p`, calibrated from your own answers: a lapse rate for the
+answers the concern scores never explain, and a scale on the scores, both fitted to the scores logged when each
+question was predicted. `predict` sorts the round: questions marked `stakes: high` first (asked with `<!>`), then
+those that are never handed off, then the rest, least likely first. When every question left could be handed off,
+you are offered "Answer the rest", recommended once they are all at or above your handoff point (85 by default,
+from your 20th answer); the agent's answers are then listed for you to keep or change. Now and then one question
+above the point is asked anyway, so the high end stays checked. Only questions you answered count in the hit
+rates. The tally line reads like `Predictions: 41 of 50 recent (82%), 160 of 190 all (84%) · lapse 18% · handoff
+at 85 (suggested: 87)`.
 
 Pairs with [ask-questions](#ask-questions), which makes the agent ask more; this one shapes each question and
 learns from the answer. With [skel](#skel), every unknown skel asks about goes through a round.
