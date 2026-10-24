@@ -70,11 +70,11 @@ numbers already given never change. `domains` with no arguments lists the domain
    ## Q1
    Where is undo history kept between sessions?
    header: History · select: single
-   - **Not kept (Recommended)**: history lives in memory and ends with the session.
+   - **Not kept (Recommended)**: nothing to build and nothing left on disk; but a crash loses every undo step.
        concern: a crash loses every step the user could have undone.
        raises: reliability 2
        addresses: impl-effort 2, privacy 1
-   - **A file beside the document**: survives a restart; one more format to version.
+   - **A file beside the document**: undo survives a crash; but adds a format to maintain and puts history on disk.
        concern: another file format to keep compatible forever.
        raises: impl-effort 2, privacy 1
        addresses: reliability 3
@@ -84,6 +84,13 @@ numbers already given never change. `domains` with no arguments lists the domain
      it is the choice whose label ends `(Recommended)`; otherwise mark the one you would recommend.
    - `header:` is the short label shown with the question (12 characters at most); `select:` is `single` or `multi`.
      Keep ` · ` out of the header and `**` and ` | ` out of labels.
+   - Each choice's description explains its benefits and its trade-offs, so the user sees what the question
+     trades without reading the annotations: first what the choice gets them, in terms of the concerns in its
+     `addresses:` line, then what it costs, in terms of those in its `raises:` line, in one or two plain sentences
+     that say why it is a trade, not a list of tags. Claim no benefit or cost the annotations don't carry, and
+     leave out none of severity 3. This belongs in each choice, never in the question text: the question asks; the
+     choices explain. When it does not fit the tool's description, keep a short version there and give the full
+     explanation in the option's preview.
    - `stakes: high · <reason>` marks a high-stakes question: its choices are hard to reverse, expensive,
      outward-facing (published, sent, shared) or security-sensitive. It is asked first and never handed off.
    - `after: Q<n>` marks a question that depends on question n's answer; it stays right after that one.
@@ -184,15 +191,16 @@ before it is applied. The tally line reads like `Predictions: 41 of 50 recent (8
 ## Q14
 <tracer> Where is undo history kept between sessions?
 header: History · round: 3 · select: single · asked: 2026-10-17 10:42:11 -0400 · by: Sean Dunn
-- * **Not kept (Recommended)**: history lives in memory and ends with the session.
+- * **Not kept (Recommended)**: nothing to build and nothing left on disk; but a crash loses every undo step.
     concern: a crash loses every step the user could have undone.
     raises: reliability 2
     addresses: impl-effort 2, privacy 1
-- <sel> **A file beside the document**: survives a restart; one more format to version.
+- <sel> **A file beside the document**: undo survives a crash; but adds a format to maintain and puts history on disk.
     concern: another file format to keep compatible forever.
     raises: impl-effort 2, privacy 1
     addresses: reliability 3
-prediction: Not kept (Recommended) · score 12 · gap 4 · model: fitted+rec
+prediction: Not kept (Recommended) · score 12 · gap 4 · p 64% · model: fitted+rec
+scores: 12 | 8
 concern-only: Not kept (Recommended)
 axis: C10 reliability vs C8 effort
 round-id: 3f91df49

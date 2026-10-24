@@ -912,6 +912,12 @@ class Docs(unittest.TestCase):
     def test_the_skill_does_not_reveal_the_audit(self):
         self.assertIn("Don't say which question is the audit", self.read())
 
+    def test_each_choice_explains_its_benefits_and_trade_offs(self):
+        text = " ".join(self.read().split())
+        for words in ("benefits", "trade-offs", "`addresses:`", "`raises:`", "option's preview",
+                      "never in the question text"):
+            self.assertIn(words, text)
+
     def test_the_version_is_1_2_0(self):
         with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["version"], "1.2.0")
