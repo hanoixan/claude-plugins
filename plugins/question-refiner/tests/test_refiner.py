@@ -358,7 +358,8 @@ class Predict(Case):
         text = self.read(iv.DRAFT)
         self.assertIn("- * **Sturdy**: about sturdy.\n", text)
         self.assertIn("- **Cheap (Recommended)**: about cheap.\n", text)
-        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 97% · model: stated\n", text)
+        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 81% · model: stated\n", text)
+        self.assertIn("scores: -18 | 18\n", text)
         self.assertIn("concern-only: Sturdy\n", text)
         self.assertIn("model: stated", result.stdout)
 
@@ -1154,15 +1155,16 @@ class Probability(Case):
         out = self.cli("predict", "--by", "Ann").stdout
         return out, {r.number: r for r in self.state().draft}
 
-    def test_two_choices_log_the_softmax_probability(self):
+    def test_two_choices_log_the_calibrated_probability(self):
         out, recs = self.predicted(question(1))
-        self.assertIn("· gap 36 · p 97% · model: stated", recs[1].fields["prediction"])
-        self.assertIn("Q1: Sturdy (lead 36, p 97%)", out)
-        self.assertEqual(iv.logged_p(recs[1]), 97)
+        self.assertIn("· gap 36 · p 81% · model: stated", recs[1].fields["prediction"])
+        self.assertEqual(recs[1].fields["scores"], "-18 | 18")
+        self.assertIn("Q1: Sturdy (lead 36, p 81%)", out)
+        self.assertEqual(iv.logged_p(recs[1]), 81)
 
     def test_three_choices_share_the_probability(self):
         _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE)))
-        self.assertEqual(iv.logged_p(recs[1]), 61)
+        self.assertEqual(iv.logged_p(recs[1]), 52)
 
     def test_multi_select_has_no_probability(self):
         _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
@@ -1335,97 +1337,103 @@ class CalibrationCommand(Case):
         self.assertEqual(data["answers"], 12)
 
 
-class Auto(Case):
-    def warm(self, n=8):
-        self.write(iv.LOG, logged([(True, 97)] * n))
+class Handoff(Case):
+    def warm(self, n=20, scores="-18 | 18"):
+        self.write(iv.LOG, logged([(True, 97)] * n, scores=scores))
 
     def predict(self, *questions):
         self.write(iv.DRAFT, draft(*questions))
         out = self.cli("predict", "--by", "Ann").stdout
         return out, {r.number: r for r in self.state().draft}
 
-    def test_a_likely_question_is_marked_auto(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        out, recs = self.predict(question(1), question(2, choices=(PRIVATE, PLAIN)))
-        self.assertEqual(recs[1].fields["auto"], "p 97% ≥ 90")
-        self.assertNotIn("auto", recs[2].fields)
-        self.assertIn("Q1: Sturdy (lead 36, p 97%), auto", out)
+    def test_a_perfect_record_first_gets_a_handoff_at_about_20(self):
+        first = None
+        for n in range(15, 26):
+            self.warm(n)
+            if "handoff" in self.predict(question(1))[1][1].fields:
+                first = n
+                break
+        self.assertTrue(first is not None and 17 <= first <= 23, first)
 
-    def test_p_equal_to_the_threshold_is_auto(self):
+    def test_a_likely_question_is_marked(self):
         self.warm()
-        self.cli("auto", "97", "--by", "Ann")
-        self.assertIn("auto", self.predict(question(1))[1][1].fields)
+        out, recs = self.predict(question(1), question(2, "Other way?", choices=(PRIVATE, PLAIN)))
+        rec = next(r for r in recs.values() if r.question == "Which way?")
+        self.assertRegex(rec.fields["handoff"], r"^p \d+% ≥ 85$")
+        self.assertIn(", handoff", out)
 
-    def test_nothing_is_auto_before_8_answers(self):
-        self.warm(7)
+    def test_nothing_is_marked_before_20_human_answers(self):
+        self.warm(19)
         self.cli("auto", "0", "--by", "Ann")
-        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+        out, recs = self.predict(question(1))
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertIn("handoff is recommended from 20", out)
 
-    def test_100_is_off_and_0_is_everything_eligible(self):
+    def test_100_is_off(self):
         self.warm()
-        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
-        self.cli("auto", "0", "--by", "Ann")
-        _, recs = self.predict(question(1), question(2, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
-        self.assertIn("auto", recs[1].fields)
-        self.assertNotIn("auto", recs[2].fields)
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertNotIn("handoff", self.predict(question(1))[1][1].fields)
 
-    def test_a_probe_is_never_auto(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8) + "\n" + LOG_RECORD.split("\n", 2)[2].replace("## Q1", "## Q9")
-                   .replace("round: 1", "round: 9"))
+    def test_multi_select_and_high_stakes_are_never_marked(self):
+        self.warm()
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"),
+                               question(2) + "stakes: high · it deletes data\n")
+        self.assertFalse(any("handoff" in r.fields for r in recs.values()))
+
+    def test_a_probe_is_never_marked(self):
+        self.write(iv.LOG, logged([(True, 97)] * 20) + "\n" + LOG_RECORD.split("\n", 2)[2]
+                   .replace("## Q1", "## Q21").replace("round: 1", "round: 21"))
         self.cli("auto", "0", "--by", "Ann")
         _, recs = self.predict(question(1))
         self.assertIn("probe", recs[1].marks)
-        self.assertNotIn("auto", recs[1].fields)
+        self.assertNotIn("handoff", recs[1].fields)
 
-    def test_a_raised_threshold_removes_a_stale_auto(self):
+    def test_an_audit_replaces_a_handoff_when_the_top_has_little_evidence(self):
+        self.warm(scores="-1 | 1")
+        out, recs = self.predict(question(1))
+        self.assertEqual(recs[1].fields.get("audit"), "yes")
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertIn(", audit", out)
+
+    def test_no_audit_when_the_top_has_evidence(self):
         self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        self.predict(question(1))
-        self.cli("auto", "99", "--by", "Ann")
+        _, recs = self.predict(question(1))
+        self.assertNotIn("audit", recs[1].fields)
+
+    def test_a_first_round_has_priors_only(self):
+        out, recs = self.predict(question(1))
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertNotIn("audit", recs[1].fields)
+        self.assertNotIn("backfilled", out)
+        self.assertIn("calibration: scale 0.100, lapse 25% from 0 human answers", out)
+
+    def test_predict_twice_gives_the_same_round(self):
+        self.warm(scores="-1 | 1")
+        self.predict(question(1), question(2, "Another way?"), question(3, "A third?"))
+        first = self.read(iv.DRAFT)
         self.cli("predict", "--by", "Ann")
-        self.assertNotIn("auto", self.state().draft[0].fields)
+        self.assertEqual(self.read(iv.DRAFT), first)
 
-    def test_record_confirms_an_auto_answer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        self.predict(question(1))
-        out = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED).stdout
-        rec = self.state().log[-1]
-        self.assertEqual(rec.fields["answer"], "confirmed")
-        self.assertEqual([c.label for c in rec.selected()], ["Sturdy"])
-        self.assertIn("Q9: Sturdy (predicted, confirmed)", out)
-        self.assertIn("9 of 9 all (100%) · auto 1 · threshold 90", out.strip().splitlines()[-1])
-        self.cli("parse")
 
-    def test_changing_an_auto_question_is_a_normal_answer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        self.predict(question(1))
-        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED)
-        rec = self.state().log[-1]
-        self.assertNotIn("answer", rec.fields)
-        self.assertIn("tracer", rec.marks)
+class Sorting(Case):
+    def order(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        self.cli("predict", "--by", "Ann")
+        return [(r.number, r.question) for r in self.state().draft]
 
-    def test_record_refuses_auto_on_a_question_not_marked_auto(self):
-        self.predict(question(1))
-        result = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED, ok=False)
-        self.assertIn("not marked auto", result.stderr)
+    def test_high_stakes_then_never_handed_off_then_the_rest_lowest_p_first(self):
+        got = self.order(question(1, "Likely?"), question(2, "Risky?") + "stakes: high · it publishes\n",
+                         question(3, "Several?", choices=(CHEAP, STURDY, PRIVATE), select="multi"),
+                         question(4, "Unsure?", choices=(CHEAP, STURDY, PRIVATE)))
+        self.assertEqual(got, [(1, "Risky?"), (2, "Several?"), (3, "Unsure?"), (4, "Likely?")])
 
-    def test_a_confirmed_answer_against_the_stated_ratings_is_a_tracer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        self.predict(question(1))
-        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only: Sturdy", "concern-only: Cheap (Recommended)"))
-        self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED)
-        self.assertIn("tracer", self.state().log[-1].marks)
-
-    def test_parse_refuses_misplaced_auto_lines(self):
-        self.write(iv.LOG, LOG_RECORD + "answer: maybe\n")
-        self.assertIn("`answer:` is", self.cli("parse", ok=False).stdout)
-        self.write(iv.LOG, LOG_RECORD)
-        self.write(iv.DRAFT, draft(question(1, select="multi")) + "auto: p 90% ≥ 80\n")
-        self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
+    def test_a_dependent_question_follows_its_parent_and_the_pair_sorts_by_its_lowest_p(self):
+        got = self.order(question(1, "Likely?"), question(2, "Unsure?", choices=(CHEAP, STURDY, PRIVATE)),
+                         question(3, "Then?") + "after: Q1\n",
+                         question(4, "Lowest?", choices=(CHEAP, STURDY, PRIVATE, PLAIN)) + "after: Q1\n")
+        self.assertEqual([q for _, q in got], ["Likely?", "Then?", "Lowest?", "Unsure?"])
+        self.assertEqual([r.fields.get("after") for r in self.state().draft], [None, "Q1", "Q1", None])
 
 
 class Fields(Case):

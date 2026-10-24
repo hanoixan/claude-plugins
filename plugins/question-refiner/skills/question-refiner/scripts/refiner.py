@@ -30,6 +30,7 @@ import datetime
 import json
 import math
 import os
+import random
 import re
 import secrets
 import subprocess
@@ -1390,6 +1391,41 @@ def readiness(state, by):
     return errors
 
 
+def eligible(rec):
+    """Could be handed off: single-select, not high-stakes, not a probe, not an audit."""
+    return not rec.multi and "stakes" not in rec.fields and "probe" not in rec.marks and "audit" not in rec.fields
+
+
+def sort_round(draft, ps):
+    """The round in asking order, renumbered: high stakes, then never handed off, then the rest, each lowest p first;
+    a question with `after:` follows the one it names, and the chain sorts by its strictest group and lowest p."""
+    children = {}
+    for r in draft:
+        if "after" in r.fields:
+            children.setdefault(int(r.fields["after"][1:]), []).append(r)
+
+    def walk(r):
+        return [r] + [x for c in children.get(r.number, []) for x in walk(c)]
+
+    def key(r):
+        group = 0 if "stakes" in r.fields else 1 if not eligible(r) else 2
+        return group, -1 if ps[r.number] is None else ps[r.number]
+    roots = [r for r in draft if "after" not in r.fields]
+    chains = sorted((walk(r) for r in roots), key=lambda ch: (min(key(x) for x in ch), roots.index(ch[0])))
+    flat = [r for ch in chains for r in ch]
+    new = {r.number: i + 1 for i, r in enumerate(flat)}
+    for r in flat:
+        if "after" in r.fields:
+            r.fields["after"] = f"Q{new[int(r.fields['after'][1:])]}"
+    for r in flat:
+        r.number = new[r.number]
+    return flat
+
+
+def render_round(records, nl):
+    return DRAFT_TITLE + nl + "".join(nl + "".join(render_record(r, nl)) for r in records)
+
+
 def cmd_predict(args):
     state = load(store_of(args))
     fail_on_errors(state)
@@ -1412,14 +1448,17 @@ def cmd_predict(args):
         print(f"backfilled scores on {filled} earlier record{'s' if filled != 1 else ''}")
         state = load(state.store)
     w, w_rec, model, n = weights_for(state, by)
+    beta, eps = calibration_for(state.log, by)
+    humans = len(graded(state.log, by))
+    ready = humans >= MIN_HANDOFF
     rated = stated(state.concerns, by)
     tags = tag_map(state.concerns)
     by_id = {c.cid: c for c in state.concerns}
     counts = dissent(state.log, by)
     threshold = threshold_of(state.weights_lines, by)
-    warm = len(graded(state.log, by)) >= MIN_ANSWERS
     ids = [r.fields["round-id"] for r in state.draft if "round-id" in r.fields]
     round_id = ids[0] if ids else secrets.token_hex(4)
+    ps, gaps = {}, {}
     for rec in state.draft:
         vecs = [vector(c, tags) for c in rec.choices]
         picked, scores, gap = choose(rec, vecs, w, w_rec)
@@ -1427,10 +1466,12 @@ def cmd_predict(args):
         for i, c in enumerate(rec.choices):
             c.predicted = i in picked
         labels = " | ".join(rec.choices[i].label for i in picked)
-        p = None if rec.multi else round(100 * probability(scores, picked[0]))
+        p = None if rec.multi else round(100 * calibrated_p(scores, picked[0], beta, eps))
+        ps[id(rec)], gaps[id(rec)] = p, gap
         shown_p = f" · p {p}%" if p is not None else ""
         rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
                                     f"gap {fmt(gap)}{shown_p} · model: {model}")
+        rec.fields["scores"] = " | ".join(fmt(x) for x in scores)
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
         rec.meta["by"] = by
         rec.fields["round-id"] = round_id
@@ -1441,13 +1482,27 @@ def cmd_predict(args):
         if a:
             rec.marks.insert(0, "probe")
             rec.fields["probes"] = axis_text(a, by_id)
-        rec.fields.pop("auto", None)
-        if p is not None and "probe" not in rec.marks and warm and threshold < 100 and p >= threshold:
-            rec.fields["auto"] = f"p {p}% ≥ {threshold}"
-        print(f"Q{rec.number}: {labels} (lead {fmt(gap)}" + (f", p {p}%" if p is not None else "") + ")"
-              + (f", probe: {rec.fields['probes']}" if a else "") + (", auto" if "auto" in rec.fields else ""))
+        for key in ("auto", "handoff", "audit"):
+            rec.fields.pop(key, None)
+        if p is not None and eligible(rec) and ready and threshold < 100 and p >= threshold:
+            rec.fields["handoff"] = f"p {p}% ≥ {threshold}"
+    marked = sorted((r for r in state.draft if "handoff" in r.fields), key=lambda r: r.question)
+    if marked and needs_audit(human_ps(state.log, by, beta, eps), threshold):
+        pick = random.Random(round_id).choice(marked)
+        del pick.fields["handoff"]
+        pick.fields["audit"] = "yes"
+    ordered = sort_round(state.draft, {r.number: ps[id(r)] for r in state.draft})
+    for rec in ordered:
+        p = ps[id(rec)]
+        labels = " | ".join(c.label for c in rec.predicted())
+        print(f"Q{rec.number}: {labels} (lead {fmt(gaps[id(rec)])}" + (f", p {p}%" if p is not None else "") + ")"
+              + (f", probe: {rec.fields['probes']}" if "probes" in rec.fields else "")
+              + (", high stakes" if "stakes" in rec.fields else "")
+              + (", handoff" if "handoff" in rec.fields else "") + (", audit" if "audit" in rec.fields else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
-    write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
+    print(f"calibration: scale {beta:.3f}, lapse {round(100 * eps)}% from {humans} human answers"
+          + ("" if ready else f"; handoff is recommended from {MIN_HANDOFF}"))
+    write(state.path(DRAFT), checked(state.path(DRAFT), render_round(ordered, newline_of(state.draft_lines))))
     return 0
 
 
