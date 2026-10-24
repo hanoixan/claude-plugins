@@ -13,8 +13,12 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   rate C<n>=V ... [--date YYYY-MM-DD]
   fit [--json]                                stated against fitted weights
   predict                                     mark the round's predicted choices
-  record --answers "Q1=2, Q2=Other, Q3=none" [--asked STAMP]
+  record --answers "Q1=2, Q2=Other, Q3=none, Q4=kept" [--handoff "Q5"] [--asked STAMP]
   hits [--json]                               hit rates of logged predictions
+  tally [--json]                              the one-line tally: hit rates, the lapse and the handoff point
+  calibration [--json]                        calibrated p against the hit rate, by range
+  backfill                                    give old records the scores they had when asked
+  auto [N]                                    set or show the handoff point, 0 to 100
   domains [add DOMAIN ... [--fresh]]          list the domains, or create or extend weights.md from the catalog
   import SKEL_FOLDER                          copy skel 3.1.0 interview files into the store
   exempt --question TEXT --reason TEXT        log a question with no trade-off; the gate passes it for 10 minutes
@@ -26,9 +30,9 @@ import datetime
 import json
 import math
 import os
+import random
 import re
 import secrets
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -67,8 +71,18 @@ STEPS = 1000        # gradient-ascent steps
 RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
 P_RE = re.compile(r" · p (\d+)% · ")
-RECENT = 50         # graded answers the recent hit rate and the miss statistics use
-MIN_ANSWERS = 8     # graded answers before the tally and auto-answering start
+RECENT = 50         # human answers the recent hit rate uses
+MIN_ANSWERS = 8     # human answers before the tally starts
+EPS_MEAN = 0.25     # prior mean of the lapse rate: the share of answers the score model does not explain
+EPS_STRENGTH = 20   # the lapse prior is worth this many answers
+BETA_MEAN = 0.1     # prior mean of the scale on scores, the old fixed T
+BETA_SD = 0.1
+CAL_STEPS = 200     # EM steps for the calibration
+MIN_HANDOFF = 20    # human answers before predict recommends a handoff
+DEFAULT_THRESHOLD = 85
+AUDIT_WINDOW = 50   # the last human answers an audit looks at
+AUDIT_MIN = 10      # of which at least this many at or above the threshold, else one question is audited
+Z = 1.645           # one-sided 95% for the Wilson bound
 
 TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
@@ -76,12 +90,20 @@ CHOICE_RE = re.compile(r"^- (<sel> )?(\* )?\*\*(.+?)\*\*:(?: (.*))?$")
 ANNOTATION_RE = re.compile(r"^    (concern|raises|addresses): (.*)$")
 CONCERN_RE = re.compile(r"^## C(\d+) (\S.*)$")
 RATING_RE = re.compile(r"^(\d+(?:\.\d+)?) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
-THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+) · (\d{4}-\d{2}-\d{2})$")
+THRESHOLD_RE = re.compile(r"^(\d+) · by: (.+?) · (\d{4}-\d{2}-\d{2})( · calibrated)?$")
 AXIS_RE = re.compile(r"^C(\d+) .+ vs C(\d+) .+$")
 PAIR_RE = re.compile(r"^(\S+) ([123])$")
 META_KEYS = ("header", "round", "select", "asked", "by")
-FIELD_RE = re.compile(r"^(answer|prediction|auto|concern-only|axis|probes|round-id): (.*)$")
-FIELD_ORDER = ("answer", "prediction", "auto", "concern-only", "axis", "probes", "round-id")
+FIELD_RE = re.compile(r"^(answer|stakes|after|prediction|scores|handoff|auto|audit|concern-only|axis|probes|"
+                      r"round-id): (.*)$")
+FIELD_ORDER = ("answer", "stakes", "after", "prediction", "scores", "handoff", "auto", "audit", "concern-only", "axis",
+               "probes", "round-id")
+NUMBER = r"-?\d+(?:\.\d+)?(?:e-?\d+)?"
+SCORES_RE = re.compile(rf"^({NUMBER}(?: \| {NUMBER})*)( · backfilled)?$")
+STAKES_RE = re.compile(r"^high · \S.*$")
+AFTER_RE = re.compile(r"^Q(\d+)$")
+HANDOFF_RE = re.compile(r"^p \d+% ≥ \d+$")
+KEPT, CHANGED = "kept", "changed"
 CONFIRMED = "confirmed"
 MARK_ORDER = ("probe", "tracer")
 
@@ -301,13 +323,25 @@ def first_line(texts):
     return next((k for k, t in enumerate(texts) if t.strip()), None)
 
 
+def offered_of(rec):
+    return [c for c in rec.choices if c.label != "Other"]
+
+
+def parse_scores(rec):
+    m = SCORES_RE.match(rec.fields.get("scores", ""))
+    return [float(x) for x in m.group(1).split(" | ")] if m else None
+
+
 def split_marks(text, path, k, problems):
     marks = []
     for mark in MARK_ORDER:
         if text.startswith(f"<{mark}> "):
             marks.append(mark)
             text = text[len(mark) + 3:]
-    if re.match(r"^<[a-z]+> ", text):
+    if text.startswith("<!>"):
+        problems.error(path, k + 1, "mark a high-stakes question with `stakes: high · <reason>`; `<!> ` goes before "
+                                    "its text only when it is asked")
+    elif re.match(r"^<[a-z]+> ", text):
         problems.error(path, k + 1, "only `<probe>` then `<tracer>` may go before the question")
     if not text.strip():
         problems.error(path, k + 1, "the question text is empty")
@@ -439,6 +473,26 @@ def validate_records(path, records, problems, log):
                 problems.error(path, c.line + 1, "every choice raises at least one concern")
             elif not names:
                 problems.warn(path, c.line + 1, f"Q{rec.number}: choice `{c.label}` is not annotated")
+        if "scores" in rec.fields:
+            scores = parse_scores(rec)
+            if scores is None:
+                problems.error(path, at, f"Q{rec.number}: `scores:` is numbers joined by ` | `, optionally "
+                                         f"followed by ` · backfilled`")
+            elif len(scores) != len(offered):
+                problems.error(path, at, f"Q{rec.number}: `scores:` has {len(scores)} scores for "
+                                         f"{len(offered)} choices")
+        if "stakes" in rec.fields and not STAKES_RE.match(rec.fields["stakes"]):
+            problems.error(path, at, f"Q{rec.number}: `stakes:` is `high · <reason>`")
+        if "audit" in rec.fields and rec.fields["audit"] != "yes":
+            problems.error(path, at, f"Q{rec.number}: `audit:` is `yes`")
+        if "handoff" in rec.fields:
+            value = rec.fields["handoff"]
+            if log and value not in (KEPT, CHANGED):
+                problems.error(path, at, f"Q{rec.number}: `handoff:` in the log is `{KEPT}` or `{CHANGED}`")
+            elif not log and not HANDOFF_RE.match(value):
+                problems.error(path, at, f"Q{rec.number}: `handoff:` in a round is `p <n>% ≥ <threshold>`")
+            if rec.multi or "prediction" not in rec.fields:
+                problems.error(path, at, f"Q{rec.number}: `handoff:` goes only on a predicted single-select question")
         chosen = rec.selected()
         if not log:
             if chosen:
@@ -460,6 +514,30 @@ def validate_records(path, records, problems, log):
             problems.error(path, at, f"Q{rec.number}: `answer:` is `{DECLINED}` or `{CONFIRMED}`")
         if log and rec.fields.get("answer") == CONFIRMED and "auto" not in rec.fields:
             problems.error(path, at, f"Q{rec.number}: a confirmed answer needs the `auto:` line predict wrote")
+    numbers = {r.number for r in records}
+    links = {}
+    for rec in records:
+        if "after" not in rec.fields:
+            continue
+        m = AFTER_RE.match(rec.fields["after"])
+        target = int(m.group(1)) if m else None
+        if target is None:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` is `Q<n>`")
+        elif target == rec.number:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` names the question itself")
+        elif target not in numbers:
+            problems.error(path, rec.line + 1, f"Q{rec.number}: `after:` names Q{target}, which is not in the "
+                                               f"{'log' if log else 'round'}")
+        else:
+            links[rec.number] = target
+    for start in links:
+        seen, n = {start}, links[start]
+        while n in links:
+            if n in seen:
+                problems.error(path, 1, f"Q{start}: the `after:` lines make a loop")
+                break
+            seen.add(n)
+            n = links[n]
 
 
 def parse_weights(path, lines, problems):
@@ -483,7 +561,7 @@ def parse_weights(path, lines, problems):
         if c is None and t.startswith("threshold:"):
             m = THRESHOLD_RE.match(t[len("threshold:"):].strip())
             if not m or int(m.group(1)) > 100:
-                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD>`")
+                problems.error(path, k + 1, "`threshold:` is `<0-100> · by: <name> · <YYYY-MM-DD> · calibrated`")
             continue
         if c is None:
             problems.error(path, k + 1, "text before the first `## C<n>` concern")
@@ -589,19 +667,21 @@ def weights_domains(lines):
 
 
 def thresholds(lines):
-    """Each person's latest threshold, from the lines before the first concern."""
+    """Each person's latest threshold, from the lines before the first concern; a line from before calibration
+    reads as the default, except 100, which was off on either scale."""
     out = {}
     for t in (line.rstrip("\r\n") for line in lines or []):
         if CONCERN_RE.match(t):
             break
         m = THRESHOLD_RE.match(t[len("threshold:"):].strip()) if t.startswith("threshold:") else None
         if m:
-            out[m.group(2)] = int(m.group(1))
+            n = int(m.group(1))
+            out[m.group(2)] = n if m.group(4) or n >= 100 else DEFAULT_THRESHOLD
     return out
 
 
 def threshold_of(lines, by):
-    return thresholds(lines).get(by, 100)
+    return thresholds(lines).get(by, DEFAULT_THRESHOLD)
 
 
 def threshold_text(n):
@@ -657,6 +737,69 @@ def probability(scores, i):
     return e[i] / sum(e)
 
 
+def softmax(u):
+    top = max(u)
+    e = [math.exp(x - top) for x in u]
+    z = sum(e)
+    return [x / z for x in e]
+
+
+def calibrated_p(scores, i, beta, eps):
+    """The chance the person takes offered choice i: softmax over beta × scores, with eps spread over the offered
+    choices and a typed answer."""
+    return (1 - eps) * softmax([beta * s for s in scores])[i] + eps / (len(scores) + 1)
+
+
+def calibrate(data):
+    """(beta, eps) at the posterior mode, by EM, over [(scores, k)]: k the offered choice taken, -1 a typed answer."""
+    a, b = EPS_MEAN * EPS_STRENGTH, (1 - EPS_MEAN) * EPS_STRENGTH
+    beta, eps = BETA_MEAN, EPS_MEAN
+    if not data:
+        return beta, eps
+    for _ in range(CAL_STEPS):
+        lapse = [1.0 if k < 0 else eps / (len(s) + 1) / calibrated_p(s, k, beta, eps) for s, k in data]
+        new_eps = min(0.999, max(0.001, (sum(lapse) + a - 1) / (len(data) + a + b - 2)))
+        new_beta = beta
+        for _ in range(5):
+            g, h = -(new_beta - BETA_MEAN) / BETA_SD ** 2, -1 / BETA_SD ** 2
+            for (s, k), r in zip(data, lapse):
+                if k < 0:
+                    continue
+                p = softmax([new_beta * x for x in s])
+                mu = sum(pi * x for pi, x in zip(p, s))
+                g += (1 - r) * (s[k] - mu)
+                h -= (1 - r) * sum(pi * (x - mu) ** 2 for pi, x in zip(p, s))
+            new_beta = min(5.0, max(0.0, new_beta - g / h))
+        done = abs(new_eps - eps) < 1e-9 and abs(new_beta - beta) < 1e-9
+        beta, eps = new_beta, new_eps
+        if done:
+            break
+    return beta, eps
+
+
+def wilson_lb(h, n):
+    """The one-sided 95% Wilson lower bound of a hit rate."""
+    if n == 0:
+        return 0.0
+    p = h / n
+    return (p + Z * Z / (2 * n) - Z * math.sqrt(p * (1 - p) / n + Z * Z / (4 * n * n))) / (1 + Z * Z / n)
+
+
+def suggestion(pairs):
+    """The highest threshold t that answers at p ≥ t back: at least 10 of them, with a Wilson bound of t% or more."""
+    best = None
+    for t in range(50, 100):
+        above = [hit for p, hit in pairs if round(100 * p) >= t]
+        if len(above) >= 10 and 100 * wilson_lb(sum(above), len(above)) >= t:
+            best = t
+    return best
+
+
+def needs_audit(pairs, threshold):
+    """Fewer than AUDIT_MIN of the last AUDIT_WINDOW human answers at or above the threshold."""
+    return sum(round(100 * p) >= threshold for p, _ in pairs[-AUDIT_WINDOW:]) < AUDIT_MIN
+
+
 def logged_p(rec):
     m = P_RE.search(rec.fields.get("prediction", ""))
     return int(m.group(1)) if m else None
@@ -704,6 +847,8 @@ def fit_data(log, tags, by):
     data = []
     for rec in log:
         if rec.by != by or rec.multi or rec.declined or not rec.annotated() or len(rec.selected()) != 1:
+            continue
+        if rec.fields.get("handoff") == KEPT or rec.fields.get("answer") == CONFIRMED:
             continue
         if any(t not in tags for c in rec.choices for t in c.tags()):
             continue
@@ -762,10 +907,56 @@ def weights_for(state, by):
     return w, w_rec, "fitted+rec", n
 
 
+def handed_off(rec):
+    return rec.fields.get("handoff") in (KEPT, CHANGED) or rec.fields.get("answer") == CONFIRMED
+
+
+def human(rec):
+    """Answered by the person, not handed off."""
+    return not rec.declined and bool(rec.selected()) and not handed_off(rec)
+
+
+def stated_at(concerns, by, date):
+    """The person's ratings as of a date: each concern's latest rating on or before it, else its earliest."""
+    w = {}
+    for c in concerns:
+        mine = [(v, d) for v, who, d in c.ratings if who == by]
+        if mine:
+            dated = [v for v, d in mine if d <= date]
+            w[c.cid] = dated[-1] if dated else mine[0][0]
+    return w
+
+
+def fillable(rec, tags):
+    offered = offered_of(rec)
+    return ("scores" not in rec.fields and "prediction" in rec.fields and all(c.annotated for c in offered)
+            and all(t in tags for c in offered for t in c.tags()))
+
+
+def backfill(state, by):
+    """Give each of the person's records without `scores:` the scores it would have had when asked: from earlier
+    records only, and the ratings as of its date. Returns how many were filled."""
+    tags = tag_map(state.concerns)
+    earlier, tracer_count, filled = [], 0, 0
+    for rec in state.log:
+        if rec.by != by:
+            continue
+        if fillable(rec, tags):
+            w0 = stated_at(state.concerns, by, rec.meta.get("asked", "")[:10])
+            w, w_rec = fit(earlier, w0) if tracer_count >= MIN_TRACERS else (w0, 0.0)
+            rec.fields["scores"] = " | ".join(fmt(score(vector(c, tags), w) + (w_rec if c.recommended else 0.0))
+                                              for c in offered_of(rec)) + " · backfilled"
+            filled += 1
+        earlier += fit_data([rec], tags, by)
+        tracer_count += "tracer" in rec.marks
+    if filled:
+        write(state.path(LOG), checked(state.path(LOG), rebuild(state.log_lines, state.log)))
+    return filled
+
+
 def graded(log, by):
-    """The person's answered questions that carry a prediction logged before the answer, in log order."""
-    return [rec for rec in log if rec.by == by and not rec.declined and "prediction" in rec.fields
-            and rec.selected()]
+    """The person's human answers that carry a prediction logged before the answer, in log order."""
+    return [rec for rec in log if rec.by == by and human(rec) and "prediction" in rec.fields]
 
 
 def is_hit(rec):
@@ -778,36 +969,58 @@ def hit_rows(log, by):
             for rec in graded(log, by)]
 
 
-def tally(log, by, threshold, auto=0):
+def calibration_data(log, by):
+    """[(logged scores, k)] over the person's single-select human answers: k the offered choice, -1 typed."""
+    data = []
+    for rec in graded(log, by):
+        scores = parse_scores(rec)
+        if rec.multi or scores is None:
+            continue
+        chosen, offered = rec.selected()[0], offered_of(rec)
+        data.append((scores, -1 if chosen.label == "Other" else offered.index(chosen)))
+    return data
+
+
+def calibration_for(log, by):
+    return calibrate(calibration_data(log, by))
+
+
+def human_ps(log, by, beta, eps):
+    """[(p, hit)] over the person's single-select human answers, p from the logged scores."""
+    out = []
+    for rec in graded(log, by):
+        scores = parse_scores(rec)
+        if rec.multi or scores is None or not rec.predicted():
+            continue
+        i = offered_of(rec).index(rec.predicted()[0])
+        out.append((calibrated_p(scores, i, beta, eps), is_hit(rec)))
+    return out
+
+
+def tally(log, by, threshold, handed=0):
     recs = graded(log, by)
     recent = recs[-RECENT:]
-    misses = [p for rec in recent if not rec.multi and not is_hit(rec) for p in [logged_p(rec)] if p is not None]
-    mean = statistics.fmean(misses) if misses else None
-    sd = statistics.stdev(misses) if len(misses) > 1 else None
+    beta, eps = calibration_for(log, by)
     return {"by": by, "answered": len(recs),
             "recent": {"hits": sum(map(is_hit, recent)), "total": len(recent)},
             "all": {"hits": sum(map(is_hit, recs)), "total": len(recs)},
-            "misses": {"count": len(misses), "mean": mean, "sd": sd},
-            "threshold": threshold, "auto": auto,
-            "suggested": min(99, math.ceil(mean + 2 * sd)) if sd is not None else None}
+            "lapse": eps, "scale": beta, "threshold": threshold, "handed_off": handed,
+            "suggested": suggestion(human_ps(log, by, beta, eps))}
 
 
 def tally_line(t):
     if t["answered"] < MIN_ANSWERS:
-        return (f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally and "
-                f"auto-answering start")
+        return f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally starts"
 
     def rate(d, word):
         return f"{d['hits']} of {d['total']} {word} ({round(100 * d['hits'] / d['total'])}%)"
-    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}"]
-    m = t["misses"]
-    if m["count"]:
-        spread = f" ± {round(m['sd'])}" if m["sd"] is not None else ""
-        parts.append(f"misses at p {round(m['mean'])}%{spread} ({m['count']})")
-    if t["auto"]:
-        parts.append(f"auto {t['auto']}")
+    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}",
+             f"lapse {round(100 * t['lapse'])}%"]
+    if t["handed_off"]:
+        parts.append(f"handed off {t['handed_off']}")
     suggested = f" (suggested: {t['suggested']})" if t["suggested"] is not None else ""
-    parts.append(f"threshold {threshold_text(t['threshold'])}{suggested}")
+    point = "off" if t["threshold"] >= 100 else f"at {t['threshold']}"
+    parts.append(f"handoff {point}{suggested}")
     return SEP.join(parts)
 
 
@@ -1182,6 +1395,41 @@ def readiness(state, by):
     return errors
 
 
+def eligible(rec):
+    """Could be handed off: single-select, not high-stakes, not a probe, not an audit."""
+    return not rec.multi and "stakes" not in rec.fields and "probe" not in rec.marks and "audit" not in rec.fields
+
+
+def sort_round(draft, ps):
+    """The round in asking order, renumbered: high stakes, then never handed off, then the rest, each lowest p first;
+    a question with `after:` follows the one it names, and the chain sorts by its strictest group and lowest p."""
+    children = {}
+    for r in draft:
+        if "after" in r.fields:
+            children.setdefault(int(r.fields["after"][1:]), []).append(r)
+
+    def walk(r):
+        return [r] + [x for c in children.get(r.number, []) for x in walk(c)]
+
+    def key(r):
+        group = 0 if "stakes" in r.fields else 1 if not eligible(r) else 2
+        return group, -1 if ps[r.number] is None else ps[r.number]
+    roots = [r for r in draft if "after" not in r.fields]
+    chains = sorted((walk(r) for r in roots), key=lambda ch: (min(key(x) for x in ch), roots.index(ch[0])))
+    flat = [r for ch in chains for r in ch]
+    new = {r.number: i + 1 for i, r in enumerate(flat)}
+    for r in flat:
+        if "after" in r.fields:
+            r.fields["after"] = f"Q{new[int(r.fields['after'][1:])]}"
+    for r in flat:
+        r.number = new[r.number]
+    return flat
+
+
+def render_round(records, nl):
+    return DRAFT_TITLE + nl + "".join(nl + "".join(render_record(r, nl)) for r in records)
+
+
 def cmd_predict(args):
     state = load(store_of(args))
     fail_on_errors(state)
@@ -1199,15 +1447,22 @@ def cmd_predict(args):
     errors += readiness(state, by)
     if errors:
         sys.exit("\n".join(errors))
+    filled = backfill(state, by)
+    if filled:
+        print(f"backfilled scores on {filled} earlier record{'s' if filled != 1 else ''}")
+        state = load(state.store)
     w, w_rec, model, n = weights_for(state, by)
+    beta, eps = calibration_for(state.log, by)
+    humans = len(graded(state.log, by))
+    ready = humans >= MIN_HANDOFF
     rated = stated(state.concerns, by)
     tags = tag_map(state.concerns)
     by_id = {c.cid: c for c in state.concerns}
     counts = dissent(state.log, by)
     threshold = threshold_of(state.weights_lines, by)
-    warm = len(graded(state.log, by)) >= MIN_ANSWERS
     ids = [r.fields["round-id"] for r in state.draft if "round-id" in r.fields]
     round_id = ids[0] if ids else secrets.token_hex(4)
+    ps, gaps = {}, {}
     for rec in state.draft:
         vecs = [vector(c, tags) for c in rec.choices]
         picked, scores, gap = choose(rec, vecs, w, w_rec)
@@ -1215,10 +1470,12 @@ def cmd_predict(args):
         for i, c in enumerate(rec.choices):
             c.predicted = i in picked
         labels = " | ".join(rec.choices[i].label for i in picked)
-        p = None if rec.multi else round(100 * probability(scores, picked[0]))
+        p = None if rec.multi else round(100 * calibrated_p(scores, picked[0], beta, eps))
+        ps[id(rec)], gaps[id(rec)] = p, gap
         shown_p = f" · p {p}%" if p is not None else ""
         rec.fields["prediction"] = (f"{labels} · score {fmt(max(scores[i] for i in picked))} · "
                                     f"gap {fmt(gap)}{shown_p} · model: {model}")
+        rec.fields["scores"] = " | ".join(fmt(x) for x in scores)
         rec.fields["concern-only"] = " | ".join(rec.choices[i].label for i in only)
         rec.meta["by"] = by
         rec.fields["round-id"] = round_id
@@ -1229,13 +1486,27 @@ def cmd_predict(args):
         if a:
             rec.marks.insert(0, "probe")
             rec.fields["probes"] = axis_text(a, by_id)
-        rec.fields.pop("auto", None)
-        if p is not None and "probe" not in rec.marks and warm and threshold < 100 and p >= threshold:
-            rec.fields["auto"] = f"p {p}% ≥ {threshold}"
-        print(f"Q{rec.number}: {labels} (lead {fmt(gap)}" + (f", p {p}%" if p is not None else "") + ")"
-              + (f", probe: {rec.fields['probes']}" if a else "") + (", auto" if "auto" in rec.fields else ""))
+        for key in ("auto", "handoff", "audit"):
+            rec.fields.pop(key, None)
+        if p is not None and eligible(rec) and ready and threshold < 100 and p >= threshold:
+            rec.fields["handoff"] = f"p {p}% ≥ {threshold}"
+    marked = sorted((r for r in state.draft if "handoff" in r.fields), key=lambda r: r.question)
+    if marked and needs_audit(human_ps(state.log, by, beta, eps), threshold):
+        pick = random.Random(round_id).choice(marked)
+        del pick.fields["handoff"]
+        pick.fields["audit"] = "yes"
+    ordered = sort_round(state.draft, {r.number: ps[id(r)] for r in state.draft})
+    for rec in ordered:
+        p = ps[id(rec)]
+        labels = " | ".join(c.label for c in rec.predicted())
+        print(f"Q{rec.number}: {labels} (lead {fmt(gaps[id(rec)])}" + (f", p {p}%" if p is not None else "") + ")"
+              + (f", probe: {rec.fields['probes']}" if "probes" in rec.fields else "")
+              + (", high stakes" if "stakes" in rec.fields else "")
+              + (", handoff" if "handoff" in rec.fields else "") + (", audit" if "audit" in rec.fields else ""))
     print(f"model: {model} ({n} tracers; {MIN_TRACERS} needed to fit)")
-    write(state.path(DRAFT), checked(state.path(DRAFT), rebuild(state.draft_lines, state.draft)))
+    print(f"calibration: scale {beta:.3f}, lapse {round(100 * eps)}% from {humans} human answers"
+          + ("" if ready else f"; handoff is recommended from {MIN_HANDOFF}"))
+    write(state.path(DRAFT), checked(state.path(DRAFT), render_round(ordered, newline_of(state.draft_lines))))
     return 0
 
 
@@ -1257,7 +1528,18 @@ def parse_answers(text):
     return answers
 
 
-def answer_errors(rec, tokens, tags, by):
+def parse_handoff(text):
+    out = set()
+    for part in (p.strip() for p in (text or "").split(",")):
+        if part:
+            m = AFTER_RE.match(part)
+            if not m:
+                raise ValueError(f"--handoff takes question numbers like `Q4, Q5`: {part}")
+            out.add(int(m.group(1)))
+    return out
+
+
+def answer_errors(rec, tokens, tags, by, handed=frozenset()):
     errors = []
     offered = [c for c in rec.choices if c.label != "Other"]
     other = rec.choice("Other")
@@ -1269,13 +1551,19 @@ def answer_errors(rec, tokens, tags, by):
                       f"run `refiner.py predict` again, then ask it")
     elif rec.by != by:
         errors.append(f"Q{rec.number} was predicted for {rec.by}, not {by}; run `refiner.py predict --by {by}`")
-    if tokens == ["none"]:
+    keep = tokens in (["kept"], ["auto"])
+    if keep or rec.number in handed:
+        if not eligible(rec):
+            errors.append(f"Q{rec.number} cannot be handed off: it is multi-select, high-stakes, a probe or an "
+                          f"audit")
+        if tokens == ["none"]:
+            errors.append(f"Q{rec.number} was handed off, so it is kept or changed, not declined")
+    if keep and other is not None:
+        errors.append(f"Q{rec.number} has an Other choice, so its answer is Other")
+    if keep or tokens == ["none"]:
         return errors
-    if "auto" in tokens:
-        if tokens != ["auto"]:
-            errors.append(f"Q{rec.number}: `auto` cannot be combined with choices")
-        elif "auto" not in rec.fields:
-            errors.append(f"Q{rec.number} was not marked auto by predict: ask it, then record its answer")
+    if "kept" in tokens or "auto" in tokens:
+        errors.append(f"Q{rec.number}: `kept` cannot be combined with choices")
         return errors
     if "none" in tokens:
         errors.append(f"Q{rec.number}: `none` cannot be combined with choices")
@@ -1344,7 +1632,8 @@ def cmd_auto(args):
     at = head[-1] + 1 if head else first_line(texts) + 1
     if not lines[at - 1].endswith(("\n", "\r")):
         lines[at - 1] += nl
-    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()}{nl}")
+    lines.insert(at, f"threshold: {int(args.threshold)} · by: {by} · {datetime.date.today().isoformat()} · "
+                     f"calibrated{nl}")
     write(state.path(WEIGHTS), checked(state.path(WEIGHTS), "".join(lines)))
     print(f"threshold for {by}: {threshold_text(int(args.threshold))}")
     return 0
@@ -1366,6 +1655,7 @@ def cmd_record(args):
         sys.exit(f"no round to record: {DRAFT} does not exist")
     try:
         answers = parse_answers(args.answers)
+        handed = parse_handoff(args.handoff)
     except ValueError as e:
         sys.exit(str(e))
     asked = args.asked or now_stamp()
@@ -1376,10 +1666,11 @@ def cmd_record(args):
     tags = tag_map(state.concerns)
     numbers = {r.number for r in state.draft}
     errors = [f"Q{n} is not in the round" for n in sorted(set(answers) - numbers)]
+    errors += [f"Q{n} in --handoff is not in the round" for n in sorted(handed - numbers)]
     errors += [f"Q{n} has no answer; use Q{n}=none to record it as declined" for n in sorted(numbers - set(answers))]
     for rec in state.draft:
         if rec.number in answers:
-            errors += answer_errors(rec, answers[rec.number], tags, by)
+            errors += answer_errors(rec, answers[rec.number], tags, by, handed)
     logged = {r.fields.get("round-id") for r in state.log} - {None}
     if not errors and any(r.fields["round-id"] in logged for r in state.draft):
         errors.append(f"this round is already in {LOG}, so {DRAFT} was left behind: delete it")
@@ -1388,19 +1679,28 @@ def cmd_record(args):
     by_id = {c.cid: c for c in state.concerns}
     base = len(state.log)
     rnd = max((int(r.meta["round"]) for r in state.log), default=0) + 1
-    for k, rec in enumerate(state.draft):
+    renumber = {rec.number: base + k + 1 for k, rec in enumerate(state.draft)}
+    for rec in state.draft:
         tokens = answers[rec.number]
-        offered = [c for c in rec.choices if c.label != "Other"]
+        offered = offered_of(rec)
+        kept = tokens in (["kept"], ["auto"])
         if tokens == ["none"]:
             rec.fields["answer"] = DECLINED
-        elif tokens == ["auto"]:
+        elif kept:
             for c in rec.predicted():
                 c.sel = True
-            rec.fields["answer"] = CONFIRMED
         else:
             for t in tokens:
                 (rec.choice("Other") if t == "other" else offered[int(t) - 1]).sel = True
-        rec.number = base + k + 1
+        if kept:
+            rec.fields["handoff"] = KEPT
+        elif rec.number in handed:
+            rec.fields["handoff"] = CHANGED
+        else:
+            rec.fields.pop("handoff", None)
+        if "after" in rec.fields:
+            rec.fields["after"] = f"Q{renumber[int(rec.fields['after'][1:])]}"
+        rec.number = renumber[rec.number]
         rec.meta.update({"round": str(rnd), "asked": asked, "by": by})
         rec.meta_raw = SEP.join(f"{key}: {rec.meta[key]}" for key in META_KEYS if key in rec.meta)
         if not rec.multi and not rec.declined:
@@ -1418,25 +1718,27 @@ def cmd_record(args):
         text += nl + "".join(render_record(rec, nl))
     write(state.path(LOG), checked(state.path(LOG), text))
     os.remove(state.path(DRAFT))
-    hits = answered = 0
+    hits = answered = handed_count = 0
     for rec in state.draft:
         sel = {c.label for c in rec.selected()}
         shown = {c.label for c in rec.predicted()}
-        answered += bool(sel)
-        hits += bool(sel) and sel == shown
+        off = handed_off(rec)
+        handed_count += off
+        answered += bool(sel) and not off
+        hits += bool(sel) and sel == shown and not off
         note = f", tracer: {rec.fields['axis']}" if "tracer" in rec.marks else ""
         if not sel:
             answer = "declined"
         elif sel == shown:
-            answer = " + ".join(sorted(sel)) + (" (predicted, confirmed)" if rec.fields.get("answer") == CONFIRMED
+            answer = " + ".join(sorted(sel)) + (" (predicted, kept)" if rec.fields.get("handoff") == KEPT
                                                 else " (predicted)")
         else:
             answer = " + ".join(sorted(sel)) + f" (predicted: {' + '.join(sorted(shown))})"
         print(f"Q{rec.number}: {answer}{note}")
-    print(f"round {rnd}: {hits} of {answered} predictions hit")
+    print(f"round {rnd}: {hits} of {answered} predictions hit"
+          + (f", {handed_count} handed off" if handed_count else ""))
     after = load(state.store)
-    confirmed = sum(r.fields.get("answer") == CONFIRMED for r in state.draft)
-    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), auto=confirmed)))
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), handed=handed_count)))
     return 0
 
 
@@ -1509,6 +1811,43 @@ def cmd_tally(args):
     return 0
 
 
+RANGES = ((0, 50), (50, 70), (70, 80), (80, 90), (90, 95), (95, 101))
+
+
+def cmd_backfill(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    n = backfill(state, person(args))
+    print(f"backfilled scores on {n} record{'s' if n != 1 else ''}")
+    return 0
+
+
+def cmd_calibration(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    beta, eps = calibration_for(state.log, by)
+    pairs = human_ps(state.log, by, beta, eps)
+    rows = []
+    for lo, hi in RANGES:
+        b = [(p, hit) for p, hit in pairs if lo <= 100 * p < hi]
+        rows.append({"range": f"{lo}-{min(hi, 100)}", "count": len(b),
+                     "mean_p": round(100 * sum(p for p, _ in b) / len(b)) if b else None,
+                     "hit": round(100 * sum(hit for _, hit in b) / len(b)) if b else None})
+    if args.json:
+        print(json.dumps({"by": by, "scale": round(beta, 4), "lapse": round(eps, 4), "answers": len(pairs),
+                          "ranges": rows}))
+        return 0
+    print(f"Calibration for {by}, from {len(pairs)} answers with logged scores:")
+    for r in rows:
+        print(f"  p {r['range']}%: " + (f"{r['count']} answers, mean p {r['mean_p']}%, right {r['hit']}%"
+                                        if r["count"] else "no answers"))
+    print(f"  scale {beta:.3f} (the old fixed scale was 0.1), lapse {round(100 * eps)}%")
+    return 0
+
+
 def cmd_parse(args):
     state = load(store_of(args))
     for line in state.problems.errors:
@@ -1524,7 +1863,8 @@ def cmd_parse(args):
 
 COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
             "tally": cmd_tally, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict,
-            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
+            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits, "calibration": cmd_calibration,
+            "backfill": cmd_backfill}
 
 
 def main(argv=None):
@@ -1557,6 +1897,7 @@ def main(argv=None):
     p = command("record")
     p.add_argument("--answers", required=True)
     p.add_argument("--asked")
+    p.add_argument("--handoff", default="", help="the handed-off questions answered with a choice, like `Q4, Q5`")
     p = command("exempt")
     p.add_argument("--question", required=True)
     p.add_argument("--reason", required=True)
@@ -1568,6 +1909,8 @@ def main(argv=None):
     command("fit", json_flag=True)
     command("hits", json_flag=True)
     command("tally", json_flag=True)
+    command("calibration", json_flag=True)
+    command("backfill")
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 

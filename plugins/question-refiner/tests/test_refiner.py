@@ -358,7 +358,8 @@ class Predict(Case):
         text = self.read(iv.DRAFT)
         self.assertIn("- * **Sturdy**: about sturdy.\n", text)
         self.assertIn("- **Cheap (Recommended)**: about cheap.\n", text)
-        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 97% · model: stated\n", text)
+        self.assertIn("prediction: Sturdy · score 18 · gap 36 · p 81% · model: stated\n", text)
+        self.assertIn("scores: -18 | 18\n", text)
         self.assertIn("concern-only: Sturdy\n", text)
         self.assertIn("model: stated", result.stdout)
 
@@ -858,7 +859,7 @@ class Docs(unittest.TestCase):
     def test_the_skill_names_every_command(self):
         text = self.read()
         for command in ("parse", "domains", "concerns", "tag", "rate", "predict", "record", "fit", "hits", "exempt",
-                        "import", "tally", "auto"):
+                        "import", "tally", "auto", "backfill", "calibration"):
             self.assertIn(f"refiner.py\" {command}", text)
 
     def test_the_skill_confirms_inferred_domains(self):
@@ -897,27 +898,43 @@ class Docs(unittest.TestCase):
         self.assertIn('\nargument-hint: "[0-100]"\n', text)
         self.assertIn('refiner.py" auto $ARGUMENTS', text)
 
-    def test_the_skill_confirms_auto_answers(self):
+    def test_the_skill_hands_off_and_reviews(self):
         text = self.read()
-        for words in ("confirming auto answers", "Use these (Recommended)", "Change some", "Q3=auto",
-                      "answer: confirmed", "the tally line"):
+        for words in ("Answer the rest", "Keep asking", "expected wrong", "reviewing handed-off answers",
+                      "Use these (Recommended)", "Change some", "Q3=kept", "--handoff", "the tally line"):
             self.assertIn(words, text)
 
-    def test_the_version_is_1_1_1(self):
+    def test_the_skill_marks_high_stakes(self):
+        text = self.read()
+        for words in ("stakes: high · ", "`<!> `", "asked first", "never handed off", "after: Q"):
+            self.assertIn(words, text)
+
+    def test_the_skill_does_not_reveal_the_audit(self):
+        self.assertIn("Don't say which question is the audit", self.read())
+
+    def test_each_choice_explains_its_benefits_and_trade_offs(self):
+        text = " ".join(self.read().split())
+        for words in ("benefits", "trade-offs", "`addresses:`", "`raises:`", "option's preview",
+                      "never in the question text"):
+            self.assertIn(words, text)
+
+    def test_the_version_is_1_2_0(self):
         with open(os.path.join(SKILL, "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["version"], "1.1.1")
+            self.assertEqual(json.load(fh)["version"], "1.2.0")
+
+    def test_the_readme_gives_the_skills_word_count(self):
+        with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
+            readme = fh.read()
+        self.assertIn(f"{len(self.read().split())} words", readme)
 
     def test_the_readme_lists_the_auto_command(self):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             self.assertIn("/question-refiner-auto", fh.read())
 
-    def test_the_confirmation_fits_the_question_tool(self):
-        text = self.read()
-        self.assertIn("With one auto question, **Change some** means asking it", text)
+    def test_the_review_fits_the_question_tool(self):
+        text = " ".join(self.read().split())
+        self.assertIn("With one handed-off question, **Change some** means asking it", text)
         self.assertIn("more than four, split them", text)
-
-    def test_the_confirmation_has_a_fixed_one_line_question(self):
-        text = self.read()
         self.assertIn('"Use the predicted answers for these N questions?"', text)
         self.assertIn("in the **Use these** option's description", text)
 
@@ -1137,7 +1154,7 @@ class BranchMinors(Case):
         with open(os.path.join(SKILL, "..", "..", "..", "..", "README.md"), encoding="utf-8") as fh:
             section = fh.read().split("\n## question-refiner\n", 1)[1].split("\n## ", 1)[0]
         for command in ("parse", "domains add", "concerns", "tag", "rate", "predict", "record", "exempt", "fit",
-                        "hits", "import", "tally", "auto"):
+                        "hits", "import", "tally", "auto", "calibration", "backfill"):
             self.assertIn(f"\nrefiner.py {command} ", section)
         self.assertRegex(section, r"\nrefiner\.py domains {2,}\S")
 
@@ -1154,15 +1171,16 @@ class Probability(Case):
         out = self.cli("predict", "--by", "Ann").stdout
         return out, {r.number: r for r in self.state().draft}
 
-    def test_two_choices_log_the_softmax_probability(self):
+    def test_two_choices_log_the_calibrated_probability(self):
         out, recs = self.predicted(question(1))
-        self.assertIn("· gap 36 · p 97% · model: stated", recs[1].fields["prediction"])
-        self.assertIn("Q1: Sturdy (lead 36, p 97%)", out)
-        self.assertEqual(iv.logged_p(recs[1]), 97)
+        self.assertIn("· gap 36 · p 81% · model: stated", recs[1].fields["prediction"])
+        self.assertEqual(recs[1].fields["scores"], "-18 | 18")
+        self.assertIn("Q1: Sturdy (lead 36, p 81%)", out)
+        self.assertEqual(iv.logged_p(recs[1]), 81)
 
     def test_three_choices_share_the_probability(self):
         _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE)))
-        self.assertEqual(iv.logged_p(recs[1]), 61)
+        self.assertEqual(iv.logged_p(recs[1]), 52)
 
     def test_multi_select_has_no_probability(self):
         _, recs = self.predicted(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
@@ -1179,21 +1197,36 @@ class Probability(Case):
 
 
 class Threshold(Case):
-    def test_the_default_is_off(self):
-        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
-        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+    def test_the_default_is_85(self):
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
+        self.assertIn("threshold for Ann: 85", self.cli("auto", "--by", "Ann").stdout)
 
-    def test_setting_writes_a_line_and_the_latest_counts(self):
+    def test_setting_writes_a_calibrated_line_and_the_latest_counts(self):
         self.cli("auto", "80", "--by", "Ann")
         self.cli("auto", "70", "--by", "Ann")
-        self.assertIn("threshold: 70 · by: Ann · ", self.read(iv.WEIGHTS))
+        self.assertRegex(self.read(iv.WEIGHTS), r"threshold: 70 · by: Ann · \d{4}-\d{2}-\d{2} · calibrated\n")
         self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 70)
         self.cli("parse")
         self.assertIn("threshold for Ann: 70", self.cli("auto", "--by", "Ann").stdout)
 
+    def test_a_line_from_before_calibration_reads_as_85(self):
+        for old in ("90", "0"):
+            self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", f"\nthreshold: {old} · by: Ann · 2026-10-20\n\n## C1",
+                                                   1))
+            self.cli("parse")
+            self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
+
+    def test_an_old_100_stays_off(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\nthreshold: 100 · by: Ann · 2026-10-20\n\n## C1", 1))
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+
+    def test_100_is_off(self):
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertIn("threshold for Ann: off", self.cli("auto", "--by", "Ann").stdout)
+
     def test_another_persons_threshold_does_not_apply(self):
         self.cli("auto", "0", "--by", "Bob")
-        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
 
     def test_the_threshold_is_0_to_100(self):
         before = self.read(iv.WEIGHTS)
@@ -1216,8 +1249,9 @@ class Threshold(Case):
         self.cli("parse")
 
 
-def logged(results, by="Ann"):
-    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off."""
+def logged(results, by="Ann", scores="-18 | 18", extra=""):
+    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off. `scores`
+    None leaves the scores line off; `extra` is added to every record."""
     out = [iv.LOG_TITLE, ""]
     for n, (hit, p) in enumerate(results, 1):
         shown_p = f" · p {p}%" if p is not None else ""
@@ -1227,149 +1261,400 @@ def logged(results, by="Ann"):
                 "    concern: a worry about cheap.", "    raises: reliability 2", "    addresses: impl-effort 2",
                 f"- {'<sel> ' if hit else ''}* **Sturdy**: about sturdy.",
                 "    concern: a worry about sturdy.", "    raises: impl-effort 2", "    addresses: reliability 2",
-                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated", "concern-only: Sturdy", ""]
+                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated"]
+        out += [f"scores: {scores}"] if scores else []
+        out += ["concern-only: Sturdy"] + ([extra] if extra else []) + [""]
     return "\n".join(out)
+
+
+class Counting(Case):
+    def test_kept_and_confirmed_answers_are_not_human(self):
+        kept = logged([(True, 97)], extra="handoff: kept").split("\n", 2)[2].replace("## Q1", "## Q4")
+        self.write(iv.LOG, logged([(True, 97)] * 3) + "\n" + kept)
+        state = self.state()
+        self.assertEqual(len(iv.graded(state.log, "Ann")), 3)
+        self.assertEqual(len(iv.calibration_data(state.log, "Ann")), 3)
+        self.assertEqual(len(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann")), 3)
+
+    def test_a_changed_answer_trains_the_fit_but_is_not_graded(self):
+        self.write(iv.LOG, logged([(False, 97)], extra="handoff: changed"))
+        state = self.state()
+        self.assertEqual(iv.graded(state.log, "Ann"), [])
+        self.assertEqual(len(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann")), 1)
+
+    def test_an_old_confirmed_answer_counts_nowhere(self):
+        self.write(iv.LOG, logged([(True, 97)], extra="auto: p 97% ≥ 90\nanswer: confirmed"))
+        state = self.state()
+        self.cli("parse")
+        self.assertEqual(iv.graded(state.log, "Ann"), [])
+        self.assertEqual(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann"), [])
+
+    def test_a_typed_answer_is_the_typed_outcome(self):
+        text = logged([(False, 97)]).replace("- <sel> **Cheap (Recommended)**", "- **Cheap (Recommended)**")
+        text = text.replace("prediction:", "- <sel> **Other**: my own way.\n    concern: a worry about mine.\n"
+                                           "    raises: privacy 1\n    addresses: reliability 1\nprediction:")
+        self.write(iv.LOG, text)
+        self.cli("parse")
+        self.assertEqual(iv.calibration_data(self.state().log, "Ann"), [([-18.0, 18.0], -1)])
+
+    def test_an_audit_is_a_human_answer(self):
+        self.write(iv.LOG, logged([(True, 97)], extra="audit: yes"))
+        self.assertEqual(len(iv.graded(self.state().log, "Ann")), 1)
+
+    def test_another_persons_answers_stay_out(self):
+        self.write(iv.LOG, logged([(True, 97)] * 3, by="Bob"))
+        self.assertEqual(iv.calibration_data(self.state().log, "Ann"), [])
 
 
 class Tally(Case):
     def tally(self):
         return self.cli("tally", "--by", "Ann").stdout.strip()
 
+    def suggested(self):
+        t = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)["suggested"]
+        return f" (suggested: {t})" if t is not None else ""
+
     def test_before_8_answers_it_counts_down(self):
         self.write(iv.LOG, logged([(True, 97)] * 5))
-        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally and auto-answering start")
+        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally starts")
 
-    def test_the_line_counts_recent_and_all(self):
+    def test_the_line_counts_recent_and_all_with_the_lapse_and_the_handoff_point(self):
         self.write(iv.LOG, logged([(False, 61)] * 10 + [(True, 97)] * 50))
-        self.assertEqual(self.tally(), "Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · threshold off")
+        eps = iv.calibrate([([-18.0, 18.0], 0)] * 10 + [([-18.0, 18.0], 1)] * 50)[1]
+        self.assertEqual(self.tally(), f"Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · lapse "
+                                       f"{round(100 * eps)}% · handoff at 85" + self.suggested())
 
-    def test_misses_give_the_mean_spread_and_suggestion(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
-        self.assertEqual(self.tally(), "Predictions: 8 of 10 recent (80%), 8 of 10 all (80%) · misses at p 61% ± 0 (2) "
-                                       "· threshold off (suggested: 61)")
+    def test_the_suggestion_shows_once_10_answers_back_it(self):
+        self.write(iv.LOG, logged([(True, 97)] * 30))
+        self.assertRegex(self.tally(), r"· handoff at 85 \(suggested: \d+\)$")
 
-    def test_one_miss_has_no_spread_or_suggestion(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 87)]))
-        self.assertIn("· misses at p 87% (1) · threshold off", self.tally())
-        self.assertNotIn("suggested", self.tally())
-
-    def test_the_suggestion_is_capped_at_99(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 97), (False, 87)]))
-        self.assertIn("misses at p 92% ± 7 (2) · threshold off (suggested: 99)", self.tally())
-
-    def test_misses_without_p_count_as_misses_only(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, None)]))
-        self.assertEqual(self.tally(), "Predictions: 8 of 9 recent (89%), 8 of 9 all (89%) · threshold off")
-
-    def test_the_threshold_shows(self):
+    def test_off(self):
         self.write(iv.LOG, logged([(True, 97)] * 8))
-        self.cli("auto", "80", "--by", "Ann")
-        self.assertTrue(self.tally().endswith("· threshold 80"))
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertIn("· handoff off", self.tally())
         self.assertIn("Predictions: 8 of 8 recent", self.cli("auto", "--by", "Ann").stdout)
 
-    def test_json(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+    def test_records_without_scores_count_in_the_hit_rates_only(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8, scores=None))
         data = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)
-        self.assertEqual(data["recent"], {"hits": 8, "total": 10})
-        self.assertEqual(data["misses"]["count"], 2)
-        self.assertEqual(data["suggested"], 61)
+        self.assertEqual(data["all"], {"hits": 8, "total": 8})
+        self.assertEqual(data["lapse"], iv.EPS_MEAN)
 
     def test_record_prints_the_tally_last(self):
         out = self.round(question(1), answers="Q1=2").stdout.strip().splitlines()
-        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally and auto-answering start")
+        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally starts")
 
 
-class Auto(Case):
-    def warm(self, n=8):
-        self.write(iv.LOG, logged([(True, 97)] * n))
+class CalibrationCommand(Case):
+    def test_it_shows_each_range_and_the_parameters(self):
+        self.write(iv.LOG, logged([(True, 97)] * 12))
+        out = self.cli("calibration", "--by", "Ann").stdout
+        self.assertIn("Calibration for Ann, from 12 answers with logged scores:", out)
+        self.assertIn("  p 0-50%: no answers", out)
+        self.assertIn("lapse", out)
+        data = json.loads(self.cli("calibration", "--by", "Ann", "--json").stdout)
+        self.assertEqual(sum(r["count"] for r in data["ranges"]), 12)
+        self.assertEqual(data["answers"], 12)
+
+
+class Handoff(Case):
+    def warm(self, n=20, scores="-18 | 18"):
+        self.write(iv.LOG, logged([(True, 97)] * n, scores=scores))
 
     def predict(self, *questions):
         self.write(iv.DRAFT, draft(*questions))
         out = self.cli("predict", "--by", "Ann").stdout
         return out, {r.number: r for r in self.state().draft}
 
-    def test_a_likely_question_is_marked_auto(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        out, recs = self.predict(question(1), question(2, choices=(PRIVATE, PLAIN)))
-        self.assertEqual(recs[1].fields["auto"], "p 97% ≥ 90")
-        self.assertNotIn("auto", recs[2].fields)
-        self.assertIn("Q1: Sturdy (lead 36, p 97%), auto", out)
+    def test_a_perfect_record_first_gets_a_handoff_at_about_20(self):
+        first = None
+        for n in range(15, 26):
+            self.warm(n)
+            if "handoff" in self.predict(question(1))[1][1].fields:
+                first = n
+                break
+        self.assertTrue(first is not None and 17 <= first <= 23, first)
 
-    def test_p_equal_to_the_threshold_is_auto(self):
+    def test_a_likely_question_is_marked(self):
         self.warm()
-        self.cli("auto", "97", "--by", "Ann")
-        self.assertIn("auto", self.predict(question(1))[1][1].fields)
+        out, recs = self.predict(question(1), question(2, "Other way?", choices=(PRIVATE, PLAIN)))
+        rec = next(r for r in recs.values() if r.question == "Which way?")
+        self.assertRegex(rec.fields["handoff"], r"^p \d+% ≥ 85$")
+        self.assertIn(", handoff", out)
 
-    def test_nothing_is_auto_before_8_answers(self):
-        self.warm(7)
+    def test_nothing_is_marked_before_20_human_answers(self):
+        self.warm(19)
         self.cli("auto", "0", "--by", "Ann")
-        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
+        out, recs = self.predict(question(1))
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertIn("handoff is recommended from 20", out)
 
-    def test_100_is_off_and_0_is_everything_eligible(self):
+    def test_100_is_off(self):
         self.warm()
-        self.assertNotIn("auto", self.predict(question(1))[1][1].fields)
-        self.cli("auto", "0", "--by", "Ann")
-        _, recs = self.predict(question(1), question(2, choices=(CHEAP, STURDY, PRIVATE), select="multi"))
-        self.assertIn("auto", recs[1].fields)
-        self.assertNotIn("auto", recs[2].fields)
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertNotIn("handoff", self.predict(question(1))[1][1].fields)
 
-    def test_a_probe_is_never_auto(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8) + "\n" + LOG_RECORD.split("\n", 2)[2].replace("## Q1", "## Q9")
-                   .replace("round: 1", "round: 9"))
+    def test_multi_select_and_high_stakes_are_never_marked(self):
+        self.warm()
+        self.cli("auto", "0", "--by", "Ann")
+        _, recs = self.predict(question(1, choices=(CHEAP, STURDY, PRIVATE), select="multi"),
+                               question(2) + "stakes: high · it deletes data\n")
+        self.assertFalse(any("handoff" in r.fields for r in recs.values()))
+
+    def test_a_probe_is_never_marked(self):
+        self.write(iv.LOG, logged([(True, 97)] * 20) + "\n" + LOG_RECORD.split("\n", 2)[2]
+                   .replace("## Q1", "## Q21").replace("round: 1", "round: 21"))
         self.cli("auto", "0", "--by", "Ann")
         _, recs = self.predict(question(1))
         self.assertIn("probe", recs[1].marks)
-        self.assertNotIn("auto", recs[1].fields)
+        self.assertNotIn("handoff", recs[1].fields)
 
-    def test_a_raised_threshold_removes_a_stale_auto(self):
+    def test_an_audit_replaces_a_handoff_when_the_top_has_little_evidence(self):
+        self.warm(scores="-1 | 1")
+        out, recs = self.predict(question(1))
+        self.assertEqual(recs[1].fields.get("audit"), "yes")
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertIn(", audit", out)
+
+    def test_no_audit_when_the_top_has_evidence(self):
         self.warm()
-        self.cli("auto", "90", "--by", "Ann")
-        self.predict(question(1))
-        self.cli("auto", "99", "--by", "Ann")
+        _, recs = self.predict(question(1))
+        self.assertNotIn("audit", recs[1].fields)
+
+    def test_a_first_round_has_priors_only(self):
+        out, recs = self.predict(question(1))
+        self.assertNotIn("handoff", recs[1].fields)
+        self.assertNotIn("audit", recs[1].fields)
+        self.assertNotIn("backfilled", out)
+        self.assertIn("calibration: scale 0.100, lapse 25% from 0 human answers", out)
+
+    def test_predict_twice_gives_the_same_round(self):
+        self.warm(scores="-1 | 1")
+        self.predict(question(1), question(2, "Another way?"), question(3, "A third?"))
+        first = self.read(iv.DRAFT)
         self.cli("predict", "--by", "Ann")
-        self.assertNotIn("auto", self.state().draft[0].fields)
+        self.assertEqual(self.read(iv.DRAFT), first)
 
-    def test_record_confirms_an_auto_answer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
+
+class Sorting(Case):
+    def order(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        self.cli("predict", "--by", "Ann")
+        return [(r.number, r.question) for r in self.state().draft]
+
+    def test_high_stakes_then_never_handed_off_then_the_rest_lowest_p_first(self):
+        got = self.order(question(1, "Likely?"), question(2, "Risky?") + "stakes: high · it publishes\n",
+                         question(3, "Several?", choices=(CHEAP, STURDY, PRIVATE), select="multi"),
+                         question(4, "Unsure?", choices=(CHEAP, STURDY, PRIVATE)))
+        self.assertEqual(got, [(1, "Risky?"), (2, "Several?"), (3, "Unsure?"), (4, "Likely?")])
+
+    def test_a_dependent_question_follows_its_parent_and_the_pair_sorts_by_its_lowest_p(self):
+        got = self.order(question(1, "Likely?"), question(2, "Unsure?", choices=(CHEAP, STURDY, PRIVATE)),
+                         question(3, "Then?") + "after: Q1\n",
+                         question(4, "Lowest?", choices=(CHEAP, STURDY, PRIVATE, PLAIN)) + "after: Q1\n")
+        self.assertEqual([q for _, q in got], ["Likely?", "Then?", "Lowest?", "Unsure?"])
+        self.assertEqual([r.fields.get("after") for r in self.state().draft], [None, "Q1", "Q1", None])
+
+
+class FinalFixes(Case):
+    def test_kept_is_refused_on_a_question_with_a_typed_answer(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("prediction:", "- **Other**: my own way.\n"
+                   "    concern: a worry about mine.\n    raises: privacy 1\n    addresses: reliability 1\nprediction:"))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=kept", "--asked", ASKED, ok=False)
+        self.assertIn("so its answer is Other", result.stderr)
+
+    def test_a_drafted_question_cannot_carry_the_high_stakes_mark(self):
+        self.write(iv.DRAFT, draft(question(1, "<!> Which way?")))
+        out = self.cli("parse", ok=False).stdout
+        self.assertIn("`stakes: high · <reason>`", out)
+
+
+class Recording(Case):
+    def predict(self, *questions):
+        self.write(iv.DRAFT, draft(*questions))
+        self.cli("predict", "--by", "Ann")
+
+    def record(self, answers, *extra, ok=True):
+        return self.cli("record", "--by", "Ann", "--answers", answers, "--asked", ASKED, *extra, ok=ok)
+
+    def test_a_kept_answer_is_the_prediction_and_not_graded(self):
         self.predict(question(1))
-        out = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED).stdout
+        out = self.record("Q1=kept").stdout
         rec = self.state().log[-1]
-        self.assertEqual(rec.fields["answer"], "confirmed")
+        self.assertEqual(rec.fields["handoff"], "kept")
         self.assertEqual([c.label for c in rec.selected()], ["Sturdy"])
-        self.assertIn("Q9: Sturdy (predicted, confirmed)", out)
-        self.assertIn("9 of 9 all (100%) · auto 1 · threshold 90", out.strip().splitlines()[-1])
+        self.assertIn("Q1: Sturdy (predicted, kept)", out)
+        self.assertIn("round 1: 0 of 0 predictions hit, 1 handed off", out)
+        self.assertEqual(iv.graded(self.state().log, "Ann"), [])
         self.cli("parse")
 
-    def test_changing_an_auto_question_is_a_normal_answer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
+    def test_auto_is_kept(self):
         self.predict(question(1))
-        self.cli("record", "--by", "Ann", "--answers", "Q1=1", "--asked", ASKED)
+        self.record("Q1=auto")
+        self.assertEqual(self.state().log[-1].fields["handoff"], "kept")
+
+    def test_a_changed_answer_names_the_handoff(self):
+        self.predict(question(1))
+        self.record("Q1=1", "--handoff", "Q1")
         rec = self.state().log[-1]
-        self.assertNotIn("answer", rec.fields)
+        self.assertEqual(rec.fields["handoff"], "changed")
         self.assertIn("tracer", rec.marks)
 
-    def test_record_refuses_auto_on_a_question_not_marked_auto(self):
+    def test_an_asked_question_drops_its_handoff_mark(self):
         self.predict(question(1))
-        result = self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED, ok=False)
-        self.assertIn("not marked auto", result.stderr)
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only:", "handoff: p 90% ≥ 85\nconcern-only:"))
+        self.record("Q1=2")
+        self.assertNotIn("handoff", self.state().log[-1].fields)
 
-    def test_a_confirmed_answer_against_the_stated_ratings_is_a_tracer(self):
-        self.warm()
-        self.cli("auto", "90", "--by", "Ann")
+    def test_only_an_eligible_question_is_handed_off(self):
+        self.predict(question(1) + "stakes: high · it publishes\n")
+        self.assertIn("cannot be handed off", self.record("Q1=kept", ok=False).stderr)
+        self.assertIn("cannot be handed off", self.record("Q1=1", "--handoff", "Q1", ok=False).stderr)
+
+    def test_a_handed_off_question_is_not_declined(self):
         self.predict(question(1))
-        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("concern-only: Sturdy", "concern-only: Cheap (Recommended)"))
-        self.cli("record", "--by", "Ann", "--answers", "Q1=auto", "--asked", ASKED)
-        self.assertIn("tracer", self.state().log[-1].marks)
+        self.assertIn("kept or changed", self.record("Q1=none", "--handoff", "Q1", ok=False).stderr)
 
-    def test_parse_refuses_misplaced_auto_lines(self):
-        self.write(iv.LOG, LOG_RECORD + "answer: maybe\n")
-        self.assertIn("`answer:` is", self.cli("parse", ok=False).stdout)
+    def test_handoff_names_questions_in_the_round(self):
+        self.predict(question(1))
+        self.assertIn("Q5 in --handoff is not in the round", self.record("Q1=1", "--handoff", "Q5", ok=False).stderr)
+        self.assertIn("--handoff takes", self.record("Q1=1", "--handoff", "one", ok=False).stderr)
+
+    def test_after_is_renumbered_into_the_log(self):
+        self.write(iv.LOG, logged([(True, 97)] * 3))
+        self.predict(question(1, "First?"), question(2, "Then?") + "after: Q1\n")
+        self.record("Q1=2, Q2=2")
+        log = self.state().log
+        self.assertEqual(log[-1].fields["after"], "Q4")
+        self.cli("parse")
+
+    def test_the_tally_counts_the_handed_off_answers(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8))
+        self.predict(question(1))
+        self.assertIn("· handed off 1 ·", self.record("Q1=kept").stdout.strip().splitlines()[-1])
+
+
+class Fields(Case):
+    def parse(self, text, ok=True):
+        self.write(iv.DRAFT, text)
+        return self.cli("parse", ok=ok).stdout
+
+    def test_scores_parse_and_count_the_offered_choices(self):
+        self.parse(draft(question(1)) + "scores: -18 | 18\n")
+        self.assertEqual(iv.parse_scores(self.state().draft[0]), [-18.0, 18.0])
+        self.assertIn("2 choices", self.parse(draft(question(1)) + "scores: 1 | 2 | 3\n", ok=False))
+        self.assertIn("`scores:` is", self.parse(draft(question(1)) + "scores: high\n", ok=False))
+
+    def test_backfilled_scores_parse(self):
+        self.write(iv.LOG, LOG_RECORD + "scores: -18 | 18 · backfilled\n")
+        self.cli("parse")
+        self.assertEqual(iv.parse_scores(self.state().log[0]), [-18.0, 18.0])
+
+    def test_stakes_needs_a_reason(self):
+        self.parse(draft(question(1)) + "stakes: high · it publishes the page\n")
+        self.assertIn("`stakes:` is", self.parse(draft(question(1)) + "stakes: high\n", ok=False))
+
+    def test_after_names_another_question_in_the_round(self):
+        self.parse(draft(question(1), question(2) + "after: Q1\n"))
+        self.assertIn("not in the round", self.parse(draft(question(1) + "after: Q9\n"), ok=False))
+        self.assertIn("itself", self.parse(draft(question(1) + "after: Q1\n"), ok=False))
+        self.assertIn("loop", self.parse(draft(question(1) + "after: Q2\n", question(2) + "after: Q1\n"), ok=False))
+
+    def test_handoff_and_audit_values(self):
+        self.parse(draft(question(1)) + "prediction: Sturdy · score 18 · gap 36 · model: stated\n"
+                   "handoff: p 90% ≥ 85\n")
+        self.assertIn("`handoff:`", self.parse(draft(question(1)) + "handoff: kept\n", ok=False))
+        self.assertIn("`audit:` is `yes`", self.parse(draft(question(1)) + "audit: no\n", ok=False))
+        self.write(iv.LOG, LOG_RECORD + "handoff: maybe\n")
+        self.assertIn("`handoff:`", self.cli("parse", ok=False).stdout)
+
+
+class Backfill(Case):
+    def test_a_record_gets_the_scores_it_had_when_asked(self):
         self.write(iv.LOG, LOG_RECORD)
-        self.write(iv.DRAFT, draft(question(1, select="multi")) + "auto: p 90% ≥ 80\n")
-        self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
+        self.assertIn("backfilled scores on 1 record", self.cli("backfill", "--by", "Ann").stdout)
+        self.assertEqual(self.read(iv.LOG), LOG_RECORD.replace("concern-only:", "scores: -18 | 18 · backfilled\n"
+                                                                                "concern-only:"))
+
+    def test_the_rating_as_of_the_question_date_is_used(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("rating: 10 · by: Ann · 2026-10-01",
+                                               "rating: 10 · by: Ann · 2026-10-01\nrating: 0 · by: Ann · 2026-10-05"))
+        self.write(iv.LOG, LOG_RECORD)
+        self.cli("backfill", "--by", "Ann")
+        self.assertIn("scores: -18 | 18 · backfilled", self.read(iv.LOG))
+
+    def test_a_later_record_does_not_change_an_earlier_ones_scores(self):
+        self.write(iv.LOG, logged([(False, 61)] * 6, scores=None).replace("Which way?", "<tracer> Which way?"))
+        self.cli("backfill", "--by", "Ann")
+        first = [r.fields["scores"] for r in self.state().log]
+        self.write(iv.LOG, logged([(False, 61)] * 9, scores=None).replace("Which way?", "<tracer> Which way?"))
+        self.cli("backfill", "--by", "Ann")
+        later = [r.fields["scores"] for r in self.state().log]
+        self.assertEqual(later[:6], first)
+        self.assertNotEqual(later[6], later[0])
+
+    def test_another_persons_records_are_left(self):
+        self.write(iv.LOG, logged([(True, 97)], by="Bob", scores=None))
+        self.assertIn("on 0 records", self.cli("backfill", "--by", "Ann").stdout)
+        self.assertNotIn("scores:", self.read(iv.LOG))
+
+    def test_predict_backfills_first(self):
+        self.write(iv.LOG, LOG_RECORD)
+        self.write(iv.DRAFT, draft(question(1)))
+        self.assertIn("backfilled scores on 1 earlier record", self.cli("predict", "--by", "Ann").stdout)
+        self.assertNotIn("backfilled", self.cli("predict", "--by", "Ann").stdout)
+
+
+class Calibration(unittest.TestCase):
+    def test_no_data_gives_the_prior_means(self):
+        self.assertEqual(iv.calibrate([]), (iv.BETA_MEAN, iv.EPS_MEAN))
+
+    def test_the_lapse_is_spread_over_the_choices_and_a_typed_answer(self):
+        p = iv.calibrated_p([-18.0, 18.0], 1, 0.1, 0.25)
+        self.assertAlmostEqual(p, 0.75 / (1 + math.exp(-3.6)) + 0.25 / 3)
+
+    def test_calibration_recovers_a_known_scale_and_lapse(self):
+        import random
+        rng, data = random.Random(1), []
+        for i in range(600):
+            x = (4, 8, 16, 32)[i % 4]
+            if rng.random() < 0.2:
+                k = rng.randrange(3)
+                k = -1 if k == 2 else k
+            else:
+                k = 0 if rng.random() < 1 / (1 + math.exp(-0.4 * x)) else 1
+            data.append(([float(x), float(-x)], k))
+        beta, eps = iv.calibrate(data)
+        self.assertLess(abs(beta - 0.2), 0.06)
+        self.assertLess(abs(eps - 0.2), 0.05)
+
+    def test_typed_answers_raise_the_lapse(self):
+        right = [([-18.0, 18.0], 1)] * 20
+        self.assertGreater(iv.calibrate(right + [([-18.0, 18.0], -1)] * 5)[1], iv.calibrate(right)[1] + 0.05)
+
+    def test_a_perfect_record_on_a_typical_question_reaches_85_before_the_gate(self):
+        q = [8.0, -8.0]
+        first = next(n for n in range(1, 100) if iv.calibrated_p(q, 0, *iv.calibrate([(q, 0)] * n)) >= 0.85)
+        self.assertLessEqual(first, iv.MIN_HANDOFF)
+
+    def test_the_wilson_bound_of_a_perfect_record(self):
+        self.assertAlmostEqual(iv.wilson_lb(8, 8), 8 / (8 + iv.Z ** 2))
+        self.assertEqual(iv.wilson_lb(0, 0), 0.0)
+
+    def test_the_suggestion_needs_10_answers(self):
+        self.assertIsNone(iv.suggestion([(0.95, True)] * 9))
+
+    def test_the_suggestion_is_the_strictest_backed_threshold(self):
+        self.assertEqual(iv.suggestion([(0.9, True)] * 30), 90)
+        # Misses at the top pull the backed threshold down to the bound over all 35.
+        self.assertEqual(iv.suggestion([(0.9, True)] * 30 + [(0.95, False)] * 5), int(100 * iv.wilson_lb(30, 35)))
+
+    def test_an_audit_is_needed_under_10_of_the_last_50(self):
+        self.assertTrue(iv.needs_audit([(0.9, True)] * 9 + [(0.5, True)] * 41, 85))
+        self.assertFalse(iv.needs_audit([(0.9, True)] * 10 + [(0.5, True)] * 40, 85))
+        self.assertTrue(iv.needs_audit([(0.9, True)] * 10 + [(0.5, True)] * 50, 85))
 
 
 if __name__ == "__main__":

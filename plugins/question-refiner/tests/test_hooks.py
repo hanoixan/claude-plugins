@@ -67,6 +67,10 @@ class Hook(unittest.TestCase):
         self.predicted()
         self.assertIsNone(self.gate("Which way?"))
 
+    def test_a_high_stakes_question_passes_with_its_mark(self):
+        self.predicted()
+        self.assertIsNone(self.gate("<!> Which way?"))
+
     def test_a_recent_exempt_question_passes(self):
         self.refiner("exempt", "--question", "Merge?", "--reason", "a menu", "--by", "Ann")
         self.assertIsNone(self.gate("Merge?"))

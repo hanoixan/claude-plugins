@@ -70,11 +70,11 @@ numbers already given never change. `domains` with no arguments lists the domain
    ## Q1
    Where is undo history kept between sessions?
    header: History · select: single
-   - **Not kept (Recommended)**: history lives in memory and ends with the session.
+   - **Not kept (Recommended)**: nothing to build and nothing left on disk; but a crash loses every undo step.
        concern: a crash loses every step the user could have undone.
        raises: reliability 2
        addresses: impl-effort 2, privacy 1
-   - **A file beside the document**: survives a restart; one more format to version.
+   - **A file beside the document**: undo survives a crash; but adds a format to maintain and puts history on disk.
        concern: another file format to keep compatible forever.
        raises: impl-effort 2, privacy 1
        addresses: reliability 3
@@ -84,6 +84,16 @@ numbers already given never change. `domains` with no arguments lists the domain
      it is the choice whose label ends `(Recommended)`; otherwise mark the one you would recommend.
    - `header:` is the short label shown with the question (12 characters at most); `select:` is `single` or `multi`.
      Keep ` · ` out of the header and `**` and ` | ` out of labels.
+   - Each choice's description explains its benefits and its trade-offs, so the user sees what the question
+     trades without reading the annotations: first what the choice gets them, in terms of the concerns in its
+     `addresses:` line, then what it costs, in terms of those in its `raises:` line, in one or two plain sentences
+     that say why it is a trade, not a list of tags. Claim no benefit or cost the annotations don't carry, and
+     leave out none of severity 3. This belongs in each choice, never in the question text: the question asks; the
+     choices explain. When it does not fit the tool's description, keep a short version there and give the full
+     explanation in the option's preview.
+   - `stakes: high · <reason>` marks a high-stakes question: its choices are hard to reverse, expensive,
+     outward-facing (published, sent, shared) or security-sensitive. It is asked first and never handed off.
+   - `after: Q<n>` marks a question that depends on question n's answer; it stays right after that one.
    - Annotate every choice now, before anything is asked: `concern:` is one sentence, the main worry the user would
      have if they took it; `raises:` and `addresses:` are `<tag> <severity>` pairs, severity 1 (minor), 2 (real) or
      3 (major). Every choice raises at least one concern; `addresses: none` is allowed. Use the tags in
@@ -108,45 +118,52 @@ numbers already given never change. `domains` with no arguments lists the domain
 
 3. **Predict:** `python3 "SKILL_DIR/scripts/refiner.py" predict`. It marks each question's predicted choice with
    `*`, adds the person as `by:` on the meta line (`record` refuses anyone else), and writes `prediction:`,
-   `concern-only:`, `round-id:` and, on a question that touches a trade-off the user has gone against before,
-   `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names the
-   command that fixes each.
-   - On a single-select question, the prediction line also gives `p`, the predicted choice's probability.
-   - `auto: p 91% ≥ 80` marks a question the user's threshold lets the prediction answer: single-select, not a probe,
-     `p` at least the threshold, after the user's first 8 answers. The user sets the threshold with
-     `/question-refiner-auto`; 100, the default, is off. Never run `auto` with a number yourself: only the user
-     chooses how much is answered for them. `python3 "SKILL_DIR/scripts/refiner.py" auto`, with no number,
-     shows the threshold.
+   `scores:`, `concern-only:`, `round-id:` and, on a question that touches a trade-off the user has gone against
+   before, `<probe>` and `probes:`. It refuses an unannotated choice, an unmapped tag or an unrated concern, and names
+   the command that fixes each. The first `predict` after an upgrade backfills `scores:` on older records.
+   - On a single-select question, the prediction line gives `p`: the calibrated chance the user takes the predicted
+     choice (see "How a prediction is made").
+   - It sorts and renumbers the round: high-stakes questions first, then those never handed off (multi-select,
+     probes, the audit), then the rest, each lowest `p` first, with `after:` questions kept behind theirs.
+   - `handoff: p 91% ≥ 85` marks a question the user's handoff point covers: single-select, not high-stakes, not a
+     probe, `p` at least the threshold, once the user has answered 20 questions. The default is 85; the user sets it
+     with `/question-refiner-auto`, and 100 is off. Never run `auto` with a number yourself: only the user chooses
+     how much is answered for them. `python3 "SKILL_DIR/scripts/refiner.py" auto`, with no number, shows it.
+   - `audit: yes` marks one such question when few recent answers sit above the threshold. Ask it like any other.
+     Don't say which question is the audit: the user answering it as usual is the point.
 
-4. **Confirm the auto answers first.** If any question has `auto:`, exempt and ask one single-select question,
-   "Use the predicted answers for these N questions?" (N being their count), with the reason
-   "confirming auto answers" and the choices **Use these (Recommended)** and **Change some**. List each auto
-   question, its predicted answer, and the recommended answer when different,
-   in the **Use these** option's description, in the option's preview, or in a message that ends the turn before
-   the question is asked. On **Change some**:
-   - With one auto question, **Change some** means asking it: ask it normally with the rest of the round.
-   - With two to four, ask which as one exempt multi-select question, one option per auto question.
-   - With more than four, split them across multi-select questions in one call, four options at most each, all
-     exempt.
-
-   Ask the ones chosen normally with the rest of the round. In plain chat: list the auto questions and end "reply
-   ok, or the numbers to change".
-
-   **Ask** the other questions in draft order. Copy each question, label and description from the draft word for word:
-   the log records the draft, and the gate matches the question text exactly. Ask a probed question
-   without its `<probe>` mark. To change the wording, edit the draft
-   and run `predict` again before asking.
+4. **Ask in order, offer the handoff, review.** Ask the questions in draft order. Copy each question, label and
+   description from the draft word for word: the log records the draft, and the gate matches the question text
+   exactly. Ask a probed question without its `<probe>` mark. To change the wording, edit the draft and run
+   `predict` again before asking.
+   - A high-stakes question is asked first, with `<!> ` before its text, so the user sees the stakes.
    - With a multiple-choice tool (AskUserQuestion in Claude Code): four questions per call; the predicted choice's
      label starts with `* `; `(Recommended)` stays in its label; the predicted choice's description ends with
      `(predicted, lead N)`, N being the `gap` from `prediction:`.
+   - When questions would remain after a call and every one of them could be handed off (single-select, not
+     high-stakes, not a probe, not the audit), the call's last slot is the handoff question instead: exempt, with
+     the reason "handoff", "Answer the remaining N yourself? About X.X expected wrong.", X.X being the sum of
+     (100 − p)/100 over them, with the choices **Answer the rest** and **Keep asking**. **Answer the rest** ends
+     `(Recommended)` when every remaining question has `handoff:`. Choosing it earlier is the user's call.
+   - After **Answer the rest**, review: exempt and ask one single-select question, "Use the predicted answers for
+     these N questions?", with the reason "reviewing handed-off answers" and the choices **Use these
+     (Recommended)** and **Change some**. List each handed-off question, its predicted answer, and the recommended
+     answer when different, in the **Use these** option's description, in the option's preview, or in a message
+     that ends the turn before the question is asked. On **Change some**: With one handed-off question, **Change
+     some** means asking it; with two to four, ask which as one exempt multi-select question, one option per
+     question; with more than four, split them across multi-select questions in one call, four options at most
+     each, all exempt. Ask the ones chosen normally.
    - In plain chat: number the questions, letter the choices, show the same marks, and accept answers like
-     `1b, 2a, 3: <text>`.
+     `1b, 2a, 3: <text>`. Offer the handoff as "reply `rest` to let me answer the remaining N", and the review as
+     a list ending "reply ok, or the numbers to change".
 
 5. **Record:** `python3 "SKILL_DIR/scripts/refiner.py" record --answers "Q1=2, Q2=Other, Q3=none"`.
    - Answers are choice numbers in draft order (`Q4=1+3` for several on a multi-select question), `Other` for a
      typed answer, or `none` when the user declines.
-   - `Q3=auto` records a confirmed auto answer as the prediction, with `answer: confirmed`; it counts as the user's
-     answer. An auto question the user changed is recorded by its choice number.
+   - `Q3=kept` records a handed-off answer the user kept in the review, as the prediction, with `handoff: kept`.
+     A handed-off question the user changed is recorded by its choice number and named in `--handoff "Q3"`, which
+     writes `handoff: changed`. Neither counts as a human answer in the hit rates; a changed one trains the fit.
+     `Q3=auto`, from rounds drafted before 1.2.0, means kept.
    - For a typed answer, first add it to that question in the draft as `- **Other**: <the user's words>` with its
      own `concern:`, `raises:` and `addresses:` lines, map any new tag, then record.
    - `record` writes `<sel>`, marks a `<tracer>` where the answer differs from the stated-ratings prediction, numbers
@@ -162,8 +179,9 @@ numbers already given never change. `domains` with no arguments lists the domain
    `python3 "SKILL_DIR/scripts/refiner.py" fit` shows as moved, with its warnings. Never present a fitted weight
    that carries an overfit warning as the user's preference.
 
-Every question is asked unless the user's threshold marks it auto, and an auto answer is still shown to the user to
-confirm.
+Every question is asked unless the user hands it off, and every handed-off answer is shown to the user to review
+before it is applied. The tally line reads like `Predictions: 41 of 50 recent (82%), 160 of 190 all (84%) · lapse
+18% · handoff at 85 (suggested: 87)`.
 
 ## The files
 
@@ -173,15 +191,16 @@ confirm.
 ## Q14
 <tracer> Where is undo history kept between sessions?
 header: History · round: 3 · select: single · asked: 2026-10-17 10:42:11 -0400 · by: Sean Dunn
-- * **Not kept (Recommended)**: history lives in memory and ends with the session.
+- * **Not kept (Recommended)**: nothing to build and nothing left on disk; but a crash loses every undo step.
     concern: a crash loses every step the user could have undone.
     raises: reliability 2
     addresses: impl-effort 2, privacy 1
-- <sel> **A file beside the document**: survives a restart; one more format to version.
+- <sel> **A file beside the document**: undo survives a crash; but adds a format to maintain and puts history on disk.
     concern: another file format to keep compatible forever.
     raises: impl-effort 2, privacy 1
     addresses: reliability 3
-prediction: Not kept (Recommended) · score 12 · gap 4 · model: fitted+rec
+prediction: Not kept (Recommended) · score 12 · gap 4 · p 64% · model: fitted+rec
+scores: 12 | 8
 concern-only: Not kept (Recommended)
 axis: C10 reliability vs C8 effort
 round-id: 3f91df49
@@ -191,11 +210,15 @@ round-id: 3f91df49
 - `<tracer>`: the answer went against `concern-only:`, the prediction from the stated ratings alone. `axis:` names
   the concern the answer gained most against the one it gave up most.
 - `<probe>` (with `probes:`): when asked, the question touched a trade-off with an earlier tracer.
-- `answer: none (declined)` marks a question the user declined; `answer: confirmed`, an auto answer the user
-  confirmed. `auto:` stays on a question predict marked auto.
-- `p 97%` on the prediction line is the predicted choice's probability, on single-select questions.
+- `answer: none (declined)` marks a question the user declined. `handoff: kept` or `handoff: changed` marks a
+  handed-off answer; `answer: confirmed` and `auto:`, from before 1.2.0, read as kept.
+- `stakes:`, `after:` and `audit: yes` stay as drafted; `after:` is renumbered into the log.
+- `scores:` holds each offered choice's score when predicted, the input to calibration; `· backfilled` marks scores
+  computed later for an older record, from earlier records only.
+- `p 81%` on the prediction line is the predicted choice's calibrated probability, on single-select questions.
 - `round-id:` is the same on every question of a round. `record` refuses a draft whose round is already logged.
-- Don't edit recorded rounds, apart from adding annotation lines that are missing.
+- Don't edit recorded rounds, apart from adding annotation lines that are missing; `predict` and `backfill` add
+  `scores:` to older records, the one other edit.
 
 **`weights.md`** holds the domains, the concerns, shared by everyone on the repository, and each person's ratings:
 
@@ -208,8 +231,10 @@ tags: reliability
 rating: 10 · by: Sean Dunn · 2026-10-17
 ```
 
-A `threshold: 80 · by: Sean Dunn · 2026-10-20` line after `domains:` is a person's auto threshold. The latest
-`rating:` and `threshold:` line per person counts. `domains add` creates the file; `tag` and `rate` change it.
+A `threshold: 80 · by: Sean Dunn · 2026-10-24 · calibrated` line after `domains:` is a person's handoff point; a
+line without `calibrated` was set before 1.2.0 and reads as the default, 85, unless it is 100, which stays off. The
+latest `rating:` and `threshold:` line per person counts. `domains add` creates the file; `tag` and `rate` change
+it.
 
 **`exempt.md`** is one line per exempt question: when, by whom, the question and why. `hits` and `fit` never read it.
 
@@ -225,6 +250,15 @@ From five tracers, `predict` fits the weights to the person's answered single-ch
 model that also learns how much the person favours the recommended choice, pulled back toward the stated ratings.
 Tracers move it most, because they are the answers the stated ratings got wrong. The hit rates count only
 predictions logged before each answer, so they are a fair measure of both the stated ratings and the fit.
+
+`p` is calibrated: the probability of the predicted choice is (1 − ε) × softmax(β × scores) plus ε shared over
+the offered choices and a typed answer. ε, the lapse rate, is the share of answers the scores do not explain; β
+scales the scores. Both are fitted to the user's human answers (not handed-off ones) from the logged scores,
+starting from a pessimistic prior, so `p` means how often such a prediction has been right.
+`python3 "SKILL_DIR/scripts/refiner.py" calibration` shows `p` against the hit rate by range;
+`python3 "SKILL_DIR/scripts/refiner.py" backfill` fills in older records' scores, which `predict` also does. The
+tally's suggestion is the highest threshold the user's answers back: at least 10 answers at or above it, right at
+least that often at a 95% lower bound.
 
 ## Moving skel 3.1.0 data
 
