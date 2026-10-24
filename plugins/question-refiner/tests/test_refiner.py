@@ -1446,6 +1446,21 @@ class Sorting(Case):
         self.assertEqual([r.fields.get("after") for r in self.state().draft], [None, "Q1", "Q1", None])
 
 
+class FinalFixes(Case):
+    def test_kept_is_refused_on_a_question_with_a_typed_answer(self):
+        self.write(iv.DRAFT, draft(question(1)))
+        self.cli("predict", "--by", "Ann")
+        self.write(iv.DRAFT, self.read(iv.DRAFT).replace("prediction:", "- **Other**: my own way.\n"
+                   "    concern: a worry about mine.\n    raises: privacy 1\n    addresses: reliability 1\nprediction:"))
+        result = self.cli("record", "--by", "Ann", "--answers", "Q1=kept", "--asked", ASKED, ok=False)
+        self.assertIn("so its answer is Other", result.stderr)
+
+    def test_a_drafted_question_cannot_carry_the_high_stakes_mark(self):
+        self.write(iv.DRAFT, draft(question(1, "<!> Which way?")))
+        out = self.cli("parse", ok=False).stdout
+        self.assertIn("`stakes: high · <reason>`", out)
+
+
 class Recording(Case):
     def predict(self, *questions):
         self.write(iv.DRAFT, draft(*questions))

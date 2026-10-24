@@ -338,7 +338,10 @@ def split_marks(text, path, k, problems):
         if text.startswith(f"<{mark}> "):
             marks.append(mark)
             text = text[len(mark) + 3:]
-    if re.match(r"^<[a-z]+> ", text):
+    if text.startswith("<!>"):
+        problems.error(path, k + 1, "mark a high-stakes question with `stakes: high · <reason>`; `<!> ` goes before "
+                                    "its text only when it is asked")
+    elif re.match(r"^<[a-z]+> ", text):
         problems.error(path, k + 1, "only `<probe>` then `<tracer>` may go before the question")
     if not text.strip():
         problems.error(path, k + 1, "the question text is empty")
@@ -1554,6 +1557,8 @@ def answer_errors(rec, tokens, tags, by, handed=frozenset()):
                           f"audit")
         if tokens == ["none"]:
             errors.append(f"Q{rec.number} was handed off, so it is kept or changed, not declined")
+    if keep and other is not None:
+        errors.append(f"Q{rec.number} has an Other choice, so its answer is Other")
     if keep or tokens == ["none"]:
         return errors
     if "kept" in tokens or "auto" in tokens:
