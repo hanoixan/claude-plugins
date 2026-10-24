@@ -1227,8 +1227,9 @@ class Threshold(Case):
         self.cli("parse")
 
 
-def logged(results, by="Ann"):
-    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off."""
+def logged(results, by="Ann", scores="-18 | 18", extra=""):
+    """A log with one Cheap/Sturdy record per (hit, p) pair; Sturdy is predicted, p None leaves it off. `scores`
+    None leaves the scores line off; `extra` is added to every record."""
     out = [iv.LOG_TITLE, ""]
     for n, (hit, p) in enumerate(results, 1):
         shown_p = f" · p {p}%" if p is not None else ""
@@ -1238,56 +1239,100 @@ def logged(results, by="Ann"):
                 "    concern: a worry about cheap.", "    raises: reliability 2", "    addresses: impl-effort 2",
                 f"- {'<sel> ' if hit else ''}* **Sturdy**: about sturdy.",
                 "    concern: a worry about sturdy.", "    raises: impl-effort 2", "    addresses: reliability 2",
-                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated", "concern-only: Sturdy", ""]
+                f"prediction: Sturdy · score 18 · gap 36{shown_p} · model: stated"]
+        out += [f"scores: {scores}"] if scores else []
+        out += ["concern-only: Sturdy"] + ([extra] if extra else []) + [""]
     return "\n".join(out)
+
+
+class Counting(Case):
+    def test_kept_and_confirmed_answers_are_not_human(self):
+        kept = logged([(True, 97)], extra="handoff: kept").split("\n", 2)[2].replace("## Q1", "## Q4")
+        self.write(iv.LOG, logged([(True, 97)] * 3) + "\n" + kept)
+        state = self.state()
+        self.assertEqual(len(iv.graded(state.log, "Ann")), 3)
+        self.assertEqual(len(iv.calibration_data(state.log, "Ann")), 3)
+        self.assertEqual(len(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann")), 3)
+
+    def test_a_changed_answer_trains_the_fit_but_is_not_graded(self):
+        self.write(iv.LOG, logged([(False, 97)], extra="handoff: changed"))
+        state = self.state()
+        self.assertEqual(iv.graded(state.log, "Ann"), [])
+        self.assertEqual(len(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann")), 1)
+
+    def test_an_old_confirmed_answer_counts_nowhere(self):
+        self.write(iv.LOG, logged([(True, 97)], extra="auto: p 97% ≥ 90\nanswer: confirmed"))
+        state = self.state()
+        self.cli("parse")
+        self.assertEqual(iv.graded(state.log, "Ann"), [])
+        self.assertEqual(iv.fit_data(state.log, iv.tag_map(state.concerns), "Ann"), [])
+
+    def test_a_typed_answer_is_the_typed_outcome(self):
+        text = logged([(False, 97)]).replace("- <sel> **Cheap (Recommended)**", "- **Cheap (Recommended)**")
+        text = text.replace("prediction:", "- <sel> **Other**: my own way.\n    concern: a worry about mine.\n"
+                                           "    raises: privacy 1\n    addresses: reliability 1\nprediction:")
+        self.write(iv.LOG, text)
+        self.cli("parse")
+        self.assertEqual(iv.calibration_data(self.state().log, "Ann"), [([-18.0, 18.0], -1)])
+
+    def test_an_audit_is_a_human_answer(self):
+        self.write(iv.LOG, logged([(True, 97)], extra="audit: yes"))
+        self.assertEqual(len(iv.graded(self.state().log, "Ann")), 1)
+
+    def test_another_persons_answers_stay_out(self):
+        self.write(iv.LOG, logged([(True, 97)] * 3, by="Bob"))
+        self.assertEqual(iv.calibration_data(self.state().log, "Ann"), [])
 
 
 class Tally(Case):
     def tally(self):
         return self.cli("tally", "--by", "Ann").stdout.strip()
 
+    def suggested(self):
+        t = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)["suggested"]
+        return f" (suggested: {t})" if t is not None else ""
+
     def test_before_8_answers_it_counts_down(self):
         self.write(iv.LOG, logged([(True, 97)] * 5))
-        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally and auto-answering start")
+        self.assertEqual(self.tally(), "Predictions: 5 answered, 3 more before the tally starts")
 
-    def test_the_line_counts_recent_and_all(self):
+    def test_the_line_counts_recent_and_all_with_the_lapse_and_the_handoff_point(self):
         self.write(iv.LOG, logged([(False, 61)] * 10 + [(True, 97)] * 50))
-        self.assertEqual(self.tally(), "Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · threshold off")
+        eps = iv.calibrate([([-18.0, 18.0], 0)] * 10 + [([-18.0, 18.0], 1)] * 50)[1]
+        self.assertEqual(self.tally(), f"Predictions: 50 of 50 recent (100%), 50 of 60 all (83%) · lapse "
+                                       f"{round(100 * eps)}% · handoff at 85" + self.suggested())
 
-    def test_misses_give_the_mean_spread_and_suggestion(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
-        self.assertEqual(self.tally(), "Predictions: 8 of 10 recent (80%), 8 of 10 all (80%) · misses at p 61% ± 0 (2) "
-                                       "· threshold off (suggested: 61)")
+    def test_the_suggestion_shows_once_10_answers_back_it(self):
+        self.write(iv.LOG, logged([(True, 97)] * 30))
+        self.assertRegex(self.tally(), r"· handoff at 85 \(suggested: \d+\)$")
 
-    def test_one_miss_has_no_spread_or_suggestion(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 87)]))
-        self.assertIn("· misses at p 87% (1) · threshold off", self.tally())
-        self.assertNotIn("suggested", self.tally())
-
-    def test_the_suggestion_is_capped_at_99(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 97), (False, 87)]))
-        self.assertIn("misses at p 92% ± 7 (2) · threshold off (suggested: 99)", self.tally())
-
-    def test_misses_without_p_count_as_misses_only(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, None)]))
-        self.assertEqual(self.tally(), "Predictions: 8 of 9 recent (89%), 8 of 9 all (89%) · threshold off")
-
-    def test_the_threshold_shows(self):
+    def test_off(self):
         self.write(iv.LOG, logged([(True, 97)] * 8))
-        self.cli("auto", "80", "--by", "Ann")
-        self.assertTrue(self.tally().endswith("· threshold 80"))
+        self.cli("auto", "100", "--by", "Ann")
+        self.assertIn("· handoff off", self.tally())
         self.assertIn("Predictions: 8 of 8 recent", self.cli("auto", "--by", "Ann").stdout)
 
-    def test_json(self):
-        self.write(iv.LOG, logged([(True, 97)] * 8 + [(False, 61), (False, 61)]))
+    def test_records_without_scores_count_in_the_hit_rates_only(self):
+        self.write(iv.LOG, logged([(True, 97)] * 8, scores=None))
         data = json.loads(self.cli("tally", "--by", "Ann", "--json").stdout)
-        self.assertEqual(data["recent"], {"hits": 8, "total": 10})
-        self.assertEqual(data["misses"]["count"], 2)
-        self.assertEqual(data["suggested"], 61)
+        self.assertEqual(data["all"], {"hits": 8, "total": 8})
+        self.assertEqual(data["lapse"], iv.EPS_MEAN)
 
     def test_record_prints_the_tally_last(self):
         out = self.round(question(1), answers="Q1=2").stdout.strip().splitlines()
-        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally and auto-answering start")
+        self.assertEqual(out[-1], "Predictions: 1 answered, 7 more before the tally starts")
+
+
+class CalibrationCommand(Case):
+    def test_it_shows_each_range_and_the_parameters(self):
+        self.write(iv.LOG, logged([(True, 97)] * 12))
+        out = self.cli("calibration", "--by", "Ann").stdout
+        self.assertIn("Calibration for Ann, from 12 answers with logged scores:", out)
+        self.assertIn("  p 0-50%: no answers", out)
+        self.assertIn("lapse", out)
+        data = json.loads(self.cli("calibration", "--by", "Ann", "--json").stdout)
+        self.assertEqual(sum(r["count"] for r in data["ranges"]), 12)
+        self.assertEqual(data["answers"], 12)
 
 
 class Auto(Case):

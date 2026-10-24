@@ -15,6 +15,9 @@ Commands (--by defaults to `git config user.name`; --dir overrides the store):
   predict                                     mark the round's predicted choices
   record --answers "Q1=2, Q2=Other, Q3=none" [--asked STAMP]
   hits [--json]                               hit rates of logged predictions
+  tally [--json]                              the one-line tally: hit rates, the lapse and the handoff point
+  calibration [--json]                        calibrated p against the hit rate, by range
+  auto [N]                                    set or show the handoff point, 0 to 100
   domains [add DOMAIN ... [--fresh]]          list the domains, or create or extend weights.md from the catalog
   import SKEL_FOLDER                          copy skel 3.1.0 interview files into the store
   exempt --question TEXT --reason TEXT        log a question with no trade-off; the gate passes it for 10 minutes
@@ -28,7 +31,6 @@ import math
 import os
 import re
 import secrets
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -67,7 +69,7 @@ STEPS = 1000        # gradient-ascent steps
 RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
 P_RE = re.compile(r" · p (\d+)% · ")
-RECENT = 50         # graded answers the recent hit rate and the miss statistics use
+RECENT = 50         # human answers the recent hit rate uses
 MIN_ANSWERS = 8     # human answers before the tally starts
 EPS_MEAN = 0.25     # prior mean of the lapse rate: the share of answers the score model does not explain
 EPS_STRENGTH = 20   # the lapse prior is worth this many answers
@@ -840,6 +842,8 @@ def fit_data(log, tags, by):
     for rec in log:
         if rec.by != by or rec.multi or rec.declined or not rec.annotated() or len(rec.selected()) != 1:
             continue
+        if rec.fields.get("handoff") == KEPT or rec.fields.get("answer") == CONFIRMED:
+            continue
         if any(t not in tags for c in rec.choices for t in c.tags()):
             continue
         vecs = [vector(c, tags) for c in rec.choices]
@@ -897,10 +901,18 @@ def weights_for(state, by):
     return w, w_rec, "fitted+rec", n
 
 
+def handed_off(rec):
+    return rec.fields.get("handoff") in (KEPT, CHANGED) or rec.fields.get("answer") == CONFIRMED
+
+
+def human(rec):
+    """Answered by the person, not handed off."""
+    return not rec.declined and bool(rec.selected()) and not handed_off(rec)
+
+
 def graded(log, by):
-    """The person's answered questions that carry a prediction logged before the answer, in log order."""
-    return [rec for rec in log if rec.by == by and not rec.declined and "prediction" in rec.fields
-            and rec.selected()]
+    """The person's human answers that carry a prediction logged before the answer, in log order."""
+    return [rec for rec in log if rec.by == by and human(rec) and "prediction" in rec.fields]
 
 
 def is_hit(rec):
@@ -913,36 +925,58 @@ def hit_rows(log, by):
             for rec in graded(log, by)]
 
 
-def tally(log, by, threshold, auto=0):
+def calibration_data(log, by):
+    """[(logged scores, k)] over the person's single-select human answers: k the offered choice, -1 typed."""
+    data = []
+    for rec in graded(log, by):
+        scores = parse_scores(rec)
+        if rec.multi or scores is None:
+            continue
+        chosen, offered = rec.selected()[0], offered_of(rec)
+        data.append((scores, -1 if chosen.label == "Other" else offered.index(chosen)))
+    return data
+
+
+def calibration_for(log, by):
+    return calibrate(calibration_data(log, by))
+
+
+def human_ps(log, by, beta, eps):
+    """[(p, hit)] over the person's single-select human answers, p from the logged scores."""
+    out = []
+    for rec in graded(log, by):
+        scores = parse_scores(rec)
+        if rec.multi or scores is None or not rec.predicted():
+            continue
+        i = offered_of(rec).index(rec.predicted()[0])
+        out.append((calibrated_p(scores, i, beta, eps), is_hit(rec)))
+    return out
+
+
+def tally(log, by, threshold, handed=0):
     recs = graded(log, by)
     recent = recs[-RECENT:]
-    misses = [p for rec in recent if not rec.multi and not is_hit(rec) for p in [logged_p(rec)] if p is not None]
-    mean = statistics.fmean(misses) if misses else None
-    sd = statistics.stdev(misses) if len(misses) > 1 else None
+    beta, eps = calibration_for(log, by)
     return {"by": by, "answered": len(recs),
             "recent": {"hits": sum(map(is_hit, recent)), "total": len(recent)},
             "all": {"hits": sum(map(is_hit, recs)), "total": len(recs)},
-            "misses": {"count": len(misses), "mean": mean, "sd": sd},
-            "threshold": threshold, "auto": auto,
-            "suggested": min(99, math.ceil(mean + 2 * sd)) if sd is not None else None}
+            "lapse": eps, "scale": beta, "threshold": threshold, "handed_off": handed,
+            "suggested": suggestion(human_ps(log, by, beta, eps))}
 
 
 def tally_line(t):
     if t["answered"] < MIN_ANSWERS:
-        return (f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally and "
-                f"auto-answering start")
+        return f"Predictions: {t['answered']} answered, {MIN_ANSWERS - t['answered']} more before the tally starts"
 
     def rate(d, word):
         return f"{d['hits']} of {d['total']} {word} ({round(100 * d['hits'] / d['total'])}%)"
-    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}"]
-    m = t["misses"]
-    if m["count"]:
-        spread = f" ± {round(m['sd'])}" if m["sd"] is not None else ""
-        parts.append(f"misses at p {round(m['mean'])}%{spread} ({m['count']})")
-    if t["auto"]:
-        parts.append(f"auto {t['auto']}")
+    parts = [f"Predictions: {rate(t['recent'], 'recent')}, {rate(t['all'], 'all')}",
+             f"lapse {round(100 * t['lapse'])}%"]
+    if t["handed_off"]:
+        parts.append(f"handed off {t['handed_off']}")
     suggested = f" (suggested: {t['suggested']})" if t["suggested"] is not None else ""
-    parts.append(f"threshold {threshold_text(t['threshold'])}{suggested}")
+    point = "off" if t["threshold"] >= 100 else f"at {t['threshold']}"
+    parts.append(f"handoff {point}{suggested}")
     return SEP.join(parts)
 
 
@@ -1571,8 +1605,7 @@ def cmd_record(args):
         print(f"Q{rec.number}: {answer}{note}")
     print(f"round {rnd}: {hits} of {answered} predictions hit")
     after = load(state.store)
-    confirmed = sum(r.fields.get("answer") == CONFIRMED for r in state.draft)
-    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), auto=confirmed)))
+    print(tally_line(tally(after.log, by, threshold_of(after.weights_lines, by), handed=0)))
     return 0
 
 
@@ -1645,6 +1678,34 @@ def cmd_tally(args):
     return 0
 
 
+RANGES = ((0, 50), (50, 70), (70, 80), (80, 90), (90, 95), (95, 101))
+
+
+def cmd_calibration(args):
+    state = load(store_of(args))
+    fail_on_errors(state)
+    need_weights(state)
+    by = person(args)
+    beta, eps = calibration_for(state.log, by)
+    pairs = human_ps(state.log, by, beta, eps)
+    rows = []
+    for lo, hi in RANGES:
+        b = [(p, hit) for p, hit in pairs if lo <= 100 * p < hi]
+        rows.append({"range": f"{lo}-{min(hi, 100)}", "count": len(b),
+                     "mean_p": round(100 * sum(p for p, _ in b) / len(b)) if b else None,
+                     "hit": round(100 * sum(hit for _, hit in b) / len(b)) if b else None})
+    if args.json:
+        print(json.dumps({"by": by, "scale": round(beta, 4), "lapse": round(eps, 4), "answers": len(pairs),
+                          "ranges": rows}))
+        return 0
+    print(f"Calibration for {by}, from {len(pairs)} answers with logged scores:")
+    for r in rows:
+        print(f"  p {r['range']}%: " + (f"{r['count']} answers, mean p {r['mean_p']}%, right {r['hit']}%"
+                                        if r["count"] else "no answers"))
+    print(f"  scale {beta:.3f} (the old fixed scale was 0.1), lapse {round(100 * eps)}%")
+    return 0
+
+
 def cmd_parse(args):
     state = load(store_of(args))
     for line in state.problems.errors:
@@ -1660,7 +1721,7 @@ def cmd_parse(args):
 
 COMMANDS = {"parse": cmd_parse, "domains": cmd_domains, "exempt": cmd_exempt, "import": cmd_import, "auto": cmd_auto,
             "tally": cmd_tally, "concerns": cmd_concerns, "tag": cmd_tag, "rate": cmd_rate, "predict": cmd_predict,
-            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits}
+            "record": cmd_record, "fit": cmd_fit, "hits": cmd_hits, "calibration": cmd_calibration}
 
 
 def main(argv=None):
@@ -1704,6 +1765,7 @@ def main(argv=None):
     command("fit", json_flag=True)
     command("hits", json_flag=True)
     command("tally", json_flag=True)
+    command("calibration", json_flag=True)
     args = ap.parse_args(argv)
     return COMMANDS[args.cmd](args)
 
