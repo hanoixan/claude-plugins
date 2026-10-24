@@ -26,6 +26,11 @@ def emit(**fields):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **fields}}))
 
 
+def unmark(q):
+    """The question without the `<!> ` high-stakes mark it is asked with."""
+    return q[4:].strip() if q.startswith("<!> ") else q
+
+
 def hint(q, state):
     """Why a question failed, when the round says more than "not drafted"."""
     drafted = [r.question.strip() for r in state.draft or []]
@@ -38,7 +43,7 @@ def hint(q, state):
 def main():
     try:
         data = json.load(sys.stdin)
-        asked = [q["question"].strip() for q in data["tool_input"]["questions"]]
+        asked = [unmark(q["question"].strip()) for q in data["tool_input"]["questions"]]
         rf = refiner()
         store = rf.store_for(data.get("cwd") or os.getcwd())
         state = rf.load(store)
