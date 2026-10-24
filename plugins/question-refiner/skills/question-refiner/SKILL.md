@@ -224,8 +224,9 @@ rating: 10 · by: Sean Dunn · 2026-10-17
 ```
 
 A `threshold: 80 · by: Sean Dunn · 2026-10-24 · calibrated` line after `domains:` is a person's handoff point; a
-line without `calibrated` was set before 1.2.0 and reads as the default, 85. The latest `rating:` and `threshold:`
-line per person counts. `domains add` creates the file; `tag` and `rate` change it.
+line without `calibrated` was set before 1.2.0 and reads as the default, 85, unless it is 100, which stays off. The
+latest `rating:` and `threshold:` line per person counts. `domains add` creates the file; `tag` and `rate` change
+it.
 
 **`exempt.md`** is one line per exempt question: when, by whom, the question and why. `hits` and `fit` never read it.
 

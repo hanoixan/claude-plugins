@@ -1204,11 +1204,15 @@ class Threshold(Case):
         self.assertIn("threshold for Ann: 70", self.cli("auto", "--by", "Ann").stdout)
 
     def test_a_line_from_before_calibration_reads_as_85(self):
-        for old in ("90", "100", "0"):
+        for old in ("90", "0"):
             self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", f"\nthreshold: {old} · by: Ann · 2026-10-20\n\n## C1",
                                                    1))
             self.cli("parse")
             self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 85)
+
+    def test_an_old_100_stays_off(self):
+        self.write(iv.WEIGHTS, WEIGHTS.replace("\n\n## C1", "\nthreshold: 100 · by: Ann · 2026-10-20\n\n## C1", 1))
+        self.assertEqual(iv.threshold_of(self.state().weights_lines, "Ann"), 100)
 
     def test_100_is_off(self):
         self.cli("auto", "100", "--by", "Ann")

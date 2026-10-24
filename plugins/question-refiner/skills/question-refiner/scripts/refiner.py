@@ -668,14 +668,15 @@ def weights_domains(lines):
 
 def thresholds(lines):
     """Each person's latest threshold, from the lines before the first concern; a line from before calibration
-    reads as the default."""
+    reads as the default, except 100, which was off on either scale."""
     out = {}
     for t in (line.rstrip("\r\n") for line in lines or []):
         if CONCERN_RE.match(t):
             break
         m = THRESHOLD_RE.match(t[len("threshold:"):].strip()) if t.startswith("threshold:") else None
         if m:
-            out[m.group(2)] = int(m.group(1)) if m.group(4) else DEFAULT_THRESHOLD
+            n = int(m.group(1))
+            out[m.group(2)] = n if m.group(4) or n >= 100 else DEFAULT_THRESHOLD
     return out
 
 

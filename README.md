@@ -292,7 +292,7 @@ once the rest are likely enough you can hand them to the agent and review its an
 
 | Piece | Role |
 | --- | --- |
-| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data; the handoff and its review. 2921 words. |
+| `/question-refiner` skill | Drafting, annotating, predicting, asking and recording a round; exempt questions; choosing domains; moving skel 3.1.0 data; the handoff and its review. 2928 words. |
 | `PreToolUse` hook on `AskUserQuestion` | Refuses a question that was neither predicted nor exempted, and names the missing step. When it cannot check, it lets the question through. |
 | `UserPromptSubmit` hook | One line each turn, for questions asked in plain chat, which no hook sees. |
 | `SessionStart` hook | Finds skel 3.1.0 interview data that has not been moved, and has the agent ask about moving it. |
