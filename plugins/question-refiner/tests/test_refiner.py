@@ -1372,5 +1372,55 @@ class Auto(Case):
         self.assertIn("`auto:`", self.cli("parse", ok=False).stdout)
 
 
+class Calibration(unittest.TestCase):
+    def test_no_data_gives_the_prior_means(self):
+        self.assertEqual(iv.calibrate([]), (iv.BETA_MEAN, iv.EPS_MEAN))
+
+    def test_the_lapse_is_spread_over_the_choices_and_a_typed_answer(self):
+        p = iv.calibrated_p([-18.0, 18.0], 1, 0.1, 0.25)
+        self.assertAlmostEqual(p, 0.75 / (1 + math.exp(-3.6)) + 0.25 / 3)
+
+    def test_calibration_recovers_a_known_scale_and_lapse(self):
+        import random
+        rng, data = random.Random(1), []
+        for i in range(600):
+            x = (4, 8, 16, 32)[i % 4]
+            if rng.random() < 0.2:
+                k = rng.randrange(3)
+                k = -1 if k == 2 else k
+            else:
+                k = 0 if rng.random() < 1 / (1 + math.exp(-0.4 * x)) else 1
+            data.append(([float(x), float(-x)], k))
+        beta, eps = iv.calibrate(data)
+        self.assertLess(abs(beta - 0.2), 0.06)
+        self.assertLess(abs(eps - 0.2), 0.05)
+
+    def test_typed_answers_raise_the_lapse(self):
+        right = [([-18.0, 18.0], 1)] * 20
+        self.assertGreater(iv.calibrate(right + [([-18.0, 18.0], -1)] * 5)[1], iv.calibrate(right)[1] + 0.05)
+
+    def test_a_perfect_record_on_a_typical_question_reaches_85_before_the_gate(self):
+        q = [8.0, -8.0]
+        first = next(n for n in range(1, 100) if iv.calibrated_p(q, 0, *iv.calibrate([(q, 0)] * n)) >= 0.85)
+        self.assertLessEqual(first, iv.MIN_HANDOFF)
+
+    def test_the_wilson_bound_of_a_perfect_record(self):
+        self.assertAlmostEqual(iv.wilson_lb(8, 8), 8 / (8 + iv.Z ** 2))
+        self.assertEqual(iv.wilson_lb(0, 0), 0.0)
+
+    def test_the_suggestion_needs_10_answers(self):
+        self.assertIsNone(iv.suggestion([(0.95, True)] * 9))
+
+    def test_the_suggestion_is_the_strictest_backed_threshold(self):
+        self.assertEqual(iv.suggestion([(0.9, True)] * 30), 90)
+        # Misses at the top pull the backed threshold down to the bound over all 35.
+        self.assertEqual(iv.suggestion([(0.9, True)] * 30 + [(0.95, False)] * 5), int(100 * iv.wilson_lb(30, 35)))
+
+    def test_an_audit_is_needed_under_10_of_the_last_50(self):
+        self.assertTrue(iv.needs_audit([(0.9, True)] * 9 + [(0.5, True)] * 41, 85))
+        self.assertFalse(iv.needs_audit([(0.9, True)] * 10 + [(0.5, True)] * 40, 85))
+        self.assertTrue(iv.needs_audit([(0.9, True)] * 10 + [(0.5, True)] * 50, 85))
+
+
 if __name__ == "__main__":
     unittest.main()

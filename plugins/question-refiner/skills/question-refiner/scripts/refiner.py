@@ -68,7 +68,17 @@ RATE = 0.5          # step size, divided by the number of fitted questions
 MIN_TRACERS = 5     # tracers a person needs before their weights are fitted
 P_RE = re.compile(r" · p (\d+)% · ")
 RECENT = 50         # graded answers the recent hit rate and the miss statistics use
-MIN_ANSWERS = 8     # graded answers before the tally and auto-answering start
+MIN_ANSWERS = 8     # human answers before the tally starts
+EPS_MEAN = 0.25     # prior mean of the lapse rate: the share of answers the score model does not explain
+EPS_STRENGTH = 20   # the lapse prior is worth this many answers
+BETA_MEAN = 0.1     # prior mean of the scale on scores, the old fixed T
+BETA_SD = 0.1
+CAL_STEPS = 200     # EM steps for the calibration
+MIN_HANDOFF = 20    # human answers before predict recommends a handoff
+DEFAULT_THRESHOLD = 85
+AUDIT_WINDOW = 50   # the last human answers an audit looks at
+AUDIT_MIN = 10      # of which at least this many at or above the threshold, else one question is audited
+Z = 1.645           # one-sided 95% for the Wilson bound
 
 TAG_RE = re.compile(r"^(?:NEW:)?[a-z0-9]+(?:-[a-z0-9]+)*$")
 RECORD_RE = re.compile(r"^## Q(\d+)$")
@@ -655,6 +665,69 @@ def probability(scores, i):
     top = max(scores)
     e = [math.exp(T * (s - top)) for s in scores]
     return e[i] / sum(e)
+
+
+def softmax(u):
+    top = max(u)
+    e = [math.exp(x - top) for x in u]
+    z = sum(e)
+    return [x / z for x in e]
+
+
+def calibrated_p(scores, i, beta, eps):
+    """The chance the person takes offered choice i: softmax over beta × scores, with eps spread over the offered
+    choices and a typed answer."""
+    return (1 - eps) * softmax([beta * s for s in scores])[i] + eps / (len(scores) + 1)
+
+
+def calibrate(data):
+    """(beta, eps) at the posterior mode, by EM, over [(scores, k)]: k the offered choice taken, -1 a typed answer."""
+    a, b = EPS_MEAN * EPS_STRENGTH, (1 - EPS_MEAN) * EPS_STRENGTH
+    beta, eps = BETA_MEAN, EPS_MEAN
+    if not data:
+        return beta, eps
+    for _ in range(CAL_STEPS):
+        lapse = [1.0 if k < 0 else eps / (len(s) + 1) / calibrated_p(s, k, beta, eps) for s, k in data]
+        new_eps = min(0.999, max(0.001, (sum(lapse) + a - 1) / (len(data) + a + b - 2)))
+        new_beta = beta
+        for _ in range(5):
+            g, h = -(new_beta - BETA_MEAN) / BETA_SD ** 2, -1 / BETA_SD ** 2
+            for (s, k), r in zip(data, lapse):
+                if k < 0:
+                    continue
+                p = softmax([new_beta * x for x in s])
+                mu = sum(pi * x for pi, x in zip(p, s))
+                g += (1 - r) * (s[k] - mu)
+                h -= (1 - r) * sum(pi * (x - mu) ** 2 for pi, x in zip(p, s))
+            new_beta = min(5.0, max(0.0, new_beta - g / h))
+        done = abs(new_eps - eps) < 1e-9 and abs(new_beta - beta) < 1e-9
+        beta, eps = new_beta, new_eps
+        if done:
+            break
+    return beta, eps
+
+
+def wilson_lb(h, n):
+    """The one-sided 95% Wilson lower bound of a hit rate."""
+    if n == 0:
+        return 0.0
+    p = h / n
+    return (p + Z * Z / (2 * n) - Z * math.sqrt(p * (1 - p) / n + Z * Z / (4 * n * n))) / (1 + Z * Z / n)
+
+
+def suggestion(pairs):
+    """The highest threshold t that answers at p ≥ t back: at least 10 of them, with a Wilson bound of t% or more."""
+    best = None
+    for t in range(50, 100):
+        above = [hit for p, hit in pairs if round(100 * p) >= t]
+        if len(above) >= 10 and 100 * wilson_lb(sum(above), len(above)) >= t:
+            best = t
+    return best
+
+
+def needs_audit(pairs, threshold):
+    """Fewer than AUDIT_MIN of the last AUDIT_WINDOW human answers at or above the threshold."""
+    return sum(round(100 * p) >= threshold for p, _ in pairs[-AUDIT_WINDOW:]) < AUDIT_MIN
 
 
 def logged_p(rec):
